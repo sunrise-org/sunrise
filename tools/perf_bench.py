@@ -8,7 +8,7 @@ settle and fly a fixed straight path at constant speed. Every frame time of
 every flight is kept and the statistics are computed here, by one function,
 for every game. RSS is sampled from outside the process for every game too.
 
-    python3 tools/perf_bench.py --game sunrise --label sunrise-m4
+    python3 tools/perf_bench.py --game sunrise --no-profile --label sunrise-m4
     python3 tools/perf_bench.py --game vanilla --label vanilla-m4
     python3 tools/perf_bench.py --game vanilla-mods --label mods-m4
     python3 tools/perf_bench.py --table sunrise-m4 vanilla-m4 mods-m4
@@ -686,6 +686,43 @@ def menu_hold(control, seconds):
     return summary
 
 
+def start_profile(control):
+    try:
+        reply = control("profile client start")
+        if reply.get("ok") is not True or not reply.get("path"):
+            raise RuntimeError("the game did not start a client capture")
+    except (OSError, ValueError, RuntimeError) as error:
+        raise RuntimeError(f"cannot record the client benchmark: {error}; use --no-profile for an unrecorded run") from error
+
+
+def finish_profile(control, home, output):
+    reply = control("profile client stop")
+    if reply.get("ok") is not True or not reply.get("path"):
+        raise RuntimeError("the game did not finish its client capture")
+    saved = Path(reply["path"])
+    source = home / saved
+    if source.suffix != ".hzperf" or not source.is_file():
+        raise RuntimeError(f"the client did not save a capture at {source}")
+    output.mkdir(parents=True, exist_ok=True)
+    destination = output / f"client-{uuid.uuid4().hex}.hzperf"
+    shutil.move(source, destination)
+    return destination.name
+
+
+def profiling_condition(runs):
+    conditions = [run.get("profiling") for run in runs]
+    if any(not isinstance(c, dict) or type(c.get("recording")) is not bool for c in conditions):
+        raise ValueError("profiling missing or unknown")
+    if any(c != conditions[0] for c in conditions[1:]):
+        raise ValueError("profiling differs between runs")
+    if conditions[0]["recording"]:
+        if not conditions[0].get("complete"):
+            raise ValueError("profiling was incomplete")
+        if conditions[0].get("threads") not in ("main", "all"):
+            raise ValueError("profiling thread choice is unknown")
+    return conditions[0]
+
+
 def run_sunrise(args, distance):
     game_dir = WORK / "sunrise"
     shutil.rmtree(game_dir, ignore_errors=True)
@@ -705,6 +742,8 @@ def run_sunrise(args, distance):
     for carry in dev_mods(args):
         command += ["--dev-mod", str(carry)]
     env = lab.game_env(**extra_env)
+    for key in ("SUNRISE_PROFILE", "SUNRISE_TRACE", "SUNRISE_SHADER_PACK_TIMING", "SUNRISE_GPU_PASS_DETAIL"):
+        env.pop(key, None)
     if args.warm:
         # A first start to the title screen builds what later starts reuse (the content-mod
         # root, the block behaviour snapshot). It is not measured: players see it once.
@@ -725,7 +764,11 @@ def run_sunrise(args, distance):
     sampler = Sampler(proc.pid)
     sampler.start()
     control = Control(sock)
-    result = {"options_txt": options, "scenes": {}}
+    recording = not getattr(args, "no_profile", False)
+    result = {"options_txt": options, "scenes": {},
+              "profiling": {"recording": recording, "startup": False, "complete": recording}}
+    if recording:
+        result["profiling"]["threads"] = "main"
     windows, scene_windows = [], {}
     try:
         title, at = poll(control, lambda s: s.get("screen") == "title" and s.get("renderer"), 300)
@@ -740,6 +783,8 @@ def run_sunrise(args, distance):
         result["startup"]["world_s"] = loaded - started
         if args.server:
             result["startup"]["join_s"] = loaded - joined
+        if recording:
+            start_profile(control)
         for name, start, end, pitch in scene_list(args):
             meshed = control("status")["meshed_sections"]
             scene_commands(args, control, start, pitch)
@@ -789,6 +834,8 @@ def run_sunrise(args, distance):
             scene["gpu_mb"] = nvidia_memory_mb(proc.pid) or (renderer.get("gpu_allocated_bytes") or 0) / 2**20 or None
             result["scenes"][name] = scene
             print_scene(args.game, distance, name, scene)
+        if recording:
+            result["capture"] = finish_profile(control, Path(env["SUNRISE_HOME"]), ROOT / "benchmarks/perf")
     finally:
         try:
             control("quit", timeout=60)
@@ -992,6 +1039,7 @@ def driven(args, distance, command, game_dir, env, log, events, options, loaded_
                     # --server: the driver connects as soon as the title screen shows.
                     **({"join_s": (world["ready_epoch_ms"] - title["epoch_ms"]) / 1000} if args.server else {})},
         "scenes": {},
+        "profiling": {"recording": False, "startup": False, "complete": False},
     }
     windows, scene_windows = [], {}
     loaded = {e["scene"]: e for e in by("loaded")}
@@ -1138,7 +1186,8 @@ def report(args, distance, runs, app):
     size = renderer.get("size")
     conditions = {"scenario": "perf_bench:" + ",".join(first["scenes"]), "seed": str(SEED),
                   "render_distance": distance, "simulation_distance": 12, "vsync": False,
-                  "offscreen": bool(args.offscreen), "repeats": len(runs), "warmup_s": args.settle}
+                  "offscreen": bool(args.offscreen), "repeats": len(runs), "warmup_s": args.settle,
+                  "profiling": profiling_condition(runs)}
     if getattr(args, "server", None):
         conditions["server"] = args.server
     for key, value in (("graphics", getattr(args, "graphics", None)),
@@ -1180,6 +1229,7 @@ def report(args, distance, runs, app):
     return {"format": REPORT_FORMAT, "version": REPORT_VERSION, "kind": "game",
             "created": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "app": app, "hardware": hw, "conditions": conditions, "metrics": metrics, "frames": entries,
+            "captures": [run["capture"] for run in runs if "capture" in run],
             "label": args.label}
 
 
@@ -1337,8 +1387,11 @@ def compare(args):
                 args.build = before if build == "before" else after
                 print(f"rd {d} game {i + 1} of {2 * args.repeats}: {build}", flush=True)
                 started = time.time()
-                games.append(game_figures(run_sunrise(args, d)))
-                played.append({"build": build, "started": started, "ended": time.time(), "scenes": games[-1]})
+                result = run_sunrise(args, d)
+                games.append(game_figures(result))
+                played.append({"build": build, "started": started, "ended": time.time(), "scenes": games[-1],
+                               "profiling": result.get("profiling"), "capture": result.get("capture")})
+                profiling_condition(played)
             rows = judge(games, args.budget, scenes)
             print_judgement(rows, args.budget)
             if unchecked := ungated_ticks(rows):
@@ -1349,7 +1402,8 @@ def compare(args):
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(json.dumps({"before": before, "after": after, "budget_pct": args.budget,
                                        "render_distance": d, "window": [args.width, args.height],
-                                       "workload": workload, "hardware": hardware(), "games": played,
+                                       "workload": {**workload, "profiling": profiling_condition(played)},
+                                       "hardware": hardware(), "games": played,
                                        "results": rows, "ungated_ticks": unchecked}, indent=1) + "\n")
             print(out)
     return 1 if failed else 0
@@ -1379,6 +1433,10 @@ def table(labels):
             for label, c in present[1:]:
                 if c.get(key) != baseline:
                     raise ValueError(f"cannot compare RD {distance}: {key} differs between {present[0][0]} and {label}")
+        try:
+            profiling_condition([c for _, c in present])
+        except ValueError as error:
+            raise ValueError(f"cannot compare RD {distance}: {error}") from error
     cell = lambda m, digits=0: "–" if not m else f"{m['mean']:.{digits}f}" + (f" ±{m['ci95']:.{digits}f}" if m["ci95"] else "")
     print("| RD | scene | " + " | ".join(f"{l}: avg / 1% / 0.1% low FPS" for l in labels) + " |")
     print("| --- | --- |" + " --- |" * len(labels))
@@ -1446,6 +1504,7 @@ def main():
                    help="Sunrise renders into a texture and does not wait for the window (locked macOS sessions)")
     p.add_argument("--resources", default=str(lab.RESOURCES))
     p.add_argument("--build", default=str(ROOT / "target/release"))
+    p.add_argument("--no-profile", action="store_true", help="skip the default Sunrise client capture")
     p.add_argument("--repeats", type=int, default=3, help="games per render distance; the report gives means and 95%% CIs")
     p.add_argument("--seed", type=int, default=SEED,
                    help="the world seed (default %(default)s; the stress scenes are laid out for that one). The world a game saves is compared with tools/world_compare.py")
@@ -1484,7 +1543,11 @@ def main():
             p.error("--compare needs an even --repeats of 6 or more: 6 pairs for the interval, whole B A A B blocks")
         args.label = args.label or f"compare-{platform.node().split('.')[0]}"
         WORK.mkdir(parents=True, exist_ok=True)
-        sys.exit(compare(args))
+        try:
+            code = compare(args)
+        except (ValueError, RuntimeError) as error:
+            p.error(str(error))
+        sys.exit(code)
     if args.table:
         try:
             table(args.table)
@@ -1507,7 +1570,7 @@ def main():
                     args.extra_scenes = [server.crowd(args)] if args.server_bots else []
                     if server.fresh:
                         print(f"warm-up join of the new {args.server} server world (not measured)")
-                        run(args, d)
+                        run(argparse.Namespace(**{**vars(args), "no_profile": True}), d)
                 for _ in range(args.repeats):
                     load_before = load_average()
                     result = run(args, d)

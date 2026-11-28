@@ -21,6 +21,90 @@ fn figures(row: &sunrise_perf::query::rows::SpanRow) -> (f64, f64, f64, u64) {
 }
 
 #[test]
+fn recorded_laps_are_labelled_and_a_sample_filter_suggests_the_enclosing_span() {
+    use common::samples::{Builder, W};
+    use sunrise_perf::wire::SpanKind;
+    use sunrise_perf_format::v1::{SpanLap, SpanLaps, SpanSummary, SpanTotal, Unit as CaptureUnit};
+
+    let dir = TempDir::new("lap-context");
+    let mut b = Builder::new(1, &[1]);
+    let tick = b.text("tick");
+    let lap = b.text("creature_loop");
+    let parent = b.text("tick_creature_entities");
+    let context = b.ctx("", "", (0, 0), "tick_creature_entities");
+    let node = b.node(None, "creatures::think");
+    b.weight(
+        node,
+        2,
+        W {
+            ctx: context,
+            ..W::default()
+        },
+    );
+    let mut fields = b.fields();
+    let stop = fields.pop().unwrap();
+    fields.push(Field::Spans(SpanSummary {
+        side: common::SERVER,
+        thread: tick,
+        unit: CaptureUnit::Tick as i32,
+        count: 1,
+        spans: vec![
+            SpanTotal {
+                name: parent,
+                wall_ms: 12.0,
+                ..SpanTotal::default()
+            },
+            SpanTotal {
+                name: lap,
+                parent,
+                depth: 1,
+                wall_ms: 8.0,
+                ..SpanTotal::default()
+            },
+        ],
+        laps: Some(SpanLaps {
+            entries: vec![SpanLap {
+                name: lap,
+                enclosing_span: parent,
+            }],
+        }),
+        between_tick_chunk_streaming: Some(SpanTotal {
+            wall_ms: 3.0,
+            cpu_ms: 2.0,
+            seen: 1,
+            ..SpanTotal::default()
+        }),
+        ..SpanSummary::default()
+    }));
+    fields.push(stop);
+    let file = save(&dir, "laps.hzperf", &fields);
+
+    let spans = query(&["spans", &file]);
+    assert_eq!(span(&spans, "s:creature_loop").kind, Some(SpanKind::Lap));
+    assert_eq!(
+        span(&spans, "s:tick_creature_entities").kind,
+        Some(SpanKind::Span)
+    );
+    let hot = query(&["hot", &file, "--where", "span=s:creature_loop"]);
+    let error = hot.error.unwrap();
+    assert!(error.contains("creature_loop is a lap"), "{error}");
+    assert!(
+        error.contains("--where span=tick_creature_entities"),
+        "{error}"
+    );
+    let hot = query(&["hot", &file, "--where", "span=tick_creature_entities"]);
+    assert_eq!(hot.selection.unwrap().samples, Some(2));
+    let capture = sunrise_perf::read_capture(&common::write_capture(&fields).bytes).unwrap();
+    let summary =
+        sunrise_perf::summarize(&capture, &file, &sunrise_perf::SummaryOptions::default()).unwrap();
+    assert!(
+        summary.contains("between ticks  chunk streaming 3.0 ms wall · 2.0 ms CPU"),
+        "{summary}"
+    );
+    assert!(summary.contains("(outside MSPT)"), "{summary}");
+}
+
+#[test]
 fn spans_without_a_window_read_the_summary_totals_per_tick() {
     let dir = TempDir::new("spans");
     let reply = query(&["spans", &hand_file(&dir)]);

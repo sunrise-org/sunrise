@@ -44,6 +44,7 @@ mod linux {
             window_s: f64,
             over_ms: f32,
             options: &SamplerOptions,
+            benchmark: bool,
         ) -> Option<Self> {
             if !sampler::sampled_thread(thread) {
                 log::warn!(
@@ -51,6 +52,7 @@ mod linux {
                 );
                 return None;
             }
+            let block_s = if benchmark { 1.0 } else { block_s(window_s) };
             let config = profile::Config {
                 sampler: sampler::Config {
                     hz: Sampling::hz(options),
@@ -63,13 +65,13 @@ mod linux {
                     vec![thread.into()]
                 },
                 ticks_over_ms: f64::from(over_ms),
-                block_s: block_s(window_s),
+                block_s,
                 ..profile::Config::default()
             };
             match profile::start(config) {
                 Ok(session) => Some(Self(
                     session,
-                    heap_sample::start(heap_sample::Config::from_env(block_s(window_s))),
+                    heap_sample::start(heap_sample::Config::from_env(block_s)),
                 )),
                 Err(e) => {
                     log::warn!(
@@ -138,7 +140,7 @@ mod other {
     pub enum Stopped {}
 
     impl Sampling {
-        pub fn start(_: &'static str, _: f64, _: f32, _: &SamplerOptions) -> Option<Self> {
+        pub fn start(_: &'static str, _: f64, _: f32, _: &SamplerOptions, _: bool) -> Option<Self> {
             None
         }
 

@@ -1,5 +1,44 @@
 # Find the next bottleneck
 
+## Sunrise startup and frame timing
+
+Run a benchmark capture to measure resource loading, world opening, and the first rendered frames in one file:
+
+```sh
+sunrise-client --benchmark village --profile-startup --profile-threads all
+sunrise-perf query marks FILE
+sunrise-perf query frames FILE --side client --worst 5
+```
+
+The frame rows give `start_t` and `t` in seconds since capture start (`t` is the end), and `wall_ms` for the full frame interval. Work before the first frame shows in the startup marks and call samples. On Linux, `--profile-threads all` includes `Render submit` when the renderer uses its submit thread.
+
+Use a frame's interval or the load's marks to select function samples. The query rounds out to the sampler's one-second blocks for a benchmark capture and reports the actual bounds in `selection`.
+
+```sh
+sunrise-perf query frames '/translate/' FILE --side client --total \
+    --from mark:benchmark.world.begin --to mark:benchmark.world.loaded
+sunrise-perf query frames '/submit/' FILE --side client --thread 'Render submit' --total \
+    --from 5 --to 10
+```
+
+See [Benchmark](benchmark.md) for report metrics and [Control command reference](sunrise-ctl-commands.md) for captures started in a running game.
+
+## Compare the work behind a server timing
+
+Run `sunrise-perf diff A.hzperf B.hzperf` or `sunrise-perf summary B.hzperf --baseline A.hzperf`.
+Read the workload lines before the deltas. A run with more entities or loaded chunks can have a
+higher MSPT even when the cost per unit of load is similar. The report shows tick time per
+1,000 entities and chunks where counts are available.
+
+A dedicated capture also shows active chunk streaming between ticks. Read that wall and CPU time
+alongside the level phases. It measures work the tick thread does outside MSPT.
+
+`sunrise-perf query spans FILE` labels timed laps in captures that store their metadata. For example,
+the sample filter for `creature_loop` is its enclosing span, `--where span=tick_creature_entities`.
+Use the lap's timing row for the interval itself.
+
+## Java comparison runs
+
 For Java comparison runs, a private Java Flight Recorder capture helps identify
 the code doing work or allocating objects. Use
 native Java 25, with `jcmd` and `java` from a JDK. Keep normal benchmark runs separate

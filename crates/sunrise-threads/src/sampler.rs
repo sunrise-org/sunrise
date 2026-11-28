@@ -305,6 +305,8 @@ struct ThreadState {
     )]
     rings: Mutex<Vec<Box<Ring>>>,
     armed: AtomicBool,
+    // A stopping session keeps its claim until it has drained the ring.
+    claimed: AtomicBool,
     /// Bytes of stack each sample copies; 0 means the handler walks frame pointers instead.
     copy_bytes: AtomicUsize,
     busy: AtomicBool,
@@ -509,6 +511,9 @@ pub struct Stats {
 
 /// Threads being sampled; dropping it (or `stop`) cancels their timers.
 pub struct Session {
+    config: Config,
+    copy_bytes: usize,
+    ring_bytes: usize,
     threads: Vec<Arc<ThreadState>>,
     unwinder: Option<eh::StackUnwinder>,
     unwound: u64,
@@ -528,33 +533,16 @@ pub fn start(config: Config, select: impl Fn(&str) -> bool) -> io::Result<Sessio
         n => n,
     } * (1 + usize::from(config.wall));
     let ring_bytes = samples.max(2) * align8(HDR + copy.max(MAX_FRAMES * 8));
-    let registry = REGISTRY.lock().unwrap();
     let mut session = Session {
+        config,
+        copy_bytes: copy,
+        ring_bytes,
         threads: Vec::new(),
         unwinder: None,
         unwound: 0,
         unwind_ns: 0,
     };
-    for state in registry
-        .iter()
-        .filter(|s| select(s.name) && !s.armed.load(Acquire))
-    {
-        state.ring_of(ring_bytes)?.clear();
-        state.seen.store(0, Relaxed);
-        for counter in [&state.samples, &state.timed, &state.timed_ns] {
-            counter.store(0, Relaxed);
-        }
-        state.copy_bytes.store(copy, Relaxed);
-        state.armed.store(true, Release);
-        session.threads.push(state.clone());
-        *state.timer.lock().unwrap() = Some(os::arm(&state.target, config.hz)?);
-        if config.wall {
-            let period = 1_000_000_000 / u64::from(config.hz.max(1));
-            state.wall_period_ns.store(period, Relaxed);
-            state.wall_cpu_ns.store(0, Relaxed);
-            *state.wall_timer.lock().unwrap() = Some(os::arm_wall(&state.target, config.hz)?);
-        }
-    }
+    session.add_threads(select)?;
     if session.threads.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
@@ -565,6 +553,40 @@ pub fn start(config: Config, select: impl Fn(&str) -> bool) -> io::Result<Sessio
 }
 
 impl Session {
+    /// Starts sampling newly registered threads that no other session samples.
+    pub(crate) fn add_threads(&mut self, select: impl Fn(&str) -> bool) -> io::Result<()> {
+        let config = self.config;
+        let registry = REGISTRY.lock().unwrap();
+        for state in registry
+            .iter()
+            .filter(|s| select(s.name) && !s.claimed.load(Acquire))
+        {
+            state.ring_of(self.ring_bytes)?.clear();
+            state.seen.store(0, Relaxed);
+            for counter in [&state.samples, &state.timed, &state.timed_ns] {
+                counter.store(0, Relaxed);
+            }
+            state.copy_bytes.store(self.copy_bytes, Relaxed);
+            *state.timer.lock().unwrap() = Some(os::arm(&state.target, config.hz)?);
+            if config.wall {
+                let period = 1_000_000_000 / u64::from(config.hz.max(1));
+                state.wall_period_ns.store(period, Relaxed);
+                state.wall_cpu_ns.store(0, Relaxed);
+                match os::arm_wall(&state.target, config.hz) {
+                    Ok(timer) => *state.wall_timer.lock().unwrap() = Some(timer),
+                    Err(error) => {
+                        state.disarm();
+                        return Err(error);
+                    }
+                }
+            }
+            state.claimed.store(true, Relaxed);
+            state.armed.store(true, Release);
+            self.threads.push(state.clone());
+        }
+        Ok(())
+    }
+
     /// Hands every record written so far, thread by thread, to `f`; stack copies are unwound here, on the calling thread.
     pub fn drain(&mut self, mut f: impl FnMut(&str, &Record)) {
         let mut refreshed = false;
@@ -628,13 +650,20 @@ impl Session {
     pub fn stop(mut self, f: impl FnMut(&str, &Record)) -> Stats {
         self.threads.iter().for_each(|s| s.disarm());
         self.drain(f);
-        self.stats()
+        let stats = self.stats();
+        for state in self.threads.drain(..) {
+            state.claimed.store(false, Release);
+        }
+        stats
     }
 }
 
 impl Drop for Session {
     fn drop(&mut self) {
-        self.threads.iter().for_each(|s| s.disarm());
+        for state in &self.threads {
+            state.disarm();
+            state.claimed.store(false, Release);
+        }
     }
 }
 

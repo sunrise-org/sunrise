@@ -173,6 +173,8 @@ pub fn capture() -> Vec<Field> {
         .collect();
     body.push(Field::Spans(SpanSummary {
         timing: None,
+        between_tick_chunk_streaming: None,
+        laps: None,
         side: SERVER,
         thread: tick,
         unit: Unit::Tick as i32,
@@ -207,6 +209,7 @@ pub fn capture() -> Vec<Field> {
                 .map(|s| (s.3 * f64::from(units)) as f32)
                 .collect(),
             seen: spans.iter().map(|_| units).collect(),
+            frames: Vec::new(),
         }));
     }
 

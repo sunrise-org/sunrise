@@ -2037,17 +2037,66 @@ pub(in crate::game) mod tests {
         let parse = |args: &[&str]| {
             super::super::Options::parse(args.iter().map(|a| a.to_string())).map(|o| o.unwrap())
         };
-        assert!(
+        use sunrise_sim::{benchmark::Profile, perf_types::Threads};
+
+        assert_eq!(
+            parse(&["--benchmark", "village"])
+                .unwrap()
+                .benchmark_profile,
+            Some(Profile {
+                startup: false,
+                threads: Threads::Main
+            }),
+        );
+        assert_eq!(
+            parse(&[
+                "--profile-threads",
+                "all",
+                "--profile-startup",
+                "--benchmark",
+                "village"
+            ])
+            .unwrap()
+            .benchmark_profile,
+            Some(Profile {
+                startup: true,
+                threads: Threads::All
+            }),
+        );
+        assert_eq!(
+            parse(&["--benchmark", "village", "--profile", "--no-profile"])
+                .unwrap()
+                .benchmark_profile,
+            None
+        );
+        assert_eq!(
             parse(&["--benchmark", "village", "--profile"])
                 .unwrap()
-                .benchmark_profile
-        );
-        assert!(
-            !parse(&["--benchmark", "village"])
+                .benchmark_profile,
+            parse(&["--benchmark", "village"])
                 .unwrap()
-                .benchmark_profile
+                .benchmark_profile,
         );
-        assert!(parse(&["--profile"]).is_err());
+        for args in [
+            &["--profile"][..],
+            &[
+                "--benchmark",
+                "village",
+                "--profile-startup",
+                "--no-profile",
+            ],
+            &["--profile-threads", "main"],
+            &[
+                "--benchmark",
+                "village",
+                "--profile",
+                "--profile-threads",
+                "unknown",
+            ],
+            &["--benchmark", "village", "--profile", "--profile-threads"],
+        ] {
+            assert!(parse(args).is_err(), "{args:?}");
+        }
     }
 
     #[test]

@@ -1460,6 +1460,11 @@ impl crate::game::ServerGame<'_> {
             // `MinecraftServer.finishMeasuringTaskExecutionTime` ends the wait phase
             // before any reporting; `logFullTickTime` keeps the entire tick-to-tick span.
             let tick_end = Instant::now();
+            if state.perf.capturing() {
+                state
+                    .perf
+                    .between_tick_chunk_streaming(&sunrise_level::spans::take_raw());
+            }
             if let Some(behind) = behind
                 && overload_warned.is_none_or(|at| at.elapsed() >= OVERLOAD_WARNING_INTERVAL)
             {

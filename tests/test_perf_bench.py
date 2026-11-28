@@ -15,9 +15,11 @@ class ComparisonConditionsTests(unittest.TestCase):
         import tools.perf_bench as pb
 
         conditions = {"scenario": "flight", "seed": "1234", "render_distance": 8, "simulation_distance": 12,
-                      "window": [1920, 1080], "vsync": False, "offscreen": False}
+                      "window": [1920, 1080], "vsync": False, "offscreen": False,
+                      "profiling": {"recording": False, "startup": False, "complete": False}}
         differences = {"scenario": "other", "seed": "5678", "simulation_distance": 8, "window": [1280, 720],
-                       "vsync": True, "offscreen": True, "fps_cap": 60}
+                       "vsync": True, "offscreen": True, "fps_cap": 60,
+                       "profiling": {"recording": True, "startup": False, "complete": True, "threads": "main"}}
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             reports = root / "benchmarks/perf"
@@ -61,7 +63,8 @@ class ComparisonConditionsTests(unittest.TestCase):
         import tools.perf_bench as pb
 
         conditions = {"scenario": "flight", "seed": "1234", "render_distance": 8, "simulation_distance": 12,
-                      "window": [1920, 1080], "vsync": False, "offscreen": False}
+                      "window": [1920, 1080], "vsync": False, "offscreen": False,
+                      "profiling": {"recording": False, "startup": False, "complete": False}}
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             reports = root / "benchmarks/perf"
@@ -75,6 +78,66 @@ class ComparisonConditionsTests(unittest.TestCase):
                 pb.table(["single"])
             self.assertIn("| 8 |", out.getvalue())
 
+
+
+class ProfileCaptureTests(unittest.TestCase):
+    def test_client_saves_the_completed_capture_beside_the_report(self):
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from tools.perf_bench import start_profile, finish_profile
+
+        commands = []
+
+        def control(line):
+            commands.append(line)
+            return {"ok": True, "path": "reports/profile-game.hzperf"}
+
+        with TemporaryDirectory() as tmp:
+            home, out = Path(tmp) / "home", Path(tmp) / "reports"
+            capture = home / "reports/profile-game.hzperf"
+            capture.parent.mkdir(parents=True)
+            capture.write_bytes(b"capture")
+            start_profile(control)
+            file = finish_profile(control, home, out)
+            self.assertEqual((out / file).read_bytes(), b"capture")
+            self.assertFalse(capture.exists())
+            self.assertEqual(commands, ["profile client start", "profile client stop"])
+
+    def test_comparisons_refuse_mixed_or_incomplete_capture_coverage(self):
+        from tools.perf_bench import profiling_condition, start_profile
+
+        enabled = {"recording": True, "threads": "main", "startup": False, "complete": True}
+        disabled = {"recording": False, "startup": False, "complete": False}
+        self.assertEqual(profiling_condition([{"profiling": enabled}]), enabled)
+        with self.assertRaisesRegex(ValueError, "differs"):
+            profiling_condition([{"profiling": enabled}, {"profiling": disabled}])
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            profiling_condition([{"profiling": dict(enabled, complete=False)}])
+        with self.assertRaisesRegex(ValueError, "unknown"):
+            profiling_condition([{}])
+        with self.assertRaisesRegex(RuntimeError, "--no-profile"):
+            start_profile(lambda _: {"ok": False})
+
+
+    def test_compare_stops_before_judging_games_with_different_profiling(self):
+        import contextlib
+        import io
+        from types import SimpleNamespace
+        from unittest import mock
+        import tools.perf_bench as pb
+
+        args = SimpleNamespace(compare=["before", "after"], seconds=12, settle=2, offscreen=True,
+                               graphics=None, resource_pack=None, shader_pack=None, label="test",
+                               sizes="1280x720", distances="8", repeats=6)
+        recorded = {"profiling": {"recording": True, "threads": "main", "complete": True}}
+        unrecorded = {"profiling": {"recording": False, "complete": False}}
+        with mock.patch.object(pb, "scene_list", return_value=[("village",)]), \
+                mock.patch.object(pb, "run_sunrise", side_effect=[recorded, unrecorded]), \
+                mock.patch.object(pb, "game_figures", return_value={}), \
+                mock.patch.object(pb, "judge") as judge, contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(ValueError, "profiling differs"):
+                pb.compare(args)
+        judge.assert_not_called()
 
 
 class PerfBenchStatsTests(unittest.TestCase):
@@ -137,7 +200,8 @@ class PerfBenchStatsTests(unittest.TestCase):
             reports.mkdir(parents=True)
             # Comparable runs: table() refuses reports whose conditions differ or are missing.
             conditions = {"scenario": "flight", "seed": "1234", "render_distance": 8, "simulation_distance": 12,
-                          "window": [1920, 1080], "vsync": False, "offscreen": False}
+                          "window": [1920, 1080], "vsync": False, "offscreen": False,
+                      "profiling": {"recording": False, "startup": False, "complete": False}}
             for label, metrics in (
                 ("missing", {}),
                 ("zero", {"chunks.village.load_ms": {"mean": 0}}),
@@ -231,7 +295,11 @@ class PortabilityTests(unittest.TestCase):
         run = {"startup": {"title_s": 1.0, "world_s": 5.0}, "memory": {}, "load_before": None,
                "scenes": {"village": {"load_s": 2.0, "frame_ms": [5.0] * 100, "meshes_load": 10}}}
         args = argparse.Namespace(offscreen=False, settle=2.0, label="x")
+        run["profiling"] = {"recording": True, "threads": "main", "startup": False, "complete": True}
+        run["capture"] = "one.hzperf"
         r = pb.report(args, 8, [run], {"name": "sunrise-client"})
+        self.assertEqual(r["captures"], ["one.hzperf"])
+        self.assertEqual(r["conditions"]["profiling"], run["profiling"])
         self.assertNotIn("load_avg_1m", r["conditions"])
         self.assertEqual(r["metrics"]["fps.village.avg_fps"]["mean"], 200.0)
         self.assertEqual(pb.report(args, 8, [dict(run, load_before=1.25)], {})["conditions"]["load_avg_1m"], 1.25)

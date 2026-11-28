@@ -100,6 +100,7 @@ pub struct Query {
     pub self_share: bool,
     /// `series`: add each series' statistics.
     pub stats: bool,
+    pub total: bool,
 }
 
 impl Query {
@@ -122,6 +123,7 @@ impl Query {
             min_pct: None,
             self_share: false,
             stats: false,
+            total: false,
         }
     }
 }
@@ -205,6 +207,12 @@ impl Ctx<'_> {
                 self.files[i].file,
                 side_name(side)
             ))),
+            None if self.q.op == Op::Frames
+                && self.q.args.is_empty()
+                && view.sides().contains(&Side::Client) =>
+            {
+                Ok(Side::Client)
+            }
             None => view
                 .default_side()
                 .ok_or_else(|| QueryError::new(format!("{} has no data", self.files[i].file))),
@@ -305,6 +313,7 @@ pub fn run(q: &Query, files: &[Loaded]) -> Result<Envelope<Row>, QueryError> {
         Op::Callees => calls::callees(&ctx)?,
         Op::Split => profile::divide(&ctx, false)?,
         Op::Group => profile::divide(&ctx, true)?,
+        Op::Frames if q.args.is_empty() => ticks::frame_timings(&ctx)?,
         Op::Frames => profile::frames(&ctx)?,
         Op::Bench => bench::bench(&ctx)?,
         Op::Samples => unreachable!("answered above"),

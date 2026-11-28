@@ -613,6 +613,7 @@ mod tests {
     fn the_series_cover_every_frame_the_summary_counts() {
         let mut stats = FrameStats::default();
         let span = |name, ms, cpu_ms| crate::spans::Span {
+            lap: false,
             name,
             ms,
             cpu_ms,

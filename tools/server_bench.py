@@ -42,7 +42,7 @@ Two more Java servers, both dev-only downloads into .local/server-bench/jars (ne
   tools/benchmark-deps/mods.lock.json (and Fabric API only if Lithium asks for it), checked against the lock's SHA-512.
 Both run with the same heap as vanilla (`--heap`).
 
-`--profile[=ARGS]` has Sunrise record its measure window with `sunrise-report ARGS` and attaches the run's record with `sunrise-perf attach` (docs/hosting.md).
+Sunrise records its measure window by default with sunrise-report. Use --no-profile to skip it or --profile=ARGS to configure it.
 
 `pumpkin` runs Pumpkin (github.com/Pumpkin-MC/Pumpkin, GPL-3.0), a binary you built yourself and name with
 `--pumpkin`: a black box, nothing of it is read or shipped. A first start in a scratch folder (on 127.0.0.1
@@ -67,6 +67,7 @@ import sys
 import threading
 import time
 import urllib.request
+import uuid
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -83,6 +84,7 @@ REPORT_MAX_SECONDS = 600
 # What a run's record is called inside the capture it is attached to.
 RUN_RECORD = 'server-bench-run'
 # The line the server logs once the capture is on disk.
+PROFILE_STARTED = r"Sunrise: capturing to .*\.hzperf"
 SAVED = re.compile(r'Saved (.+?\.hzperf) \(the file stays')
 
 PROPERTIES = {
@@ -407,20 +409,24 @@ def attach_run(capture, record, directory, run=subprocess.run):
 
 
 def start_profile(server, kind, args):
-    """Has Sunrise's console record the measure window; true when it was asked to (only Sunrise writes captures)."""
+    """Has Sunrise's console record the measure window; true when the server confirms it started."""
     if args.profile is None or kind != 'sunrise':
         return False
     server.console(report_line(args.seconds, args.profile))
+    server.wait_for(PROFILE_STARTED, 10)
     return True
 
 
-def finish_profile(server, directory, result, run=subprocess.run):
+def finish_profile(server, directory, output, result, run=subprocess.run):
     """Waits for the capture and attaches the run's record to it; a failure is noted, the run stands."""
     try:
         server.wait_for(SAVED.pattern, 120)
         capture = saved_capture(server.since(0), directory)
-        attach_run(capture, {k: v for k, v in result.items() if k != 'bots_failed'}, directory, run)
-        result['profile'] = str(capture)
+        output.mkdir(parents=True, exist_ok=True)
+        destination = output / f"server-{uuid.uuid4().hex}.hzperf"
+        shutil.copyfile(capture, destination)
+        result['profile'] = destination.name
+        attach_run(destination, {k: v for k, v in result.items() if k != 'bots_failed'}, directory, run)
     except (RuntimeError, subprocess.CalledProcessError, OSError) as e:
         result['profile_error'] = str(e)
 
@@ -527,7 +533,7 @@ def run_once(kind, bots, behaviour, args, out):
         command = ['nice', '-n', str(args.nice), *command]
     started = time.time()
     server = Server(command, directory, out / f'{name}.log')
-    result = {'server': kind, 'bots': bots, 'behaviour': behaviour}
+    result = {'server': kind, 'bots': bots, 'behaviour': behaviour, 'profile_recording': False}
     entity_load = args.spread_bots or args.water_stands
     bot_process = None
     try:
@@ -573,8 +579,13 @@ def run_once(kind, bots, behaviour, args, out):
             time.sleep(args.warmup)
         else:
             time.sleep(bots * args.join_every + args.warmup)
-        profiling = start_profile(server, kind, args)
         measure_start = time.time()
+        try:
+            result['profile_recording'] = start_profile(server, kind, args)
+        except (RuntimeError, OSError) as error:
+            result['profile_error'] = str(error)
+        if result['profile_recording']:
+            result['profile_seconds'] = min(args.seconds, REPORT_MAX_SECONDS)
         rss, cpu, ticks = [], [], []
         load_samples, sample_failures = [], 0
         _, last_cpu = tree_usage(server.process.pid)
@@ -670,8 +681,9 @@ def run_once(kind, bots, behaviour, args, out):
                 raise RuntimeError('entity load benchmark collected no server status samples')
             result['tps'] = mean([sample['tps'] for sample in load_samples])
             result['entity_load'] = {'samples': load_samples, 'failed_samples': sample_failures}
-        if profiling:
-            finish_profile(server, directory, result)
+        if result['profile_recording']:
+            output = args.out.parent if args.out is not None else out
+            finish_profile(server, directory, output, result)
     except Exception as e:  # a failed run is reported, and the next one still runs
         result['error'] = str(e)
     finally:
@@ -762,9 +774,11 @@ def main():
     parser.add_argument('--bots-bin', default='', help='sunrise-bots (on the --bots-via machine)')
     parser.add_argument('--connect', default='127.0.0.1', help='the address the bots reach the server at')
     parser.add_argument('--pumpkin', type=Path, default=None, help='the Pumpkin binary (--servers pumpkin)')
-    parser.add_argument('--profile', nargs='?', const='', default=None, metavar='ARGS',
-                        help="record Sunrise's measure window with sunrise-report (ARGS: its flags, as "
-                             "--profile=--no-samples) and attach the run's record to the capture")
+    profiles = parser.add_mutually_exclusive_group()
+    profiles.add_argument('--profile', nargs='?', const='', default='', metavar='ARGS',
+                          help="configure the default Sunrise capture (e.g. --profile=--no-samples)")
+    profiles.add_argument('--no-profile', dest='profile', action='store_const', const=None,
+                          help="skip the default Sunrise capture")
     parser.add_argument('--repeat', type=int, default=1,
                         help='rounds: every server and bot count once per round, the servers alternated')
     args = parser.parse_args()

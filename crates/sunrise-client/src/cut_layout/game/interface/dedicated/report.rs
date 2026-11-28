@@ -115,6 +115,7 @@ mod tests {
             let detail = sunrise_sim::server_perf::TickDetail {
                 cpu_ms: None,
                 spans: vec![spans::Span {
+                    lap: false,
                     name: "tick",
                     ms: 10.0,
                     cpu_ms: 9.0,

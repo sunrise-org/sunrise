@@ -173,6 +173,13 @@ vocab! {
 }
 
 vocab! {
+    SpanKind {
+        Span = "span",
+        Lap = "lap",
+    }
+}
+
+vocab! {
     /// `--by`: how `world` groups its rows.
     GroupBy {
         Dimension = "dimension",
@@ -185,6 +192,7 @@ vocab! {
 vocab! {
     /// What a reply's rows are measured in, or what they list.
     Unit {
+        Ms = "ms",
         MsPerTick = "ms_per_tick",
         MsPerFrame = "ms_per_frame",
         MsPerSlowTick = "ms_per_slow_tick",

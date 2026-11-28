@@ -70,7 +70,18 @@ known. Any field can be missing. On mains or battery is `conditions.power`.
 `warmup_s`, `power` (`ac`, `battery`), `load_avg_1m` (before the run; above about 1 the machine was busy),
 `backend` (when forced). Readers compare reports only with equal `scenario`, `seed`, distances, `window`, `vsync`,
 `fps_cap` and `offscreen`. `tools/perf_bench.py --table` refuses a comparison when these values differ or a required
-value is unknown; an absent `fps_cap` means unlimited. A single report can still be shown without comparison.
+value is unknown. An absent `fps_cap` means unlimited. A single report can still be shown without comparison.
+
+`conditions.profiling` records whether a capture was running (`recording`), the requested `threads` (`main` or
+`all`, omitted for an unrecorded game), whether capture started before resource loading (`startup`), and whether
+recording covered the measurement window (`complete`). For an unrecorded game, `startup` and `complete` are false.
+An older report may omit the object. `perf_bench.py --table` and `--compare` require known, matching profiling
+conditions and reject incomplete recordings. `sunrise-perf diff` also rejects different profiling conditions and
+incomplete recordings when comparing benchmark reports.
+
+**`captures`.** Local capture basenames alongside a flight benchmark report, in repeat order. The live comparison
+report produced by `perf_bench.py --compare` records each game's filename under `games[].capture`, along with its
+profiling condition. Uploaded reports omit the filenames.
 
 **`metrics`.** Scalar measurements, by name; each is a summary over the run's repeats: `n`, `mean`,
 `stdev` (sample standard deviation, null when `n` is 1), `min`, `max`, `ci95` (half-width of the 95%

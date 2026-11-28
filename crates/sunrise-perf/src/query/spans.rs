@@ -4,13 +4,14 @@ use super::rows::{Row, SpanRow as SpanOut};
 use super::{Ctx, QueryError, Reply, num};
 use crate::ids;
 use crate::view::{SpanRow, SpanTable, View, Window};
-use crate::wire::{Candidate, Unit};
+use crate::wire::{Candidate, SpanKind, Unit};
 
 /// Per span: ms per tick (or per slow tick), cpu and waited, one column per capture.
 pub(super) fn spans(ctx: &Ctx) -> Result<Reply, QueryError> {
     let slow = ctx.q.filters.slow;
     let mut tables = Vec::new();
     let mut window = None;
+    let mut sources = Vec::new();
     for i in 0..ctx.views.len() {
         let side = ctx.side(i)?;
         let end = ctx.views[i].end(side);
@@ -33,6 +34,7 @@ pub(super) fn spans(ctx: &Ctx) -> Result<Reply, QueryError> {
             })?
         };
         tables.push(table);
+        sources.push((&ctx.views[i], side));
     }
     let unit = match (slow, tables[0].unit) {
         (true, TickUnit::Frame) => Unit::MsPerSlowFrame,
@@ -58,7 +60,19 @@ pub(super) fn spans(ctx: &Ctx) -> Result<Reply, QueryError> {
                 .is_none_or(|w| w.contains(&name.to_string()))
         })
         .take(ctx.q.filters.limit)
-        .map(|name| row(name, &tables))
+        .map(|name| {
+            let kind = if sources
+                .iter()
+                .any(|(v, s)| v.lap_parents(*s, name).is_some())
+            {
+                Some(SpanKind::Lap)
+            } else if sources.iter().any(|(v, s)| v.has_lap_info(*s)) {
+                Some(SpanKind::Span)
+            } else {
+                None
+            };
+            row(name, &tables, kind)
+        })
         .collect();
     let mut reply = Reply::new(unit, rows);
     reply.window = window;
@@ -70,7 +84,7 @@ pub(super) fn spans(ctx: &Ctx) -> Result<Reply, QueryError> {
     Ok(reply)
 }
 
-fn row(name: &str, tables: &[SpanTable]) -> Row {
+fn row(name: &str, tables: &[SpanTable], kind: Option<SpanKind>) -> Row {
     let found: Vec<Option<&SpanRow>> = tables.iter().map(|t| t.row(name)).collect();
     let per = |pick: &dyn Fn(&SpanRow) -> f64| -> Vec<Option<f64>> {
         found
@@ -84,6 +98,7 @@ fn row(name: &str, tables: &[SpanTable]) -> Row {
         id: ids::span(name),
         name: name.to_string(),
         parent: first.and_then(|r| r.parent.as_deref()).map(ids::span),
+        kind,
         values: per(&|r| r.wall_ms),
         cpu: per(&|r| r.cpu_ms),
         waited: per(&|r| (r.wall_ms - r.cpu_ms).max(0.0)),

@@ -141,10 +141,17 @@ fn filters() -> Schema {
             ("to", seconds("end of the window")),
             ("limit", Schema::integer("rows; default 25")),
             ("names", Schema::strings("spans: only these span names")),
-            ("worst", Schema::integer("ticks: how many of the worst")),
+            (
+                "total",
+                Schema::boolean("frames NAME: total weight over the window"),
+            ),
+            (
+                "worst",
+                Schema::integer("ticks, frames: how many of the worst"),
+            ),
             (
                 "over",
-                Schema::number("ticks: only those over this many ms"),
+                Schema::number("ticks, frames: only those over this many ms"),
             ),
             ("every", Schema::number("series: resample step in seconds")),
             (

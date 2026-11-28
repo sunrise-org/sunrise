@@ -61,6 +61,7 @@ pub fn server(children: &[&str], rows: &[Vec<f64>], profile: &str) -> Vec<Field>
                 .chain(row.iter().map(|&v| per_block(v)))
                 .collect(),
             seen: vec![TICKS_PER_BLOCK as u32; children.len() + 1],
+            frames: Vec::new(),
         }));
         for second in 0..5 {
             fields.push(Field::Health(HealthSample {

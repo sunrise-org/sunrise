@@ -142,7 +142,14 @@ pub fn start(config: Config) -> io::Result<Session> {
                     .map_or(elapsed, |clock| clock(begun, agg));
                 agg.set_time_block((elapsed.as_secs_f64() / block.as_secs_f64()) as usize)
             };
+            let mut reported_registration_error = false;
             while stopped.recv_timeout(DRAIN_EVERY) == Err(mpsc::RecvTimeoutError::Timeout) {
+                if wanted.is_empty()
+                    && let Err(error) = session.add_threads(|_| true)
+                    && !std::mem::replace(&mut reported_registration_error, true)
+                {
+                    eprintln!("Sunrise: could not sample a newly registered thread: {error}");
+                }
                 in_block(&mut agg);
                 session.drain(|name, record| agg.add(name, record));
                 publish.cpu_samples.store(agg.cpu_samples, Relaxed);

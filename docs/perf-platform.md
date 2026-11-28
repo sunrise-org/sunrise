@@ -32,7 +32,7 @@ in `.local/minecraft/26.3/sources/server/`.
 | `SUNRISE_STARTUP_TRACE=FILE` | JSON-lines startup steps, marks and counters (`spans.rs:456-641`); read by `tools/startup_trace.py`. | **Stays for now.** It runs before the game home and reports folder exist, and it streams line by line so a startup crash keeps what ran. It could fold in once `SUNRISE_PROFILE` covers startup (later). |
 | `gpu-passes [on\|off]`, F3 pass timings, `SUNRISE_SHADER_PACK_TIMING` | `PassTiming` in `gfx/pack_timing.rs` (64 passes, 15-frame medians, `:16-20`, `:273-283`); ctl `game/control.rs:454-462`, row `commands.rs:586`; F3 `game/debug_lines.rs:160-176`; log line `pack_timing.rs:264-267`; bench metrics `benchmark.rs:119-150`. | **The producer folds into `gpu`.** `gpu-passes` stays as the live switch (`benchmark.rs` sends it in-process), and F3 stays as a live overlay. The `SUNRISE_SHADER_PACK_TIMING` log line is retired: `profile client start --gpu` records the same data. |
 | `crates/sunrise-bench` (benchmark report v1) and `--benchmark SCENARIO` | `FORMAT = "sunrise-benchmark-report"`, `VERSION = 1` (`crates/sunrise-bench/src/lib.rs:18-19`); `Report` `:222-243`; telemetry upload via `for_upload` `:295-303`; written to `<game_dir>/benchmarks/`. Also written by the launcher (`https://github.com/sunrise-org/sunrise-launcher/blob/main/src/perf.rs`) and re-implemented by `tools/perf_bench.py:137-138`. | **Stays as the share and upload format** (telemetry contract, 128 KiB cap, launcher). A capture's `bench` field embeds reports verbatim. `sunrise-perf` also reads a bare `benchmarks/*.json`, so `diff` compares benchmark reports too. |
-| `tools/server_bench.py` | Load driver: MSPT from `/tick query`, RSS/CPU, chunks/s, bot counts; report kind `sunrise-server-benchmark` (`:595-609`). Compares Sunrise with vanilla and other servers, which cannot write `.hzperf`. | **Stays as the driver.** It gains a `--profile[=ARGS]` flag, which runs `sunrise-report` for the measure window and adds its run record with `sunrise-perf attach`. This replaces `perf/streaming-caps`' `--sunrise-report` and `perf/sampler`'s `--console-at`. |
+| `tools/server_bench.py` | Load driver: MSPT from `/tick query`, RSS/CPU, chunks/s, bot counts; report kind `sunrise-server-benchmark` (`:595-609`). Compares Sunrise with vanilla and other servers, which cannot write `.hzperf`. | **Stays as the driver.** For Sunrise it runs `sunrise-report` for the measure window by default and adds its run record with `sunrise-perf attach`. Use `--no-profile` to skip it or `--profile=ARGS` to configure it. This replaces `perf/streaming-caps`' `--sunrise-report` and `perf/sampler`'s `--console-at`. |
 | `tools/perf_bench.py`, `graphics_bench.py`, `pacing_bench.py`, `entity_occlusion_bench.py`, `bench.py` | Client and server drivers with their own JSON. | **Stay as drivers**, out of scope. `pacing_bench.py` stops parsing `slow frame` log lines and runs `sunrise-perf query ticks --worst` on its capture (it needs each frame's span list). |
 | `sunrise-telemetry` (opt-in) | `Perf` payload ≤ 4 KiB, 12 a day (`payload.rs:9-50`, `:212-237`); consent switches off by default (`consent.rs:1-40`); scrubber `scrub.rs:1-10`. | **Stays separate.** Consent, size caps and the upload path are a different contract. Telemetry never queues or uploads a `.hzperf`. |
 | `alloc-census` | Compile feature; tagged mimalloc wrapper (`crates/sunrise-threads/src/heap_census.rs:182`); output as `heap_by_tag_mb` in `sunrise-ctl memory`. | **Producer.** Its snapshot goes into the capture's `memory` rows. |
@@ -51,7 +51,7 @@ in `.local/minecraft/26.3/sources/server/`.
 | `perf/sampler-core` ⊂ `-stackcopy` ⊂ `-report` ⊂ `perf/sampler` ⊂ `perf/sampler-viewer` (= `perf/sampler-tree`, same tree `d5dc833c75`); `perf/sampler-context` is an outdated sibling | SIGPROF/SIGRTMIN per-thread timers, rings, `.eh_frame` stack copies (`perf/sampler-viewer:crates/sunrise-threads/src/sampler/linux.rs:39-77`, `sampler.rs:421-485`); context stores `sunrise_threads::work` (`work.rs:117-180`); bounded trie aggregation (`profile/agg.rs:8-37`); in-process symbolization; writer emitting `profile-*.html` + `.pb.gz` + `.folded` (`profile/write.rs:29-105`), with `viewer.js` inlined into every HTML (`profile/viewer.rs:10`, `:209-212`); `sunrise-report --profile`, `sunrise-ctl profile`, F3+O, `SUNRISE_PROFILE=DIR` (`crates/sunrise-client/src/profiling.rs:104-308`). | **The producer lands; the outputs fold.** Sampler, stack copies, context stores, aggregation, symbolization and the commands land as spec H plans them. `html.rs`, `viewer.rs`, `viewer.js` and the folded writer do not land: the `samples` field replaces them, the web UI (§7) replaces the HTML, and `sunrise-perf export` (§6.4) replaces the pprof and folded writers. **`perf/sampler-viewer` is not opened as is.** Its tree logic informs the web UI. |
 | `perf/alloc-count` | Per-thread alloc counters (`crates/sunrise-threads/src/alloc_count.rs:35-171`) in `stats`/`bench` replies; `docs/memory.md`. | **The producer lands.** The counters become `health` fields (`allocs_per_s`, `alloc_mib_per_s`). `docs/memory.md` gains a capture section. Its conflict with `perf/sampler`'s 5-line `docs/memory.md` is resolved by keeping alloc-count's version. |
 | `perf/bench-ab-statistics-impl` (A PR 1) | Hodges–Lehmann + exact Wilcoxon signed-rank CI (`crates/sunrise-bench/src/compare.rs:54-109`), verdicts, `Report.ab`; Python twin `tools/bench_stats.py`. | **Lands without `tools/bench_stats.py`.** The paired statistic stays in `sunrise-bench`: the game computes `Report.ab` and the launcher shows it, so it must ship, and `sunrise-perf` is not shipped. `sunrise-perf` reads `Report.ab`; it does not recompute it (§6.6). The Python vectors become Rust tests in `sunrise-bench`. |
-| `perf/bench-travel` (= `perf/bench-ab`) | `--benchmark travel`, `--benchmark-set` (`perf/bench-travel:crates/sunrise-client/src/benchmark.rs:58-140`, `:476-518`). | **Lands as is.** It is a scenario, so a producer. `--benchmark … --profile` records the run as a capture. |
+| `perf/bench-travel` (= `perf/bench-ab`) | `--benchmark travel`, `--benchmark-set` (`perf/bench-travel:crates/sunrise-client/src/benchmark.rs:58-140`, `:476-518`). | **Lands as is.** It is a scenario, so a producer. `--benchmark …` records the run as a capture by default. |
 | `perf/capture-format-v1`, `-packed`, `-journal` (= `perf/scene-corpus`) | Scene capture v1 (directory, `format`/`version` with `MAX_MAJOR`, `perf/capture-journal:crates/sunrise-client-render/src/gfx/capture.rs:765-779`), journal `HZJ1`. | **Stays separate** (input fixture). |
 | `perf/gpu-pass-detail`, `-counters`, `-detail-output` (C PRs 1-3) | Dispatch parts, pipeline statistics, `gpu_pass_parts`/`gpu_counters` in stats JSON (`perf/gpu-pass-detail-output:crates/sunrise-client-render/src/gfx/pack_timing.rs:852`), F3 lines, `SUNRISE_GPU_PASS_DETAIL`. | **The producer lands.** Captures record the same data into `gpu`. `SUNRISE_GPU_PASS_DETAIL` becomes an alias of `profile client start --gpu=detail`. |
 | `perf/streaming-caps` `212d478830` (S3-0) | Streaming `updates` and caps in `perf-*.json` (`perf/streaming-caps:crates/sunrise-client/src/game/dedicated/report.rs:216-225`), `server_bench.py --sunrise-report` (`:412-422`, `:477-478`). | **Absorbed.** `job_stats::take_updates()` (`streaming.rs:39-66`) feeds counters (`streaming.updates`, `streaming.cap{kind=decoration\|generation\|light}`). The bots-stderr fix lands alone; `--sunrise-report` becomes `--profile`. |
@@ -513,11 +513,11 @@ Notes on fields:
 
 ### 3.8 Who writes what
 
-| Field | Dedicated `sunrise-report` | Client `profile client` / `/profiler` | Single player, both sides | Remote server via `profile server` | `--benchmark --profile` |
+| Field | Dedicated `sunrise-report` | Client `profile client` / `/profiler` | Single player, both sides | Remote server via `profile server` | `--benchmark` |
 |---|---|---|---|---|---|
 | start, history, slow, health, counters, marks, warnings, stop | server | client | both | server (on the server and in the client's file) | client |
-| span_blocks, spans | server | client | both | server | client |
-| samples | by default where the sampler exists (Linux today); `--no-samples` | by default | both | by default | with `--profile` |
+| span_blocks, spans | server | client, with individual frame timings | both | server | client, with individual frame timings |
+| samples | by default where the sampler exists (Linux today); `--no-samples` | by default | both | by default | by default |
 | gpu | — | with `--gpu` (on when F3 pass timing is on) | client | — | yes |
 | net | yes | its own bytes | server | server | — |
 | world, workers | yes | integrated server only | server | server | — |
@@ -592,6 +592,13 @@ sunrise-ctl profile mark NAME
   alive together under one name get `#2`, `#3`). The process has one timeline: a second capture asking for it
   records without. A thread keeps at most 262144 spans between two drains (one second); a thread busier than that drops
   the rest silently, so a very dense second can be incomplete. A cap warning carries `[seconds recorded, bytes written]`.
+- **Benchmark:** `--benchmark SCENE` starts a client capture once the benchmark world loads and
+  embeds the report when it stops. Use `--no-profile` to skip recording. Add `--profile-startup` to open the same capture before loading resources.
+  The startup capture marks resource loading and world open. Both modes mark benchmark phases and record
+  client frame intervals in `span_blocks[].frames`. Time before the first rendered frame is part of the
+  capture clock and sample data. `--profile-threads main|all` defaults to `main` (the render thread).
+  On Linux, `all` also samples opted-in threads that start later, including `Render submit` when enabled.
+  The capture's 600-second cap is measured from its own start.
 - **Dedicated console:** `sunrise-report [SECONDS|stop|status] [--no-samples]` and `sunrise-server report` capture the
   server side.
 - The `profile` row in `sunrise-ctl` stays a trigger; it has no reading subcommands.
@@ -774,6 +781,17 @@ sunrise-perf mcp                                                       §8
 `FILE` defaults to `latest`: the newest finished `.hzperf` in `--dir DIR`, else in `$SUNRISE_HOME/reports`, else in
 `./reports`. A bare `benchmarks/*.json` is accepted wherever a capture is.
 
+### Capture comparison workload
+
+`diff A B` and `summary --baseline A B` lead with each capture's workload on the selected side. Players,
+loaded chunks and entities use the mean of the live health samples. Without live health, the server's start record
+supplies player count and the latest populated world snapshot supplies chunk and entity counts. Client render distance
+comes from the capture's settings or embedded benchmark report. Window resolution comes from the benchmark report.
+A warning lists recorded values whose difference exceeds 10% of A, using pixel count for resolution. Server
+comparisons also show mean MSPT scaled per 1,000 loaded chunks and per 1,000 entities when those counts are positive.
+These ratios describe the workload and timing together, including work such as networking and terrain that has a
+different cost per object. JSON puts the workload under each entry in `captures`.
+
 ### 6.2 Operations
 
 | OP | Arguments | Answers | Replaces |
@@ -784,8 +802,9 @@ sunrise-perf mcp                                                       §8
 | `callees` | `ID`, `--depth N` | children of a function, merged | `s1_children.py` |
 | `split` | `ID`, `--by span\|entity\|block\|chunk\|dim\|thread\|state\|slow` | that node's or span's weight split by one context | the viewer's detail panel |
 | `group` | `--by span\|entity\|block\|chunk\|dim\|thread` | total sampled weight per context value | group tables, mob costs |
-| `frames` | `NAME…` (id, exact short name or `/regex/`) | inclusive and self per name; one column per capture | `s1_breakdown.py`, `s1_table.py`, `s3_table.py` |
-| `spans` | `--names a,b`, `--slow` | per span: ms/tick, cpu, waited, seen; one column per capture | `slowticks.py`, `spikes.py`, `s1a_spans.py` |
+| `frames` | no names; `--side client`, `--worst N`, `--over MS` | individual client frame intervals and durations from one capture; chronological unless ranked | |
+| `frames` | `NAME…` (id, exact short name or `/regex/`), `--total` | inclusive and self per name; one column per capture; total sample weight with `--total` | `s1_breakdown.py`, `s1_table.py`, `s3_table.py` |
+| `spans` | `--names a,b`, `--slow` | per span or lap: ms/tick, cpu, waited, seen; one column per capture | `slowticks.py`, `spikes.py`, `s1a_spans.py` |
 | `ticks` | `--worst N`, `--over MS` | worst ticks/frames with span trees, from `spans.worst`, `slow_history` and `slow` | worst-ticks lines |
 | `tick` | `k:ID` | one tick's span tree, and `hot`: the top 30 functions of the samples in the 1 s blocks overlapping the tick (slow samples only when the tick is slow), with `samples_from`/`samples_to` for the window used; a second's worth, not the tick's own samples | |
 | `series` | `FIELD…` (`h:` fields, `span:NAME`, `x:` counters), `--every S` | time series, resampled; `--from` before 0 reaches into `history`; the web UI and MCP can add `stats` (min, mean over the window, median, p95, max, last) to each series | `s3_windows.py`, `s3_counters.py` |
@@ -793,6 +812,26 @@ sunrise-perf mcp                                                       §8
 | `memory` | `--diff [LABEL_A LABEL_B]`, `--min-mb X` | a snapshot, or spec D's diff of two (`grew_mb`, `shrank_mb`, `counts`, `only_in_a/b`) | spec D's `memory-diff` |
 | `memory_labels` (`memory-labels`) | | every snapshot as `{label, t, side, rows}` in time order | |
 | `counters` | | every counter as `{id, name, unit, kind, labels, side, samples}` | |
+
+Without function names, `frames` defaults to the client side and lists each frame by `k:` id,
+`start_t` and `t` (start and end in seconds since capture start), and `wall_ms`. `--from` and
+`--to` filter on the end time, and `--limit` controls the number of rows when `--worst` is omitted.
+Older captures lack `span_blocks[].frames` and remain readable. For those captures, `query ticks --side client`
+shows the retained worst and slow frames.
+
+With function names, `frames --total` gives estimated inclusive and self milliseconds (bytes for
+allocation samples) over the selected sample blocks. Benchmark captures use one-second blocks.
+The reply's `selection.from` and `selection.to` show the bounds used.
+
+Completed captures with lap metadata label `query spans` rows with `kind: "span"` or `kind: "lap"`.
+The sampler records the active named span. A lap gets its label when its interval ends, so a
+`--where span=…` filter on a lap reports the enclosing span to use. Captures made before lap
+metadata was stored omit the row kind.
+
+Dedicated captures also record the chunk pump's wall and CPU work between ticks in
+`spans[].between_tick_chunk_streaming`. The summary prints it alongside the tick phases. Worker
+waits and sleep are outside that phase. MSPT, tick histograms and slow-tick spans cover the tick
+itself.
 
 Filters, common to the sample-based ops:
 
@@ -828,7 +867,9 @@ Row shapes:
 | `hot` | `{"id": "f:2n7xq4ka", "name": "Waypoints::tick_level", "full": "sunrise_client_lib::lan::waypoints::Waypoints::tick_level", "file": "waypoints.rs", "line": 211, "self": 6.10, "total": 12.2, "self_pct": 5.9, "total_pct": 11.7, "samples": 3513}` |
 | `tree`, `callers`, `callees` | `{"id": "p:…", "function": "f:…", "name": "…", "total": 1.2, "self": 0.1, "pct": 1.1, "samples": 690, "children": [ … ], "folded": {"rows": 17, "total": 0.08}}` |
 | `split`, `group` | `{"by": "entity", "key": "e:zombie", "label": "zombie", "value": 3.1, "pct": 21.0, "samples": 1786}` |
-| `frames`, `spans` | `{"id": "s:tick_lan", "name": "tick_lan", "values": [41.3, 54.1], "cpu": [40.0, 52.2], "waited": [1.3, 1.9]}`, one value per capture |
+| `frames` | `{"id": "k:12", "start_t": 1.625, "t": 2.875, "wall_ms": 1250.0}` |
+| `frames NAME…` | `{"id": "f:2n7xq4ka", "name": "Waypoints::tick_level", "full": "waypoints::Waypoints::tick_level", "values": [41.3, 54.1], "self": [1.2, 1.7], "samples": [25, 30]}`, one value per capture |
+| `spans` | `{"id": "s:tick_lan", "name": "tick_lan", "values": [41.3, 54.1], "cpu": [40.0, 52.2], "waited": [1.3, 1.9]}`, one value per capture |
 | `ticks` | `{"id": "k:48812", "t": 71.35, "wall_ms": 312.4, "cpu_ms": 290.1, "spans": [["tick", 0, 312.4, 290.1]]}` |
 | `series` | `{"field": "h:mspt_p95", "step_s": 30, "t": [0, 30, 60, 90], "values": [130.2, 141.0, 152.3, 140.8]}` |
 | `diff` rows | `{"id": "s:tick_lan", "a": 54.1, "b": 41.3, "diff": -12.8, "diff_pct": -23.7, "ci95": [-14.0, -11.6], "confidence": 0.95, "blocks": [24, 24], "verdict": "faster"}` |

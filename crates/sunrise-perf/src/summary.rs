@@ -67,16 +67,18 @@ pub fn summarize(capture: &Capture, name: &str, options: &SummaryOptions) -> Res
     if sides.is_empty() {
         return Err(Error::Empty);
     }
+    let mut workloads = Vec::new();
     let mut parts: Vec<Section> = Vec::new();
     let mut detail = false;
     for &side in &sides {
-        detail |= side_sections(&view, name, side, options, &mut parts)?;
+        detail |= side_sections(&view, name, side, options, &mut workloads, &mut parts)?;
     }
     if detail {
         parts.push(vec![Line::body(sections::NOTE.to_string())]);
         parts.push(vec![Line::fixed(sections::next(&view, &sides, options))]);
     }
-    Ok(fit(parts, options.budget_tokens))
+    workloads.extend(parts);
+    Ok(fit(workloads, options.budget_tokens))
 }
 
 type Section = Vec<Line>;
@@ -195,6 +197,7 @@ fn side_sections(
     name: &str,
     side: Side,
     options: &SummaryOptions,
+    workloads: &mut Vec<Section>,
     parts: &mut Vec<Section>,
 ) -> Result<bool, Error> {
     let capture = view.capture;
@@ -212,6 +215,14 @@ fn side_sections(
         (base, diff::diff(&base.capture, capture, &wanted))
     });
     if let Some((base, result)) = &compared {
+        if let Ok(d) = result {
+            workloads.push(
+                d.workload_lines(&base.name, name)
+                    .into_iter()
+                    .map(Line::fixed)
+                    .collect(),
+            );
+        }
         parts.push(vec![Line::fixed(baseline_line(
             base,
             capture,

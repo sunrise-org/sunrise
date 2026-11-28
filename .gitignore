@@ -45,3 +45,4 @@
 
 # Visual Studio editor state.
 .vs/
+/benchmarks/**/*.hzperf

@@ -75,9 +75,12 @@ impl Queue {
         let (jobs, job_rx) = mpsc::channel::<Job>();
         let (done_tx, done) = mpsc::channel();
         let queue = this.queue.clone();
+        const THREAD_NAME: &str = "Render submit";
         let spawned = std::thread::Builder::new()
-            .name("Render submit".into())
+            .name(THREAD_NAME.into())
             .spawn(move || {
+                #[cfg(target_os = "linux")]
+                sunrise_threads::sampler::sampled_thread(THREAD_NAME);
                 for job in job_rx {
                     let commands = job.encoder.finish();
                     let submission = queue.submit([commands]);

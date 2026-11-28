@@ -324,6 +324,35 @@ impl<'a> View<'a> {
             .find(|s| s.side() == side && s.thread == thread)
     }
 
+    pub(crate) fn has_lap_info(&self, side: Side) -> bool {
+        self.capture
+            .spans
+            .iter()
+            .any(|s| s.side() == side && s.laps.is_some())
+    }
+
+    pub(crate) fn lap_parents(&self, side: Side, name: &str) -> Option<Vec<String>> {
+        let mut found = false;
+        let mut parents = Vec::new();
+        for lap in self
+            .capture
+            .spans
+            .iter()
+            .filter(|s| s.side() == side)
+            .filter_map(|s| s.laps.as_ref())
+            .flat_map(|laps| &laps.entries)
+            .filter(|lap| self.text(side, lap.name) == name)
+        {
+            found = true;
+            if let Some(parent) = self.opt_text(side, lap.enclosing_span) {
+                parents.push(parent);
+            }
+        }
+        parents.sort_unstable();
+        parents.dedup();
+        found.then_some(parents)
+    }
+
     /// Span totals of one thread: the end-of-capture summary, or the blocks that start inside `window`.
     pub fn span_table(&self, side: Side, thread: u32, window: Option<Window>) -> Option<SpanTable> {
         match window {
