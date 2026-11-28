@@ -4942,7 +4942,7 @@ in VertexData {{ {member} }} vIn;
         .err()
         .expect("deeply nested fragment stage must be refused");
         assert_eq!(errors.len(), 1);
-        assert_eq!(errors[0].file, "shaders/composite.fsh");
+        assert_eq!(errors[0].file, "composite.fsh");
         assert_eq!(errors[0].line, 3);
         assert_eq!(errors[0].stage, Some(ShaderStage::Fragment));
         assert!(
@@ -4991,7 +4991,7 @@ in VertexData {{ {member} }} vIn;
             .err()
             .expect("deeply nested compute stage must be refused");
         assert_eq!(errors.len(), 1);
-        assert_eq!(errors[0].file, "shaders/composite.csh");
+        assert_eq!(errors[0].file, "composite.csh");
         assert_eq!(errors[0].line, 4);
         assert_eq!(errors[0].stage, Some(ShaderStage::Compute));
         assert!(

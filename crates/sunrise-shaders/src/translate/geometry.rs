@@ -1028,7 +1028,7 @@ mod tests {
             .err()
             .expect("deeply nested geometry stage must be refused");
         assert_eq!(errors.len(), 1);
-        assert_eq!(errors[0].file, "shaders/shadow.gsh");
+        assert_eq!(errors[0].file, "shadow.gsh");
         assert_eq!(errors[0].line, 5);
         assert_eq!(errors[0].stage, Some(naga::ShaderStage::Vertex));
         assert!(
