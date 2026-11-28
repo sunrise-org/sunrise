@@ -370,6 +370,18 @@ fn uses_name(code: &str, name: &str) -> bool {
         .any(|(at, _)| !code[..at].ends_with(ident) && !code[at + name.len()..].starts_with(ident))
 }
 
+/// Refuse a preprocessed stage whose bracket/unary/brace-less nesting or operator chain exceeds
+/// `sunrise_glsl::guard`'s bounds before any recursive translator walker or naga sees it.
+pub(super) fn guard_stage(pp: &Preprocessed, stage: ShaderStage) -> Result<(), Error> {
+    let Some((offset, message)) = sunrise_glsl::guard::scan(pp.code()) else {
+        return Ok(());
+    };
+    let start = offset.unwrap_or(0).min(pp.code().len());
+    let line = pp.code()[..start].matches('\n').count();
+    let (file, line) = pp.origin_at(line).unwrap_or((pp.file(), 0));
+    Err(Error::new(file, line, message).with_stage(stage))
+}
+
 fn translate(
     vertex: &Preprocessed,
     fragment: &Preprocessed,
@@ -378,6 +390,8 @@ fn translate(
     shadow: bool,
     limits: InterfaceLimits,
 ) -> Result<Program, Vec<Error>> {
+    guard_stage(vertex, ShaderStage::Vertex).map_err(|e| vec![e])?;
+    guard_stage(fragment, ShaderStage::Fragment).map_err(|e| vec![e])?;
     let matrices = if shadow {
         GBUFFERS_MATRICES.replace("gbuffer", "shadow")
     } else {
@@ -1026,6 +1040,7 @@ pub(crate) fn translate_compute_with(
     compute: &Preprocessed,
     indirect: Option<crate::post::Indirect>,
 ) -> Result<ComputeProgram, Vec<Error>> {
+    guard_stage(compute, ShaderStage::Compute).map_err(|e| vec![e])?;
     let named = anonymous_structs::name(compute.code()).map(|code| compute.with_code(code));
     let compute = named.as_ref().unwrap_or(compute);
     let split = atomic_vectors::rewrite(compute).map_err(|e| vec![e])?;
@@ -4895,6 +4910,55 @@ in VertexData {{ {member} }} vIn;
             Target::Window,
         );
         assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn deeply_nested_stage_is_refused_with_location_before_translation() {
+        let depth = sunrise_glsl::guard::MAX_NESTING;
+        let fragment = format!(
+            "#version 120\nvoid main() {{\n    float x = {}1.0{};\n    gl_FragColor = vec4(x);\n}}\n",
+            "(".repeat(depth),
+            ")".repeat(depth),
+        );
+        let errors = program(
+            &[("composite.vsh", VSH_120), ("composite.fsh", &fragment)],
+            Target::Window,
+        )
+        .unwrap_err();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].file, "shaders/composite.fsh");
+        assert_eq!(errors[0].line, 3);
+        assert_eq!(errors[0].stage, Some(ShaderStage::Fragment));
+        assert!(
+            errors[0].message.contains("nesting exceeds"),
+            "{}",
+            errors[0].message
+        );
+    }
+
+    #[test]
+    fn stage_at_nesting_limit_translates_on_shader_pack_stack() {
+        // Matches `sunrise_threads::GAME_THREAD_STACK_BYTES` (8 MiB), used by the Shader pack
+        // loader thread.
+        const SHADER_PACK_STACK_BYTES: usize = 8 * 1024 * 1024;
+        let handle = std::thread::Builder::new()
+            .stack_size(SHADER_PACK_STACK_BYTES)
+            .spawn(|| {
+                // `{` of `main` takes 1 level, so `MAX_NESTING - 1` parens sit at the limit.
+                let depth = sunrise_glsl::guard::MAX_NESTING - 1;
+                let fragment = format!(
+                    "#version 120\nvoid main() {{\n    float x = {}1.0{};\n    gl_FragColor = vec4(x);\n}}\n",
+                    "(".repeat(depth),
+                    ")".repeat(depth),
+                );
+                let result = program(
+                    &[("composite.vsh", VSH_120), ("composite.fsh", &fragment)],
+                    Target::Window,
+                );
+                assert!(result.is_ok(), "{:?}", result.err());
+            })
+            .unwrap();
+        handle.join().unwrap();
     }
 }
 

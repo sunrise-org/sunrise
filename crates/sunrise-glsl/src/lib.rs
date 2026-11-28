@@ -39,6 +39,7 @@ use naga::valid::{Capabilities, ValidationFlags, Validator};
 pub mod condition;
 mod directives;
 mod glsl_fixups;
+pub mod guard;
 mod located;
 pub mod macros;
 mod stage;

@@ -808,7 +808,7 @@ fn translate_compute_inner(
         Some(options.defines),
     )
     .map_err(|e| vec![import_problem(stage, e)])?;
-    if let Some((at, msg)) = guard::refusal(expanded.text()) {
+    if let Some((at, msg)) = sunrise_glsl::guard::refusal(expanded.text()) {
         return Err(vec![refusal_at(stage, &expanded, at, msg)]);
     }
     let set = assign_set1_bindings(options.mod_bindings, 0);
@@ -905,7 +905,7 @@ fn translate_inner(
         Some(defines),
     )
     .map_err(|e| vec![import_problem(ShaderStage::Vertex, e)])?;
-    if let Some((at, msg)) = guard::refusal(vertex.text()) {
+    if let Some((at, msg)) = sunrise_glsl::guard::refusal(vertex.text()) {
         return Err(vec![refusal_at(ShaderStage::Vertex, &vertex, at, msg)]);
     }
     validate_vertex_inputs(&vertex, options.vertex_inputs).map_err(|prob| vec![prob])?;
@@ -918,7 +918,7 @@ fn translate_inner(
         Some(defines),
     )
     .map_err(|e| vec![import_problem(ShaderStage::Fragment, e)])?;
-    if let Some((at, msg)) = guard::refusal(fragment.text()) {
+    if let Some((at, msg)) = sunrise_glsl::guard::refusal(fragment.text()) {
         return Err(vec![refusal_at(ShaderStage::Fragment, &fragment, at, msg)]);
     }
 

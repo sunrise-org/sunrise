@@ -38,6 +38,9 @@ pub fn translate_geometry(
     inputs: &GeometryInputs,
     limits: naga::front::glsl::InterfaceLimits,
 ) -> Result<(Program, u32), Vec<Error>> {
+    super::guard_stage(vertex, naga::ShaderStage::Vertex).map_err(|e| vec![e])?;
+    super::guard_stage(geometry, naga::ShaderStage::Vertex).map_err(|e| vec![e])?;
+    super::guard_stage(fragment, naga::ShaderStage::Fragment).map_err(|e| vec![e])?;
     let (combined, triangles) = combine(vertex, geometry, inputs)?;
     let mut gbuffers = inputs.inputs.clone();
     gbuffers.declarations = gbuffers
