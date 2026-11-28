@@ -46,7 +46,7 @@ impl MerchantOffer {
             self.demand,
             self.price_multiplier,
             self.special_price_diff,
-            crate::menu::item_max_stack(items, &self.base_cost_a.stack),
+            crate::items::item_max_stack(items, &self.base_cost_a.stack),
         )
     }
     pub fn cost_a(&self, items: &Items) -> ItemStack {

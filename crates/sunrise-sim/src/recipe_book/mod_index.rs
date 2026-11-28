@@ -47,7 +47,7 @@ pub struct ModBookIndex {
     generation: u64,
     categories: BTreeMap<String, RecipeBookCategory>,
     layouts: BTreeMap<String, super::slot_layout::CheckedSlotLayout>,
-    placements: BTreeMap<String, Option<crate::menu::place::custom_plan::MenuPlacement>>,
+    placements: BTreeMap<String, Option<crate::recipe_book::custom_plan::MenuPlacement>>,
     books: BTreeMap<String, (String, String, Vec<String>)>,
 }
 impl ModBookIndex {
@@ -206,10 +206,10 @@ impl ModBookIndex {
         &self,
         recipe: &str,
     ) -> Result<
-        &crate::menu::place::custom_plan::MenuPlacement,
-        crate::menu::place::custom_plan::PlacementRefusal,
+        &crate::recipe_book::custom_plan::MenuPlacement,
+        crate::recipe_book::custom_plan::PlacementRefusal,
     > {
-        use crate::menu::place::custom_plan::PlacementRefusal as Refused;
+        use crate::recipe_book::custom_plan::PlacementRefusal as Refused;
         self.placements
             .get(recipe)
             .ok_or(Refused::Unavailable)?

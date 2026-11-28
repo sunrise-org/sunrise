@@ -5,7 +5,7 @@ mod tests;
 use super::{DisplayLoadError, DisplayResources, RecipeBookCategory};
 use crate::{
     crafting::{Ingredient, Placement},
-    menu::place::custom_plan::{MenuPlacement, PlacementRefusal},
+    recipe_book::custom_plan::{MenuPlacement, PlacementRefusal},
 };
 use mod_api::{PlacementInfo, RecipeBookDisplayEntry, item::crafting::Shape};
 

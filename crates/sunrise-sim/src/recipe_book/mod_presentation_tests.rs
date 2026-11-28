@@ -176,7 +176,7 @@ fn custom_display_shows_its_non_empty_slots_in_order() {
     assert_eq!(result(&custom), &item("meal"));
 }
 /// Matches ingredients against real stock counts, as the game's resolver does.
-struct Stocked(crate::menu::place::Stacked);
+struct Stocked(crate::recipe_book::Stacked);
 impl DisplayResolver for Stocked {
     fn resolve(&self, slot: &Slot) -> Vec<ItemStack> {
         Resolver.resolve(slot)
@@ -189,7 +189,7 @@ impl DisplayResolver for Stocked {
     }
 }
 fn stock(items: &[(&str, i32)]) -> Stocked {
-    let mut stacked = crate::menu::place::Stacked::default();
+    let mut stacked = crate::recipe_book::Stacked::default();
     for (id, count) in items {
         stacked.account(&std::sync::Arc::from(*id), *count);
     }

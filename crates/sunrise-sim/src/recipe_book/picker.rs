@@ -1,6 +1,6 @@
 //! Shared augmenting-path recipe assignment.
 /// `StackedContents.RecipePicker`: augmenting paths over item-ingredient pairs.
-pub(in crate::menu) struct Picker<'a> {
+pub(crate) struct Picker<'a> {
     amounts: &'a mut [i32],
     ingredient_count: usize,
     /// Indices into the stacked keys of the items any ingredient accepts.
@@ -17,7 +17,7 @@ impl<'a> Picker<'a> {
     /// Compatibility and per-cell stack caps are computed once, before matching.
     /// Candidate identities are caller-owned: item holders for vanilla, exact
     /// component-equal stack classes for predicate-sensitive mod placement.
-    pub(in crate::menu) fn new(
+    pub(crate) fn new(
         amounts: &'a mut [i32],
         ingredient_count: usize,
         mut limit: impl FnMut(usize, usize) -> i32,
@@ -69,11 +69,7 @@ impl<'a> Picker<'a> {
         self.visited_ingredient.fill(false);
         self.visited_item.fill(false);
     }
-    pub(in crate::menu) fn try_pick(
-        &mut self,
-        capacity: i32,
-        mut output: Option<&mut Vec<usize>>,
-    ) -> bool {
+    pub(crate) fn try_pick(&mut self, capacity: i32, mut output: Option<&mut Vec<usize>>) -> bool {
         if capacity <= 0 {
             return true;
         }
@@ -164,11 +160,7 @@ impl<'a> Picker<'a> {
         }
         None
     }
-    pub(in crate::menu) fn try_pick_all(
-        &mut self,
-        max_size: i32,
-        output: Option<&mut Vec<usize>>,
-    ) -> i32 {
+    pub(crate) fn try_pick_all(&mut self, max_size: i32, output: Option<&mut Vec<usize>>) -> i32 {
         let mut min = 0i32;
         // Java int arithmetic: an empty ingredient list overflows as vanilla does.
         let mut max = max_size.min(self.upper_bound()).wrapping_add(1);

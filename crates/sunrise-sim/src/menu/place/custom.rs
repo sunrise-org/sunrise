@@ -1,10 +1,7 @@
 //! `ServerPlaceRecipe` stages on a live mod `Menu` for checked, arbitrary slot roles.
+use super::custom_plan::{MenuPlacement, PlacementRefusal as Refused};
 use super::{Env, Kind, Menu, PLAYER, PostPlace, tidy, usable_for_crafting};
-use super::{
-    custom_plan::{MenuPlacement, PlacementRefusal as Refused},
-    picker::Picker,
-};
-use crate::items::ItemStack;
+use crate::{items::ItemStack, recipe_book::picker::Picker};
 
 #[cfg(test)]
 #[path = "custom_tests.rs"]

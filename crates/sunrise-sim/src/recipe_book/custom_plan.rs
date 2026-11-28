@@ -4,12 +4,12 @@ use mod_api::RecipeBookLayout as L;
 
 #[derive(Clone, Debug)]
 pub struct MenuPlacement {
-    pub(super) menu: String,
-    pub(super) placement: Placement,
-    pub(super) inputs: Vec<usize>,
-    pub(super) cells: Vec<(usize, usize)>,
-    pub(super) clear: Vec<usize>,
-    pub(super) virtual_result: Option<usize>,
+    pub(crate) menu: String,
+    pub(crate) placement: Placement,
+    pub(crate) inputs: Vec<usize>,
+    pub(crate) cells: Vec<(usize, usize)>,
+    pub(crate) clear: Vec<usize>,
+    pub(crate) virtual_result: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

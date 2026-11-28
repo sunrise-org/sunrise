@@ -1,5 +1,5 @@
 //! The same augmenting-path assignment serves authoritative predicates and UI availability.
-use super::picker::Picker;
+use crate::recipe_book::picker::Picker;
 pub fn can_craft_matching(
     amounts: &mut [i32],
     ingredients: usize,

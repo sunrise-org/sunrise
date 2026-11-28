@@ -18,10 +18,14 @@ mod properties;
 pub use properties::ServerRecipeProperties;
 
 mod custom_books;
+pub mod custom_plan;
 pub mod menu_layout;
 mod mod_index;
 pub mod mod_presentation;
+pub(crate) mod picker;
 mod placement_codec;
+mod stacked;
+pub use stacked::{Stacked, usable_for_crafting};
 pub mod placement_sync;
 pub mod settings_codec;
 pub mod settings_connection;
@@ -445,7 +449,7 @@ impl Book {
     }
     /// `RecipeDisplayEntry.canCraft`: the recipe's placement ingredients
     /// (`craftingRequirements`) can all be found in `stock`.
-    pub fn can_craft(&self, entry: &Entry, stock: &crate::menu::place::Stacked) -> bool {
+    pub fn can_craft(&self, entry: &Entry, stock: &Stacked) -> bool {
         // A server's entry: the ingredients it sent, none meaning not craftable.
         if let Some(requirements) = self.server_requirements.get(&entry.display_id) {
             return requirements
@@ -704,13 +708,13 @@ impl PacketNames<'_> {
         &self,
         sent: &[(HolderSet, SlotDisplay)],
         decode_stack: impl Fn(&sunrise_protocol::item::Stack) -> Option<ItemStack>,
-    ) -> Vec<crate::stations::Stonecutting> {
+    ) -> Vec<crate::crafting::Stonecutting> {
         sent.iter()
             .enumerate()
             .map(|(index, (input, result))| {
                 let mut shown = Vec::new();
                 self.stacks(result, &mut shown, &decode_stack, None);
-                crate::stations::Stonecutting {
+                crate::crafting::Stonecutting {
                     id: format!("server:{index}"),
                     input: Ingredient::of(self.holder_set(input)),
                     result: shown
@@ -2400,7 +2404,7 @@ mod tests {
     }
     #[test]
     fn the_craftable_filter_asks_the_servers_ingredients() {
-        use crate::menu::place::Stacked;
+        use crate::recipe_book::Stacked;
         let mut book = local_book();
         let tags = |tag: &str| {
             if tag == "minecraft:planks" {
@@ -2810,7 +2814,7 @@ mod tests {
         let mut book = Book::default();
         let placement = crate::crafting::Placement::of(vec![Some(ingredient)], None);
         book.placements.insert(entry.id.clone(), placement.clone());
-        let mut stock = crate::menu::place::Stacked::default();
+        let mut stock = crate::recipe_book::Stacked::default();
         // An undamaged sword cannot satisfy the concrete recipe, but the book and
         // placement intentionally account only for its item holder.
         stock.account(&std::sync::Arc::from("minecraft:diamond_sword"), 1);
