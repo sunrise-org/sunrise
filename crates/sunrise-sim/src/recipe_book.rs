@@ -373,7 +373,7 @@ impl Book {
                 // Custom recipes are never learnable; the others show one
                 // display per material count (TransmuteRecipe.display).
                 Recipe::Special(special) => {
-                    for shown in special.book_displays() {
+                    for shown in special.book_displays(|stack| recipes.stack_dye(stack)) {
                         entries.push(Entry {
                             id: crate::crafting::qualified(name),
                             display_id: -1,
@@ -2820,5 +2820,84 @@ mod tests {
             book.items_of(&placement.ingredients[0]),
             ["minecraft:diamond_sword"]
         );
+    }
+
+    /// `Book::build` previews a dye result from the displayed dye stack's
+    /// `minecraft:dye` component, which overrides the item's default red (#6556).
+    #[test]
+    fn a_dye_book_result_reads_the_displayed_stacks_component() {
+        let recipe = r#"{
+            "type":"minecraft:crafting_dye",
+            "target":"minecraft:leather_helmet",
+            "dye":{
+                "type":"neoforge:custom_display",
+                "base":"minecraft:red_dye",
+                "display":{"type":"minecraft:item_stack","item":{
+                    "id":"minecraft:red_dye",
+                    "components":{"minecraft:dye":"blue"}
+                }}
+            },
+            "result":{"id":"minecraft:leather_helmet"}
+        }"#;
+        let root = content_recipe_root("dye-display", recipe);
+        let items = crate::items::Items::for_tests(HashMap::new());
+        let recipes = Recipes::load(
+            &root,
+            &items,
+            &PackOverlay::NONE,
+            &crate::test_resources::server_load(),
+        )
+        .unwrap();
+        let book = Book::build(&recipes, &items);
+        let entry = book
+            .entry("example:test")
+            .expect("the dye recipe is in the book");
+        let color = |name: &str| {
+            sunrise_level::dyes::DYES
+                .iter()
+                .find(|(dye, _)| *dye == name)
+                .unwrap()
+                .1 as i32
+        };
+        assert_ne!(color("blue"), color("red"));
+        assert_eq!(
+            entry.variants[0].data().and_then(|d| d.dyed_color),
+            Some(color("blue")),
+            "the displayed stack's component wins over red_dye's default"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A dye recipe whose every entry lacks the component resolves no result:
+    /// the book keeps an empty result, as vanilla 26.3 does (#6556).
+    #[test]
+    fn a_dye_book_with_no_dye_entry_has_no_result() {
+        let recipe = r#"{
+            "type":"minecraft:crafting_dye",
+            "target":"minecraft:leather_helmet",
+            "dye":"minecraft:stick",
+            "result":{"id":"minecraft:leather_helmet"}
+        }"#;
+        let root = content_recipe_root("dye-empty", recipe);
+        let items = crate::items::Items::for_tests(HashMap::new());
+        let recipes = Recipes::load(
+            &root,
+            &items,
+            &PackOverlay::NONE,
+            &crate::test_resources::server_load(),
+        )
+        .unwrap();
+        let book = Book::build(&recipes, &items);
+        let entry = book
+            .entry("example:test")
+            .expect("the dye recipe is in the book");
+        assert!(entry.variants.is_empty());
+        assert_eq!(entry.result.item.as_ref(), "minecraft:air");
+        assert_eq!(entry.results()[0].item.as_ref(), "minecraft:air");
+        let Display::Shapeless(slots) = &entry.display else {
+            panic!("a dye recipe shows its target and dye");
+        };
+        assert!(slots[1].shown.as_ref().is_some_and(Vec::is_empty));
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
