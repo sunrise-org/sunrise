@@ -36,18 +36,18 @@ pub enum TurnRefused {
 /// eyes closer than the entity interaction range (3, 5 in creative) plus
 /// `buffer` to the entity's box.
 pub fn guest_within_entity_range(
-    g: &sunrise_sim::lan::guest::Guest,
+    g: &sunrise_sim::lan::guest::LiveGuestView<'_>,
     bounds: &sunrise_core::geometry::Aabb,
     buffer: f64,
 ) -> bool {
-    let eye = [g.position[0], g.position[1] + g.eye_height(), g.position[2]];
+    let eye = g.eye();
     let (lo, hi) = (bounds.min_position(), bounds.max_position());
     let d = [
         eye[0] - eye[0].clamp(lo.x, hi.x),
         eye[1] - eye[1].clamp(lo.y, hi.y),
         eye[2] - eye[2].clamp(lo.z, hi.z),
     ];
-    let range = if g.creative() { 5.0 } else { 3.0 } + buffer;
+    let range = if g.creative { 5.0 } else { 3.0 } + buffer;
     d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < range * range
 }
 /// Kept at LAN action scope to preserve its published internals target path.

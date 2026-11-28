@@ -1,13 +1,43 @@
 use super::*;
+use sunrise_gameplay_common::game::game_mode_common::GameModeCommonGameExt1 as _;
+use sunrise_sim::lan::guest::{Guest, LiveGuestView};
 
 impl crate::game::ServerGame<'_> {
+    /// Menu metadata stays on the guest while the game borrows their body and hands.
+    pub(in crate::game) fn live_guest_view<'a>(&'a self, g: &'a Guest) -> LiveGuestView<'a> {
+        if self.server.lan_acting != Some(g.conn) {
+            return LiveGuestView::from_guest(g);
+        }
+        let motion = self.common.player.as_ref();
+        let (position, eye_height) = motion.map_or_else(
+            || (g.position, g.eye_height()),
+            |p| {
+                (
+                    [p.position.x, p.position.y, p.position.z],
+                    f64::from(p.dimensions.eye_height),
+                )
+            },
+        );
+        LiveGuestView {
+            uuid: g.uuid,
+            position,
+            eye_height,
+            creative: self.instabuild(),
+            spectator: self.common.spectator(),
+            motion,
+            inventory: &self.common.inventory,
+            selected: self.common.selected,
+            offhand: self.common.offhand.as_ref(),
+        }
+    }
+
     /// `ContainerEntity.isChestVehicleStillValid`: the chest minecart or chest
     /// boat is still there and within the guest's entity interaction range
     /// plus 4 of its box.
     pub(in crate::game::server_side) fn chest_vehicle_still_valid(
         &self,
         id: i32,
-        g: &sunrise_sim::lan::guest::Guest,
+        g: &Guest,
     ) -> bool {
         let bounds = self
             .common
@@ -22,20 +52,21 @@ impl crate::game::ServerGame<'_> {
                     .find(|b| b.id as i32 == id)
                     .map(|b| b.bounds())
             });
-        bounds.is_some_and(|b| guest_within_entity_range(g, &b, 4.0))
+        bounds.is_some_and(|b| guest_within_entity_range(&self.live_guest_view(g), &b, 4.0))
     }
     /// `stillValid` of the guest's open container: its blocks are still there
     /// and in reach, or its vehicle exists and is in reach. True with none open.
-    pub(in crate::game::server_side) fn container_menu_valid(
-        &self,
-        g: &sunrise_sim::lan::guest::Guest,
-    ) -> bool {
+    pub(in crate::game::server_side) fn container_menu_valid(&self, g: &Guest) -> bool {
         let Some(host) = self.server.lan.as_ref() else {
             return true;
         };
         g.menu.as_ref().is_none_or(|m| {
             m.slots.valid(&self.common.world)
-                && m.still_valid(&host.hub.loop_context, &self.common.world, g)
+                && m.still_valid_for(
+                    &host.hub.loop_context,
+                    &self.common.world,
+                    &self.live_guest_view(g),
+                )
                 && !matches!(m.slots, Slots::Block((_, y, id))
                     if y == sunrise_gameplay_common::game::minecarts::CART_KEY_Y
                         && !self.chest_vehicle_still_valid(id, g))
