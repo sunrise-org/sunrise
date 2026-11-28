@@ -5099,15 +5099,6 @@ fn finish_server_ai_step_from(
                 ));
             }
         }
-        if m.species() == Species::Warden {
-            // Warden.customServerAiStep: the brain and its bookkeeping.
-            super::warden::server_ai_step(m, w, level, events);
-        }
-        // Sniffer and HappyGhast.customServerAiStep: the brain (a happy ghast's
-        // only while it is a ghastling), then updateActivity.
-        if animal_brain_active {
-            super::animal_brain::tick(m, w, level, events);
-        }
     }
     if m.species() == Species::Villager {
         if let Some(player) = super::villager::ext_mut(m).last_traded_player.take() {
@@ -5115,6 +5106,8 @@ fn finish_server_ai_step_from(
         }
         let _ = m.random.next_int_bound(100);
     }
+    // The Warden's and the animals' brains tick here, once per step (#6469, #6470): a staged
+    // resume after the villager's brain is a villager's, so it never reaches them twice.
     if m.species() == Species::Warden {
         // Warden.customServerAiStep: the brain and its bookkeeping.
         super::warden::server_ai_step(m, w, level, events);

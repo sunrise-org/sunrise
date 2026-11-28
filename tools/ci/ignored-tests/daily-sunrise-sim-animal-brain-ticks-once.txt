@@ -1,0 +1,2 @@
+# An animal brain (sniffer, copper golem, axolotl, tadpole) ticks once per AI step (#6470); needs prepared resources.
+sunrise-sim mobs::animal_brain::brain_tick_count_tests::an_animal_brain_ticks_once_per_ai_step lib daily resources

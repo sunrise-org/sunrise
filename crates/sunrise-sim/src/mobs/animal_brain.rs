@@ -3256,6 +3256,48 @@ mod axolotl_parity_tests {
 }
 
 #[cfg(test)]
+mod brain_tick_count_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    /// `Sniffer.customServerAiStep` ticks the brain once per AI step (#6470): a memory with a
+    /// time to live counts down by one a tick, and so does every brain-run species'.
+    #[test]
+    #[ignore = "daily"]
+    fn an_animal_brain_ticks_once_per_ai_step() {
+        assert!(crate::mobs::world::with_test_world(&[], |w, types| {
+            for kind in [
+                "minecraft:sniffer",
+                "minecraft:copper_golem",
+                "minecraft:axolotl",
+                "minecraft:tadpole",
+            ] {
+                let mut m = Mob::new(
+                    1,
+                    Arc::new(types.types[kind].clone()),
+                    Vec3::new(0.5, 80.0, 0.5),
+                    0.0,
+                );
+                ensure_brain(&mut m);
+                // `forgetOutdatedMemories` decrements it once per brain tick; nothing the
+                // brain runs in three ticks sets it.
+                mem(&mut m).sniff_cooldown.set_ttl((), 100);
+                let mut fixture = crate::health::TestLevel::new(0);
+                let mut events = Vec::new();
+                for tick in 1..=3 {
+                    assert!(m.tick(w, &mut fixture.level(), &mut events), "{kind}");
+                    assert_eq!(
+                        mem(&mut m).sniff_cooldown.ttl(),
+                        100 - tick,
+                        "{kind} tick {tick}"
+                    );
+                }
+            }
+        }));
+    }
+}
+
+#[cfg(test)]
 mod breeding_duration_tests {
     use super::*;
     #[test]
