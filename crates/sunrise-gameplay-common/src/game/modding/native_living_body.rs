@@ -243,7 +243,7 @@ impl mod_api::__private::LivingReads for BodyReads<'_> {
     fn living_entity(&self, _: LivingParty) -> Option<mod_api::EntityRef> {
         let id = match self.body {
             LivingBody::Mob(m) => m.id,
-            LivingBody::Player(p) => u32::try_from(p.id).ok()?,
+            LivingBody::Player(p) => crate::game::entity_ids::entity_id_bits(p.id),
             LivingBody::Stand(s) | LivingBody::Dragon(s) => s.id,
         };
         Some(mod_api::EntityRef::new(self.reads.epoch, id))
