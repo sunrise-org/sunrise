@@ -1675,7 +1675,7 @@ impl ClientGame<'_> {
             topology,
             &mesh_draw,
         )?;
-        let active_target = pass.target.map(|target| (target, 0));
+        let active_target = pass.target.map(|target| (target, pass.mip_level));
         let resolved_bindings = self.resolve_draw_bindings_into(
             slot,
             bindings,
@@ -1739,7 +1739,7 @@ impl ClientGame<'_> {
             .topology(slot)
             .unwrap_or(mod_api::PrimitiveTopology::Quads);
         let source = self.resolve_indirect_draw(slot, topology, indirect)?;
-        let active_target = pass.target.map(|target| (target, 0));
+        let active_target = pass.target.map(|target| (target, pass.mip_level));
         let resolved_bindings = self.resolve_draw_bindings_into(
             slot,
             indirect.bindings,
@@ -1870,7 +1870,7 @@ impl ClientGame<'_> {
             }
             _ => return Err(PipelineDrawError::InvalidRange),
         }
-        let active_target = pass.target.map(|target| (target, 0));
+        let active_target = pass.target.map(|target| (target, pass.mip_level));
         let resolved_bindings = self.resolve_draw_bindings_into(
             slot,
             bindings,
@@ -5050,6 +5050,195 @@ mod tests {
                 Err(mod_api::PipelineDrawError::Mesh(MeshError::Unavailable))
             );
             game.client.renderer.0 = renderer_slot;
+        });
+    }
+
+    /// The answers of a pass's two draws in [`MipHazardProbe`].
+    type MipHazardAnswers = std::sync::Arc<Mutex<Vec<Result<(), PipelineDrawError>>>>;
+
+    /// Records one offscreen pass into mip 1 of a two-level target, with two draws sampling
+    /// that target: mip 0 (another level) and mip 1 (the level the pass writes).
+    struct MipHazardProbe(MipHazardAnswers);
+
+    #[mod_api::__subscriptions]
+    impl Hooks for MipHazardProbe {
+        fn register_render_pipelines(
+            &self,
+            _: &mod_api::RegistrationContext,
+            event: &mut mod_api::RegisterRenderPipelinesEvent<'_>,
+        ) {
+            event.register(
+                mod_api::RenderPipeline::new(
+                    Identifier::parse("mip_hazard:sampled").unwrap(),
+                    Identifier::parse("mip_hazard:core/sampled").unwrap(),
+                    mod_api::PipelineBlend::Opaque,
+                    mod_api::WorldDepth::ThroughWalls,
+                )
+                .sampler(
+                    "ColorTex",
+                    mod_api::Sampler::new(
+                        mod_api::SamplerFilter::Nearest,
+                        mod_api::SamplerAddress::ClampToEdge,
+                    ),
+                ),
+            );
+        }
+
+        fn frame_graph_setup(
+            &self,
+            host: &dyn ClientHost,
+            event: &mut mod_api::FrameGraphSetupEvent<'_>,
+        ) {
+            let desc = mod_api::RenderTargetDescriptor::new([16, 16])
+                .color_target(mod_api::RenderTargetFormat::Rgba8Unorm)
+                .mip_levels(2);
+            let target = host.create_render_target(&desc).unwrap();
+            let pipeline = host
+                .render_assets()
+                .render_pipeline(&Identifier::parse("mip_hazard:sampled").unwrap())
+                .unwrap();
+            // One quad of the default `PositionTexColor` format: 24 bytes a vertex.
+            let quad = [0u8; 96];
+            let answers = self.0.clone();
+            event
+                .graph
+                .add_pass(
+                    mod_api::FramePassDescriptor::new(
+                        "mip_hazard",
+                        mod_api::FrameTarget::Mod(target),
+                    )
+                    .mip_level(1),
+                    &mut |pass| {
+                        for mip in [0, 1] {
+                            let view = mod_api::RenderTargetMipView::single(target, 0, mip);
+                            answers.lock().unwrap().push(pass.draw_vertices(
+                                pipeline,
+                                &[&quad],
+                                None,
+                                mod_api::MeshDraw::vertices(0..4),
+                                &mod_api::DrawBindings::default().texture(
+                                    "ColorTex",
+                                    mod_api::TextureSource::RenderTargetColorMip(view),
+                                ),
+                            ));
+                        }
+                    },
+                )
+                .unwrap();
+        }
+    }
+
+    /// An offscreen pass attaches the mip level its descriptor names (#6661): a draw in a pass
+    /// that renders into mip 1 may sample mip 0 of the same target, and sampling mip 1, the
+    /// level it writes, is the read/write hazard. The draws were checked as if mip 0 were
+    /// attached, which refused the first and let the second through.
+    #[test]
+    #[ignore = "daily"]
+    fn an_offscreen_draw_is_checked_against_the_mip_its_pass_renders_into() {
+        use mod_api::__private::take_hook_panics;
+        use sunrise_client::gfx::world_primitives::FrameHooks;
+
+        // The mod's pipeline registration is process-global and published once: run in a child.
+        if super::super::native_entity_refs::tests::run_fresh_cases(
+            "game::client_side::native_custom_geometry::tests::an_offscreen_draw_is_checked_against_the_mip_its_pass_renders_into",
+            "SUNRISE_MOD_OFFSCREEN_MIP_CHILD",
+            &["run"],
+        ) {
+            return;
+        }
+        super::super::native_entity_refs::tests::with_client_game(|game| {
+            let (_event_loop, window) =
+                crate::game::native_hooks::particle_count_tests::hidden_window();
+            game.common.options.offscreen = true;
+            let renderer = game.new_renderer(window.clone()).unwrap();
+            game.set_renderer(renderer);
+            game.client.window.0 = Some(window);
+
+            let answers = MipHazardAnswers::default();
+            mod_platform::__private::install(
+                vec![ModEntry::new(
+                    "mip_hazard",
+                    Box::new(MipHazardProbe(answers.clone())),
+                )]
+                .into(),
+            );
+            let _ = take_hook_panics();
+
+            let mut pipelines = Vec::new();
+            use mod_api::__private::game::RegistrationContextNew;
+            sunrise_gameplay_common::game::native_hooks::native_register_render_pipelines(
+                &mod_api::RegistrationContext::new(),
+                &mut pipelines,
+                &mut Vec::new(),
+                &mut Vec::new(),
+            );
+            assert_eq!(pipelines.len(), 1);
+            let vanilla = tempfile::tempdir().unwrap();
+            std::fs::write(
+                vanilla.path().join("render-pipelines.json"),
+                r#"{"required":["minecraft:pipeline/solid_block"],"optional":["minecraft:pipeline/wireframe"]}"#,
+            )
+            .unwrap();
+            sunrise_client_render::mod_pipelines::register(pipelines, vanilla.path()).unwrap();
+            let shaders = tempfile::tempdir().unwrap();
+            let core = shaders.path().join("assets/mip_hazard/shaders/core");
+            std::fs::create_dir_all(&core).unwrap();
+            std::fs::write(
+                core.join("sampled.vsh"),
+                "#version 330\n\
+                 in vec3 Position;\n\
+                 in vec2 UV0;\n\
+                 in vec4 Color;\n\
+                 out vec2 vUv;\n\
+                 out vec4 vColor;\n\
+                 void main() {\n\
+                     gl_Position = vec4(Position.xy, 0.5, 1.0);\n\
+                     vUv = UV0;\n\
+                     vColor = Color;\n\
+                 }\n",
+            )
+            .unwrap();
+            std::fs::write(
+                core.join("sampled.fsh"),
+                "#version 330\n\
+                 uniform sampler2D ColorTex;\n\
+                 in vec2 vUv;\n\
+                 in vec4 vColor;\n\
+                 out vec4 fragColor;\n\
+                 void main() {\n\
+                     fragColor = texture(ColorTex, vUv) * vColor;\n\
+                 }\n",
+            )
+            .unwrap();
+            let mut render = sunrise_client_render::assets::RenderAssets::unpublished();
+            render.mod_pipelines = sunrise_client_render::mod_pipelines::Pipelines::load(
+                &sunrise_assets::resource_source::ResourceSource::directory(
+                    shaders.path().to_owned(),
+                ),
+                7,
+            )
+            .unwrap();
+            game.client.client_pack.render = std::sync::Arc::new(render);
+
+            let camera = test_camera([0.0; 3], Mat4::IDENTITY);
+            let mut draw = WorldGeometry::default();
+            draw.reset([0.0; 3], Mat4::IDENTITY, [0.0; 2]);
+            {
+                let mut driver = GameWorldStageDriver::new(game, &camera, 0.0, &mut draw);
+                driver.on_frame_graph_setup(&[], false);
+                let graph = driver.take_frame_graph().unwrap();
+                assert_eq!(graph.passes.len(), 1);
+                assert_eq!(graph.passes[0].mip_level, 1);
+                // The accepted draw sampling the other level is recorded; the refused one is not.
+                assert_eq!(graph.passes[0].draws.len(), 1);
+            }
+            let panics = take_hook_panics();
+            assert!(panics.is_empty(), "{panics:?}");
+            assert_eq!(
+                *answers.lock().unwrap(),
+                [Ok(()), Err(PipelineDrawError::TargetReadWriteHazard)],
+                "sampling mip 0 is fine in a pass into mip 1; sampling mip 1 is the hazard"
+            );
         });
     }
 

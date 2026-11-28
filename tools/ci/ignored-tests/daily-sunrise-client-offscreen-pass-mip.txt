@@ -1,0 +1,2 @@
+# An offscreen draw is checked against the mip level its pass renders into (#6661); needs a GPU adapter.
+sunrise-client-gameplay game::client_side::native_custom_geometry::tests::an_offscreen_draw_is_checked_against_the_mip_its_pass_renders_into lib daily gpu
