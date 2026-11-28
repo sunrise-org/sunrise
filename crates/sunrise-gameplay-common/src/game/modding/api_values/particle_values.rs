@@ -29,10 +29,8 @@ fn finite(options: &ApiOptions) -> bool {
         && options.vibration.as_ref().is_none_or(|(source, at, _)| {
             at.iter().all(|v| v.is_finite())
                 && match source {
-                    mod_api::client::particles::PositionSource::Block(_) => true,
-                    mod_api::client::particles::PositionSource::Entity { y_offset, .. } => {
-                        y_offset.is_finite()
-                    }
+                    mod_api::PositionSource::Block(_) => true,
+                    mod_api::PositionSource::Entity { y_offset, .. } => y_offset.is_finite(),
                     _ => false,
                 }
         })
@@ -163,7 +161,7 @@ impl TryIntoEngine<()> for mod_api::FireworkExplosion {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mod_api::client::particles::PositionSource;
+    use mod_api::PositionSource;
 
     fn prepare() {
         mod_platform::__private::part_tests::install_parts_fixture(&[]).unwrap();
@@ -193,7 +191,7 @@ mod tests {
         original.block = Some(("test:sprite".into(), 0x123456));
         original.item = Some(vec!["test:layer".into()]);
         original.vibration = Some((
-            mod_api::client::particles::PositionSource::Entity {
+            mod_api::PositionSource::Entity {
                 id: -7,
                 y_offset: 0.5,
             },
@@ -219,7 +217,7 @@ mod tests {
         assert_eq!(
             result.vibration,
             Some((
-                mod_api::client::particles::PositionSource::Entity {
+                mod_api::PositionSource::Entity {
                     id: -7,
                     y_offset: 0.5
                 },

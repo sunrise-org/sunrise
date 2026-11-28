@@ -120,6 +120,48 @@ pub fn behavior_block(
 ) -> Option<sunrise_world::level::states::BlockId> {
     Some(behaviours.block(default_state(block)?))
 }
+/// The engine's `TickPriority` for a mod's, by vanilla's value (`TickPriority.byValue(getValue())`),
+/// so a variant the mod API adds maps by its value, never silently to `Normal`. The one both
+/// `LevelRef::schedule_block_tick` and the in-line hosts' `schedule_block_tick_with_priority`
+/// queue at.
+pub fn engine_tick_priority(priority: mod_api::TickPriority) -> sunrise_core::ticks::TickPriority {
+    sunrise_core::ticks::TickPriority::by_value(priority.value())
+}
+/// `ScheduledTickAccess.scheduleTick(pos, block, delay, priority)` into the level's block queue
+/// at `game_time`: the one call `LevelRef::schedule_block_tick` and the in-line hosts'
+/// `LevelTicksHost::schedule_block_tick_with_priority` (and `schedule_block_tick`, at `Normal`)
+/// make. False for a block with no world form or a position whose chunk has no tick list; a tick
+/// of that block already queued there is kept and counts as scheduled.
+pub fn schedule_block_tick(
+    ticks: &mut sunrise_world::level::Ticks,
+    behaviours: &sunrise_world::level::Behaviours,
+    game_time: i64,
+    [x, y, z]: [i32; 3],
+    block: mod_api::BlockKey,
+    delay: i32,
+    priority: mod_api::TickPriority,
+) -> bool {
+    let Some(block) = behavior_block(block, behaviours) else {
+        return false;
+    };
+    let pos = sunrise_core::position::BlockPos::new(x, y, z);
+    ticks.schedule_block(game_time, pos, block, delay, engine_tick_priority(priority))
+        != sunrise_core::ticks::ScheduleResult::MissingChunk
+}
+/// `ScheduledTickAccess.scheduleTick(pos, fluid, delay, priority)` into the level's fluid queue,
+/// as [`schedule_block_tick`].
+pub fn schedule_fluid_tick(
+    ticks: &mut sunrise_world::level::Ticks,
+    game_time: i64,
+    [x, y, z]: [i32; 3],
+    fluid: sunrise_world::fluid::FluidKind,
+    delay: i32,
+    priority: mod_api::TickPriority,
+) -> bool {
+    let pos = sunrise_core::position::BlockPos::new(x, y, z);
+    ticks.schedule_fluid_with_priority(game_time, pos, fluid, delay, engine_tick_priority(priority))
+        != sunrise_core::ticks::ScheduleResult::MissingChunk
+}
 #[allow(unused_imports)]
 pub use super::native_ground::alter_ground;
 #[allow(unused_imports)]

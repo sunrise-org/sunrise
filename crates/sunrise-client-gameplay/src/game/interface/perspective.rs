@@ -525,7 +525,7 @@ impl crate::game::ClientGame<'_> {
         let swinging = self.common.swing.swinging();
         // currentSwing.hand().asArm(mainArm).
         let swing_right_arm = swinging.then(|| {
-            (self.common.swing.attack_hand() == mod_api::client::first_person::Hand::Main)
+            (self.common.swing.attack_hand() == mod_api::Hand::Main)
                 != self.client.settings.main_hand_left
         });
         // LivingEntity.isVisuallySwimming and Entity.isInWater.

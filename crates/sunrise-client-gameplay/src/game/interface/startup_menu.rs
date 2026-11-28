@@ -730,10 +730,11 @@ impl Loading {
                 Event::ShaderPack => self.save_menu_settings(),
                 Event::OpenShaderOptions => {
                     let pick = &self.settings.sunrise.shader_pack;
+                    let macros = super::shader_packs::shader_options_macros(self.renderer.as_ref());
                     self.settings.shader_options = super::shader_packs::read_shader_options(
                         pick,
                         &self.settings.language,
-                        &sunrise_shaders::Macros::standard(),
+                        &macros,
                         self.settings.sunrise.iris_compat_of(pick),
                     );
                 }

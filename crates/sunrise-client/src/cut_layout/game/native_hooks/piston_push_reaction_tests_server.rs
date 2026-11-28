@@ -178,7 +178,7 @@ fn piston_push_reaction_position_state_opens_ticks_and_saves() {
             }
             game.server.lid_openers.insert(from, 2);
             game.world.chest_openers.insert(from, (2, 4.0));
-            game.server.be_anims.bells.insert(
+            game.server.be_anims.level.bells.insert(
                 [3, 64, 2],
                 sunrise_level::block_entity_ticks::Bell::default(),
             );
@@ -230,7 +230,7 @@ fn piston_push_reaction_position_state_opens_ticks_and_saves() {
             assert_eq!(game.world.container_stack_limit(from), None);
             assert!(!game.server.lid_openers.contains_key(&from));
             assert!(!game.world.chest_openers.contains_key(&from));
-            assert!(!game.server.be_anims.bells.contains_key(&[3, 64, 2]));
+            assert!(!game.server.be_anims.level.bells.contains_key(&[3, 64, 2]));
             // Save/reload in flight also keeps the position-owned fields.
             let at = BlockPos::new(4, 64, 2);
             let moving = game

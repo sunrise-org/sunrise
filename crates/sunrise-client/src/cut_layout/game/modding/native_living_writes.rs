@@ -12,7 +12,7 @@ pub(crate) mod tests {
 
     use sunrise_sim::mobs::stuck::Stuck;
 
-    use mod_api::client::first_person::Hand;
+    use mod_api::Hand;
 
     use mod_api::{EntityRef, Identifier, WorldEpoch};
 

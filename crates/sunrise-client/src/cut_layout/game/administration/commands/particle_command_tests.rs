@@ -4,7 +4,7 @@
 //! crumble's block state, a dust transition's colours and scale, a spell's
 //! colour and power, a sculk charge's roll, a vibration's destination.
 #[cfg(feature = "client")]
-use mod_api::client::particles::PositionSource;
+use mod_api::PositionSource;
 use std::sync::Arc;
 use sunrise_core::geometry::Vec3;
 #[cfg(feature = "client")]

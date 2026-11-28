@@ -1080,7 +1080,8 @@ fn run_test_world(
     build(&mut world, registry);
     let lid_openers = std::collections::HashMap::new();
     let w = MobWorld {
-        side: &crate::motion::surface::DrySide(&motion.health.damage),
+        side: &crate::block_contact::DrySide(&motion.health.damage),
+        variant_tables: None,
         mob_maps: crate::neoforge_mob_maps::NeoForgeMobMaps::vanilla(),
         goal_host: None,
         teams: Default::default(),

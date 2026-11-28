@@ -7,7 +7,7 @@ pub enum Hurting<'a> {
     /// A player, by its entity id.
     Player(i32, HurtSource<'a>),
     /// A mob, and what hurts it.
-    Mob(&'a crate::mobs::Mob, &'a crate::mobs::Damage),
+    Mob(&'a crate::mobs::Mob, &'a Damage),
     /// The ender dragon, by its entity id.
     Dragon(i32, HurtSource<'a>),
     /// An armor stand, by its entity id, for sweep knockback.
@@ -103,11 +103,21 @@ impl<S: for<'s> From<HitSound<'s>>> SoundQueue for Vec<S> {
 pub struct HitLend<'a> {
     body: LentBody<'a>,
 }
+/// The live player a hit lends: its own random and the reads its body answers, as the
+/// player's motion state exposes them. Health names no motion type; `PlayerMotion`
+/// implements this where the movement state lives.
+pub trait PlayerHitBody {
+    fn entity_id(&self) -> i32;
+    fn position(&self) -> sunrise_core::geometry::Vec3;
+    fn random(&mut self) -> &mut sunrise_core::random::LegacyRandom;
+    fn health(&self) -> &PlayerHealth;
+    fn attributes(&self) -> &Attributes;
+}
 enum LentBody<'a> {
     Mob(&'a mut crate::mobs::Mob),
     /// The player in place, with the effects and stacks the game keeps beside its body.
     Player {
-        motion: &'a mut PlayerMotion,
+        motion: &'a mut dyn PlayerHitBody,
         effects: &'a crate::effects::PlayerEffects,
         equipment: PlayerEquipment<'a>,
     },
@@ -158,13 +168,13 @@ impl<'a> HitLend<'a> {
     /// `player`, if it is the attacker `attacker` (an entity id), with the `effects` and
     /// `equipment` the game keeps beside the body in place. The caller builds it only while a
     /// `HitHost` hook listens ([`hit_host_listened`]).
-    pub fn attacking_player(
-        player: Option<&'a mut PlayerMotion>,
+    pub fn attacking_player<P: PlayerHitBody>(
+        player: Option<&'a mut P>,
         attacker: i32,
         effects: &'a crate::effects::PlayerEffects,
         equipment: PlayerEquipment<'a>,
     ) -> Option<Self> {
-        let motion = player.filter(|p| p.entity_id == attacker)?;
+        let motion: &'a mut dyn PlayerHitBody = player.filter(|p| p.entity_id() == attacker)?;
         Some(Self {
             body: LentBody::Player {
                 motion,
@@ -180,11 +190,11 @@ impl<'a> HitLend<'a> {
             body: LentBody::Parked(hub?.guest(conn)?),
         })
     }
-    fn id(&self) -> i32 {
+    fn id(&self) -> u32 {
         match &self.body {
-            LentBody::Mob(mob) => mob.id as i32,
-            LentBody::Player { motion, .. } => motion.entity_id,
-            LentBody::Parked(guest) => guest.entity_id,
+            LentBody::Mob(mob) => mob.id,
+            LentBody::Player { motion, .. } => motion.entity_id() as u32,
+            LentBody::Parked(guest) => guest.entity_id as u32,
         }
     }
     /// The lent entity's position and own random, for its sounds and draws; none for a parked
@@ -194,7 +204,7 @@ impl<'a> HitLend<'a> {
     ) -> Option<([f64; 3], &mut sunrise_core::random::LegacyRandom)> {
         let (position, random) = match &mut self.body {
             LentBody::Mob(mob) => (mob.position, &mut mob.random),
-            LentBody::Player { motion, .. } => (motion.position, &mut *motion.random),
+            LentBody::Player { motion, .. } => (motion.position(), motion.random()),
             LentBody::Parked(_) => return None,
         };
         Some(([position.x, position.y, position.z], random))
@@ -207,10 +217,10 @@ impl<'a> HitLend<'a> {
                 effects,
                 equipment,
             } => LivingBody::Player(PlayerBody {
-                id: motion.entity_id,
+                id: motion.entity_id(),
                 uuid: None,
-                health: PlayerHealthRead::Synced(&motion.health.data, motion.health.ids),
-                attributes: Some(&motion.attributes),
+                health: PlayerHealthRead::Synced(&motion.health().data, motion.health().ids),
+                attributes: Some(motion.attributes()),
                 effects: Some(effects),
                 equipment: *equipment,
                 attachments: None,
@@ -227,7 +237,7 @@ impl<'a> HitLend<'a> {
                     effects,
                     equipment,
                 } => LentBody::Player {
-                    motion,
+                    motion: &mut **motion,
                     effects,
                     equipment: *equipment,
                 },
@@ -306,13 +316,13 @@ impl<'a> HitEffects<'a> {
     pub fn entity(
         &mut self,
         entity: mod_api::EntityRef,
-    ) -> Option<(i32, [f64; 3], &mut sunrise_core::random::LegacyRandom)> {
+    ) -> Option<(u32, [f64; 3], &mut sunrise_core::random::LegacyRandom)> {
         if self.epoch != Some(entity.epoch()) {
             return None;
         }
         let lent = self.lent.as_mut()?;
         let id = lent.id();
-        (i32::try_from(entity.id()).ok()? == id).then_some(())?;
+        (entity.id() == id).then_some(())?;
         let (position, random) = lent.position_and_random()?;
         Some((id, position, random))
     }
@@ -437,7 +447,7 @@ pub fn player_equipment<'a>(
 }
 /// The registry keys of the living types that are not mob types (`EntityType.PLAYER`,
 /// `ARMOR_STAND`, `ENDER_DRAGON`), resolved with the accepted resources, as a mob type keeps its
-/// own ([`crate::mobs::MobType::type_key`]).
+/// own (`MobType::type_key`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LivingTypeKeys {
     pub player: Option<mod_api::EntityTypeKey>,
@@ -473,87 +483,6 @@ pub struct HitReads<'a> {
     pub player_attachments: Option<&'a sunrise_mod_runtime::attachments::Attachments>,
     pub entity_attachments:
         Option<&'a crate::fast_hash::FxHashMap<u32, sunrise_mod_runtime::attachments::Attachments>>,
-}
-/// The body a heal or movement hook lends: a mob, or the player in place, whose effects, stacks
-/// and UUID come from the reads (as a hit's player victim's do, [`PlayerBody::in_place`]).
-#[derive(Clone, Copy)]
-pub enum LendBody<'a> {
-    Mob(&'a crate::mobs::Mob),
-    Player {
-        id: i32,
-        attributes: &'a Attributes,
-        data: &'a SyncedFloats,
-        ids: PlayerFloatIds,
-    },
-}
-/// A living entity a heal or movement hook lends its listeners for reading
-/// ([`LivingView`](mod_api::LivingView)): the body the site holds, and what naming and reading it
-/// needs beyond the body, which the game builds only once a listener is subscribed.
-#[derive(Clone, Copy)]
-pub struct LivingLend<'a> {
-    pub body: LendBody<'a>,
-    pub reads: &'a dyn Fn() -> Option<HitReads<'a>>,
-}
-impl<'a> LivingLend<'a> {
-    /// A mob's lend.
-    pub fn mob(mob: &'a crate::mobs::Mob, reads: &'a dyn Fn() -> Option<HitReads<'a>>) -> Self {
-        Self {
-            body: LendBody::Mob(mob),
-            reads,
-        }
-    }
-    /// The player in place's lend: its floats and attributes as the site holds them.
-    pub fn player(
-        id: i32,
-        attributes: &'a Attributes,
-        data: &'a SyncedFloats,
-        ids: PlayerFloatIds,
-        reads: &'a dyn Fn() -> Option<HitReads<'a>>,
-    ) -> Self {
-        Self {
-            body: LendBody::Player {
-                id,
-                attributes,
-                data,
-                ids,
-            },
-            reads,
-        }
-    }
-    /// The entity's id (`Entity.getId`).
-    pub fn id(&self) -> u32 {
-        match self.body {
-            LendBody::Mob(m) => m.id,
-            LendBody::Player { id, .. } => id as u32,
-        }
-    }
-    /// The entity's type name.
-    pub fn kind(&self) -> &'a str {
-        match self.body {
-            LendBody::Mob(m) => &m.kind.id,
-            LendBody::Player { .. } => "minecraft:player",
-        }
-    }
-    /// The body its reads read, completed from `reads`.
-    pub fn living_body(&self, reads: &HitReads<'a>) -> LivingBody<'a> {
-        match self.body {
-            LendBody::Mob(m) => LivingBody::Mob(m),
-            LendBody::Player {
-                id,
-                attributes,
-                data,
-                ids,
-            } => LivingBody::Player(PlayerBody::in_place(
-                id,
-                PlayerBodyRead {
-                    attributes,
-                    data,
-                    ids,
-                },
-                Some(reads),
-            )),
-        }
-    }
 }
 /// Inputs to `Entity.isInvulnerableToBase` for a mob or a nonliving body.
 pub struct BodyImmunity<T> {
@@ -813,7 +742,11 @@ impl<'a> DamageLevel<'a> {
     }
 
     pub(crate) fn lent_attacker(&self) -> Option<i32> {
-        self.effects.as_ref()?.lent.as_ref().map(HitLend::id)
+        self.effects
+            .as_ref()?
+            .lent
+            .as_ref()
+            .map(|lend| lend.id() as i32)
     }
 
     pub(crate) fn wake_mob(&self, mob: &mut crate::mobs::Mob) {
@@ -859,11 +792,11 @@ impl<'a> DamageLevel<'a> {
         let body = self.effects.as_ref()?.lent_body()?;
         let id = match body {
             LivingBody::Mob(mob) if mob.removed => return None,
-            LivingBody::Mob(mob) => mob.id as i32,
-            LivingBody::Player(player) => player.id,
+            LivingBody::Mob(mob) => mob.id,
+            LivingBody::Player(player) => player.id as u32,
             LivingBody::Stand(_) | LivingBody::Dragon(_) => return None,
         };
-        (self.causing != 0 && id == self.causing).then_some(body)
+        (self.causing != 0 && id == self.causing as u32).then_some(body)
     }
     /// The level for a hook that lends no living views (`living_shield_block`,
     /// `living_use_totem`): no victim and no causing entity.
@@ -927,13 +860,13 @@ impl<'a> DamageLevel<'a> {
         }
     }
     /// Commit this accepted hit's responsibility at vanilla's pre-push memory point.
-    pub fn accepted_mob_hit(&mut self, mob: &mut crate::mobs::Mob, source: &crate::mobs::Damage) {
+    pub fn accepted_mob_hit(&mut self, mob: &mut crate::mobs::Mob, source: &Damage) {
         // The hit's own source, whatever the credit kind.
         let uuid = match (&self.credit, source.attacker) {
             _ if mob.species() != crate::mobs::Species::Villager => None,
             (Credit::Loan(credit), _) => credit.hurt_by_uuid(source),
-            (_, Some(crate::mobs::Who::Player)) => self.attack.player_uuid,
-            (_, Some(crate::mobs::Who::Mob(id))) if self.attack.attacker == id as i32 => {
+            (_, Some(Who::Player)) => self.attack.player_uuid,
+            (_, Some(Who::Mob(id))) if self.attack.attacker == id as i32 => {
                 self.attack.attacker_uuid
             }
             _ => None,
@@ -952,9 +885,9 @@ impl<'a> DamageLevel<'a> {
     pub fn resolve_player_responsible(
         &mut self,
         mob: &mut crate::mobs::Mob,
-        source: &crate::mobs::Damage,
+        source: &Damage,
     ) -> bool {
-        let by_player = source.attacker == Some(crate::mobs::Who::Player);
+        let by_player = source.attacker == Some(Who::Player);
         if by_player {
             mob.ai.last_hurt_by_player = 100;
         }
@@ -1165,7 +1098,7 @@ impl<'a> DamageLevel<'a> {
                         .effects
                         .as_ref()
                         .and_then(|effects| effects.lent.as_ref())
-                        .map(HitLend::id),
+                        .map(|lend| lend.id() as i32),
                     state: container.into_state(),
                 })
             });

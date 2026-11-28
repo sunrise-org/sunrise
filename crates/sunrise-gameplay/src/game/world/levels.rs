@@ -13,16 +13,17 @@ use super::entity_residency::{define_resident_access, resident_owners};
 use super::{
     Dim, ExperienceOrb, FallingBlock, ItemEntity, Mob,
     boats_common::Boat,
-    creaking::CreakingState,
+    creaking::CreakingLevelState,
     dragon_common,
     dragon_parts_table::DragonSlot,
     entity_memory::{EntityMemory, OffLevel},
     fireworks,
     lightning_common::Bolt,
     minecarts,
+    nether_portal::PortalLevelState,
     ominous_item_spawner_common::OminousItemSpawner,
-    raids::Raiding,
-    sculk_server::SculkState,
+    raids::RaidLevelState,
+    sculk_server::{SculkLevelState, SculkState},
     tnt_common::PrimedTnt,
 };
 use mod_api::DimensionKey;
@@ -35,13 +36,14 @@ use std::{
 use sunrise_game_data::Result;
 use sunrise_gameplay_common::game::GameGameExt3;
 use sunrise_gameplay_common::game::commands_common::{OtherEntity, Target};
+use sunrise_gameplay_common::game::end_state::EndLevelState;
 use sunrise_gameplay_common::game::entity::EntityLists;
 use sunrise_gameplay_common::game::residency_tick::ResidencyTickGameExt as _;
 use sunrise_gameplay_common::game::transactions::entities::EntityRemovalGameExt as _;
 use sunrise_gameplay_common::{hoppers::HopperState, leash_knot::Knot};
 use sunrise_level::spans::time as span;
 use sunrise_level::world::World;
-use sunrise_level::{block_entity_ticks::BlockEntityTicks, chunk_streamer::ChunkStreamer};
+use sunrise_level::{block_entity_ticks::BlockEntityLevelTicks, chunk_streamer::ChunkStreamer};
 use sunrise_sim::join_seq::{
     Joined,
     residency::{
@@ -161,19 +163,40 @@ fn should_run_idle_maintenance(paused: bool) -> bool {
     !paused
 }
 
+/// Per-level chunk ticket levels and random-tick section cache.
+#[derive(Default)]
+pub struct ChunkTickingLevelState {
+    pub tickets: ChunkTickets,
+    pub(in crate::game::server_side) random_tick_sections: RandomTickSections,
+}
+
+/// Per-level fence knot ids and broken fence positions.
+#[derive(Default)]
+pub struct KnotLevelState {
+    pub knot_ids: HashMap<[i32; 3], u32>,
+    pub broken_knots: Vec<[i32; 3]>,
+}
+
+/// Per-level queued LAN block, entity, and critical-hit events.
+#[derive(Default)]
+pub struct LanEventLevelState {
+    pub block_events: Vec<([i32; 3], i32, i32, u32)>,
+    pub entity_events: Vec<(i32, i8)>,
+    pub(in crate::game::server_side) critical_hits: Vec<(Option<u32>, i32, bool)>,
+}
+
 /// A level that is not in place: every per-level field of `Game`.
 pub struct Parked {
     pub world: World,
     pub streaming: ChunkStreamer,
-    locator: Option<Arc<VanillaTerrain>>,
+    end: EndLevelState,
     pub save: Arc<SaveDir>,
     block_ticks: Ticks,
     tick_chunks: TickChunkMembership,
-    tickets: ChunkTickets,
-    random_tick_sections: RandomTickSections,
+    chunk_ticking: ChunkTickingLevelState,
     level_events: Vec<LevelEvent>,
     /// Entity portal processes and cooldowns belong to this level's entities.
-    pub portal_states: HashMap<u32, sunrise_sim::nether_portal::PortalState>,
+    pub portal_states: PortalLevelState,
     falling: sunrise_sim::join_seq::JoinList<FallingBlock, false>,
     paintings: sunrise_sim::join_seq::JoinList<sunrise_sim::entities::Painting>,
     item_frames: sunrise_sim::join_seq::JoinList<sunrise_sim::entities::ItemFrame>,
@@ -194,9 +217,7 @@ pub struct Parked {
     general: super::general::GeneralStore,
     hoppers: HashMap<(i32, i32, i32), HopperState>,
     pub mobs: sunrise_sim::join_seq::JoinList<Mob>,
-    /// The entity ids of the level's fence knots (`knot_ids`).
-    knot_ids: HashMap<[i32; 3], u32>,
-    broken_knots: Vec<[i32; 3]>,
+    knot_state: KnotLevelState,
     knots: sunrise_sim::join_seq::JoinList<Knot>,
     projectiles: sunrise_sim::join_seq::JoinList<sunrise_sim::projectiles::Projectile, false>,
     dropped: sunrise_sim::join_seq::JoinList<ItemEntity>,
@@ -205,18 +226,16 @@ pub struct Parked {
     lectern_pulses: Vec<((i32, i32, i32), i32)>,
     lid_openers: HashMap<(i32, i32, i32), i32>,
     lan_events: Vec<super::QueuedLevelEvent>,
-    lan_block_events: Vec<([i32; 3], i32, i32, u32)>,
-    lan_entity_events: Vec<(i32, i8)>,
-    lan_critical_hits: Vec<(Option<u32>, i32, bool)>,
+    lan_queues: LanEventLevelState,
     /// The hub's tracked entities of this level (`LanHost::states`), as its last tick described
     /// them: what its players' moves are checked against before this tick describes them again.
     lan_states: sunrise_sim::lan::entity::States,
     /// Only the per-level parts of these are used (`swap_level`).
-    anims: BlockEntityTicks,
-    pub raiding: Raiding,
+    anims: BlockEntityLevelTicks,
+    pub raiding: RaidLevelState,
     chunk_spawn_enemies: bool,
-    sculk: SculkState,
-    creaking: CreakingState,
+    sculk: SculkLevelState,
+    creaking: CreakingLevelState,
     /// Natural spawning's candidate cache: each level keeps its own players' squares.
     spawn_scratch: super::natural_spawning::SpawnScratch,
     /// The level's own world border (`ServerLevel.getWorldBorder`).
@@ -612,6 +631,8 @@ pub struct Levels {
     pub parked: HashMap<Dim, Box<Parked>>,
     order: Vec<Dim>,
     tick_order: Vec<Dim>,
+    incarnations: Vec<LevelIncarnation>,
+    reset_generation: u64,
     pub(in crate::game) active_closed: bool,
     /// The levels a mod asked to have saved (`level_request_save`), each once, saved at the start
     /// of the next server tick.
@@ -623,7 +644,50 @@ pub struct Levels {
     travels: HashMap<u32, (u32, i64)>,
 }
 
+struct LevelIncarnation {
+    dim: Dim,
+    generation: u64,
+    open: bool,
+}
+
 impl Levels {
+    #[inline(always)]
+    pub(in crate::game) fn incarnation(&self, dim: Dim) -> Option<(u64, u64)> {
+        let generation = self
+            .incarnations
+            .iter()
+            .find(|level| level.dim == dim)
+            .map_or(Some(0), |level| level.open.then_some(level.generation))?;
+        Some((self.reset_generation, generation))
+    }
+
+    #[inline(always)]
+    pub(in crate::game) fn open_incarnation(&mut self, dim: Dim) {
+        if let Some(level) = self.incarnations.iter_mut().find(|level| level.dim == dim) {
+            level.generation += 1;
+            level.open = true;
+        } else {
+            self.incarnations.push(LevelIncarnation {
+                dim,
+                generation: 1,
+                open: true,
+            });
+        }
+    }
+
+    #[inline(always)]
+    fn close_incarnation(&mut self, dim: Dim) {
+        if let Some(level) = self.incarnations.iter_mut().find(|level| level.dim == dim) {
+            level.open = false;
+        } else {
+            self.incarnations.push(LevelIncarnation {
+                dim,
+                generation: 0,
+                open: false,
+            });
+        }
+    }
+
     pub(in crate::game) fn parked_target_visible(&self, dim: Dim, target: &Target) -> Option<bool> {
         let parked = self.parked.get(&dim)?;
         Some(
@@ -673,15 +737,21 @@ impl Levels {
     pub fn clear(&mut self) {
         self.parked.clear();
         self.order.clear();
+        self.reset_generation += 1;
+        self.incarnations.clear();
         self.tick_order.clear();
         self.active_closed = false;
         self.requested_saves.clear();
         self.runtime.clear();
     }
 
-    #[cfg(feature = "test-support")]
-    pub fn reset_active_closed_for_test(&mut self) {
+    #[cfg(any(test, feature = "test-support"))]
+    #[inline(always)]
+    pub fn reset_active_closed_for_test(&mut self, active: Dim) {
         self.active_closed = false;
+        if self.incarnation(active).is_none() {
+            self.open_incarnation(active);
+        }
     }
 
     pub(in crate::game::server_side) fn abort_parked_generation(&mut self) {
@@ -745,7 +815,7 @@ impl Levels {
         &self,
         dimension: &str,
     ) -> Option<Arc<VanillaTerrain>> {
-        self.parked_of(dimension)?.locator.clone()
+        self.parked_of(dimension)?.end.locator.clone()
     }
 
     /// The streaming of the level not in place whose dimension is `dimension`, to change.
@@ -794,7 +864,7 @@ impl Levels {
         )
     }
 
-    pub(in crate::game) fn parked_anims(&self, dim: Dim) -> Option<&BlockEntityTicks> {
+    pub(in crate::game) fn parked_anims(&self, dim: Dim) -> Option<&BlockEntityLevelTicks> {
         self.parked.get(&dim).map(|level| &level.anims)
     }
 
@@ -819,7 +889,7 @@ impl Levels {
     ) -> impl Iterator<Item = &Arc<VanillaTerrain>> {
         self.parked
             .values()
-            .filter_map(|level| level.locator.as_ref())
+            .filter_map(|level| level.end.locator.as_ref())
     }
 
     pub(in crate::game::server_side) fn parked_worlds(&self) -> impl Iterator<Item = &World> {
@@ -953,14 +1023,13 @@ fn box_parked(
     Box::new(Parked {
         world,
         streaming,
-        locator,
+        end: EndLevelState::new(locator),
         save,
         block_ticks: Ticks::new(seed as i32),
         tick_chunks: Default::default(),
-        tickets: Default::default(),
-        random_tick_sections: Default::default(),
+        chunk_ticking: Default::default(),
         level_events: Vec::new(),
-        portal_states: HashMap::new(),
+        portal_states: Default::default(),
         falling: Default::default(),
         paintings: Default::default(),
         item_frames: Default::default(),
@@ -982,8 +1051,7 @@ fn box_parked(
         hoppers: HashMap::new(),
         chunk_spawn_enemies: true,
         mobs: Default::default(),
-        knot_ids: HashMap::new(),
-        broken_knots: Vec::new(),
+        knot_state: Default::default(),
         knots: Default::default(),
         projectiles: Default::default(),
         dropped: Default::default(),
@@ -992,13 +1060,12 @@ fn box_parked(
         lectern_pulses: Vec::new(),
         lid_openers: HashMap::new(),
         lan_events: Vec::new(),
-        lan_block_events: Vec::new(),
-        lan_entity_events: Vec::new(),
-        lan_critical_hits: Vec::new(),
+        lan_queues: Default::default(),
         lan_states: Default::default(),
         anims: Default::default(),
         raiding: Default::default(),
-        sculk: Default::default(),
+        // Run SculkState's HashSet defaults in order so thread-local RandomState stays aligned.
+        sculk: SculkState::default().level,
         creaking: Default::default(),
         spawn_scratch: Default::default(),
         border,
@@ -1175,7 +1242,7 @@ impl crate::game::ServerGame<'_> {
             Self::load_saved_level_tickets(
                 &self.server.save.0,
                 &mut self.server.streaming,
-                &mut self.server.tickets.0,
+                &mut self.server.chunk_ticking.tickets,
             );
             self.validate_mod_chunk_tickets(dim);
         }
@@ -1208,7 +1275,11 @@ impl crate::game::ServerGame<'_> {
     /// tickets at once. Mod tickets still wait for validation after `level_load`.
     pub fn open_runtime_level(&self, dim: Dim) -> Result<Box<Parked>> {
         let mut level = self.open_level(dim)?;
-        Self::load_saved_level_tickets(&level.save, &mut level.streaming, &mut level.tickets);
+        Self::load_saved_level_tickets(
+            &level.save,
+            &mut level.streaming,
+            &mut level.chunk_ticking.tickets,
+        );
         Ok(level)
     }
 
@@ -1227,7 +1298,7 @@ impl crate::game::ServerGame<'_> {
         }
         loop {
             self.update_chunk_tickets();
-            let levels = self.server.tickets.0.levels();
+            let levels = self.server.chunk_ticking.tickets.levels();
             let streaming = &self.server.streaming;
             let ready = streaming
                 .forced
@@ -1262,20 +1333,14 @@ impl crate::game::ServerGame<'_> {
         // level: a level swap keeps it.
         self.common.world.carrier_data_existed_at_open = p.world.carrier_data_existed_at_open;
         swap(&mut self.server.streaming, &mut p.streaming);
-        let mut locator = self.common.end.locator();
-        swap(&mut locator, &mut p.locator);
-        self.common.end.set_locator(locator);
+        self.common.end.swap_level(&mut p.end);
         self.share_spawn_conditions();
         swap(&mut self.server.save.0, &mut p.save);
         swap(&mut self.common.block_ticks, &mut p.block_ticks);
         swap(&mut self.server.tick_chunks, &mut p.tick_chunks);
-        swap(&mut self.server.tickets.0, &mut p.tickets);
-        swap(
-            &mut self.server.random_tick_sections.0,
-            &mut p.random_tick_sections,
-        );
+        swap(&mut self.server.chunk_ticking, &mut p.chunk_ticking);
         swap(&mut self.common.level_events, &mut p.level_events);
-        swap(&mut self.server.portals.entities, &mut p.portal_states);
+        self.server.portals.swap_level(&mut p.portal_states);
         swap(&mut self.common.falling, &mut p.falling);
         swap(&mut self.common.paintings, &mut p.paintings);
         swap(&mut self.common.item_frames, &mut p.item_frames);
@@ -1295,8 +1360,7 @@ impl crate::game::ServerGame<'_> {
         swap(&mut self.common.tnts, &mut p.tnts);
         swap(&mut self.server.hoppers, &mut p.hoppers);
         swap(&mut self.common.mobs, &mut p.mobs);
-        swap(&mut self.server.knot_ids, &mut p.knot_ids);
-        swap(&mut self.server.broken_knots, &mut p.broken_knots);
+        swap(&mut self.server.knot_state, &mut p.knot_state);
         swap(&mut self.common.resident_entities.knots, &mut p.knots);
         swap(&mut self.common.resident_entities.general, &mut p.general);
         swap(&mut self.common.creatures.projectiles, &mut p.projectiles);
@@ -1306,9 +1370,7 @@ impl crate::game::ServerGame<'_> {
         swap(&mut self.server.lectern_pulses, &mut p.lectern_pulses);
         swap(&mut self.server.lid_openers, &mut p.lid_openers);
         swap(&mut self.server.lan_events, &mut p.lan_events);
-        swap(&mut self.server.lan_block_events, &mut p.lan_block_events);
-        swap(&mut self.server.lan_entity_events, &mut p.lan_entity_events);
-        swap(&mut self.server.lan_critical_hits, &mut p.lan_critical_hits);
+        swap(&mut self.server.lan_queues, &mut p.lan_queues);
         self.server.be_anims.swap_level(&mut p.anims);
         self.server.raiding.0.swap_level(&mut p.raiding);
         self.server.sculk.swap_level(&mut p.sculk);
@@ -1461,8 +1523,8 @@ impl crate::game::ServerGame<'_> {
             if id == root {
                 continue;
             }
-            if let Some(state) = p.portal_states.remove(&id) {
-                self.server.portals.entities.insert(id, state);
+            if let Some(state) = p.portal_states.entities.remove(&id) {
+                self.server.portals.level.entities.insert(id, state);
             }
             let mob = if let Some(index) = p.mobs.iter().position(|m| m.id == id) {
                 Some(p.mobs.remove_for_transfer(index))
@@ -2015,28 +2077,33 @@ impl crate::game::ServerGame<'_> {
             return true;
         }
         if dim == self.common.dim {
-            self.server.tickets.0.spawn_areas().next().is_some()
+            self.server
+                .chunk_ticking
+                .tickets
+                .spawn_areas()
+                .next()
+                .is_some()
         } else {
             self.server
                 .levels
                 .0
                 .parked
                 .get(&dim)
-                .is_some_and(|p| p.tickets.spawn_areas().next().is_some())
+                .is_some_and(|p| p.chunk_ticking.tickets.spawn_areas().next().is_some())
         }
     }
 
     /// The portal tickets of `dim`'s level (`placePortalTicket`, or saved).
     pub(in crate::game::server_side) fn portal_tickets_in(&self, dim: Dim) -> &[PortalTicket] {
         if dim == self.common.dim {
-            self.server.tickets.0.portal_tickets()
+            self.server.chunk_ticking.tickets.portal_tickets()
         } else {
             self.server
                 .levels
                 .0
                 .parked
                 .get(&dim)
-                .map_or(&[], |p| p.tickets.portal_tickets())
+                .map_or(&[], |p| p.chunk_ticking.tickets.portal_tickets())
         }
     }
 
@@ -2048,8 +2115,8 @@ impl crate::game::ServerGame<'_> {
     pub(in crate::game::server_side) fn portal_ticket_areas(&self) -> Vec<((i32, i32), i32)> {
         let block_ticking = i32::from(sunrise_sim::ticket_levels::BLOCK_TICKING);
         self.server
+            .chunk_ticking
             .tickets
-            .0
             .portal_tickets()
             .iter()
             .map(|t| (t.chunk, (block_ticking - t.level).max(1)))
@@ -2201,7 +2268,9 @@ impl crate::game::ServerGame<'_> {
             parked.bind_resident_owners(&journal, dim.key(), true);
         }
         self.bind_dimension_attachments(dim);
-        self.server.levels.0.order.push(dim);
+        let levels = &mut self.server.levels.0;
+        levels.order.push(dim);
+        levels.open_incarnation(dim);
         self.init_custom_spawners(dim);
         self.native_level_load(dim.id());
     }
@@ -2221,6 +2290,7 @@ impl crate::game::ServerGame<'_> {
             self.native_level_unload(dim.id());
             self.server.levels.0.order.remove(index);
         }
+        self.server.levels.0.close_incarnation(dim);
         if dim == self.common.dim {
             self.common.world.water_tickets.clear();
         } else if let Some(world) = self.server.levels.0.parked_world_mut_of(dim.id()) {
@@ -2783,5 +2853,982 @@ mod tests {
         // `/tick freeze`, where `paused == false`) still run it.
         assert!(!should_run_idle_maintenance(true));
         assert!(should_run_idle_maintenance(false));
+    }
+
+    fn make_flat_terrain(game: &crate::game::ServerGame<'_>, seed: i64) -> Arc<VanillaTerrain> {
+        let directory = game.common.options.resources.join("worldgen");
+        Arc::new(
+            VanillaTerrain::for_flat(
+                sunrise_sim::vanillagen::TerrainResources {
+                    data: Some(&game.common.pack.data_changes),
+                    dir: &directory,
+                    registry: game.common.pack.assets.registry,
+                    biomes: sunrise_gameplay_common::world_biomes!(game),
+                    item_data: &game.common.res.core.item_data,
+                },
+                &Default::default(),
+                seed,
+                &sunrise_world::worldgen::generator::FlatSettings {
+                    layers: vec![
+                        ("minecraft:bedrock".into(), 1),
+                        ("minecraft:dirt".into(), 2),
+                        ("minecraft:grass_block".into(), 1),
+                    ],
+                    biome: "minecraft:plains".into(),
+                    structure_overrides: Some(Vec::new()),
+                    features: false,
+                    lakes: false,
+                },
+                false,
+            )
+            .expect("flat terrain"),
+        )
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn end_state_swap_level_exchanges_real_locators_and_keeps_siblings() {
+        use crate::game::native_entity_refs::tests::{run_fresh_cases, with_game};
+        use sunrise_core::{geometry::Vec3, position::BlockPos};
+        use sunrise_gameplay_common::game::end_state::{
+            Arriving, EndFlash, EndLevelState, EndState, EyeOfEnder, GatewayArrival, GatewayJob,
+        };
+
+        if run_fresh_cases(
+            "game::server_side::levels::tests::end_state_swap_level_exchanges_real_locators_and_keeps_siblings",
+            "SUNRISE_END_STATE_SWAP_CHILD",
+            &["swap"],
+        ) {
+            return;
+        }
+        with_game(|game| {
+            let terrain_a = make_flat_terrain(game, 12345);
+            let terrain_b = make_flat_terrain(game, 67890);
+
+            let mut traveller = sunrise_sim::end_gateway::Traveller::default();
+            traveller.enter_with_delay(BlockPos::new(2, 64, 3), 23);
+            let mut flash = EndFlash::default();
+            flash.tick(150);
+            flash.x_angle = 10.0;
+            flash.y_angle = 20.0;
+            let expected_intensity = flash.intensity(0.5);
+            let expected_pose = flash.pose();
+
+            let mut state = EndState {
+                gateway_cooldown: 17,
+                gateways: [(9, traveller)].into_iter().collect(),
+                arrivals: vec![GatewayArrival {
+                    traveller: Arriving::Live(77),
+                    job: GatewayJob::Known {
+                        exit: [1, 2, 3],
+                        exact: true,
+                    },
+                    target: Vec3::new(4.0, 5.0, 6.0),
+                }],
+                areas: vec![(3, 4)],
+                tickets: vec![((5, 6), 99)],
+                locator: std::sync::Mutex::new(Some(terrain_a.clone())),
+                eyes: vec![EyeOfEnder {
+                    id: 55,
+                    position: glam::DVec3::new(1.0, 2.0, 3.0),
+                    previous: glam::DVec3::new(0.5, 1.5, 2.5),
+                    velocity: glam::DVec3::new(0.1, 0.2, 0.3),
+                    target: glam::DVec3::new(10.0, 20.0, 30.0),
+                    life: 12,
+                    survive: true,
+                }],
+                flash,
+            };
+            let mut parked = EndLevelState::new(Some(terrain_b.clone()));
+
+            let check_siblings = |s: &EndState| {
+                assert_eq!(s.gateway_cooldown, 17);
+                assert_eq!(s.gateways.len(), 1);
+                let mut copy = s.gateways[&9];
+                assert_eq!(copy.cooldown(), 0);
+                assert!(!copy.is_done());
+                assert_eq!(
+                    copy.travel_with_delay(true, 23),
+                    Some(BlockPos::new(2, 64, 3))
+                );
+                assert_eq!(copy.cooldown(), 23);
+                assert_eq!(s.arrivals.len(), 1);
+                assert!(matches!(s.arrivals[0].traveller, Arriving::Live(77)));
+                assert_eq!(
+                    s.arrivals[0].job,
+                    GatewayJob::Known {
+                        exit: [1, 2, 3],
+                        exact: true,
+                    }
+                );
+                assert_eq!(s.arrivals[0].target, Vec3::new(4.0, 5.0, 6.0));
+                assert_eq!(s.areas, vec![(3, 4)]);
+                assert_eq!(s.tickets, vec![((5, 6), 99)]);
+                assert_eq!(s.eyes.len(), 1);
+                let eye = &s.eyes[0];
+                assert_eq!(eye.id, 55);
+                assert_eq!(eye.position, glam::DVec3::new(1.0, 2.0, 3.0));
+                assert_eq!(eye.previous, glam::DVec3::new(0.5, 1.5, 2.5));
+                assert_eq!(eye.velocity, glam::DVec3::new(0.1, 0.2, 0.3));
+                assert_eq!(eye.target, glam::DVec3::new(10.0, 20.0, 30.0));
+                assert_eq!(eye.life, 12);
+                assert!(eye.survive);
+                assert_eq!(s.flash.x_angle, 10.0);
+                assert_eq!(s.flash.y_angle, 20.0);
+                assert_eq!(s.flash.intensity(0.5), expected_intensity);
+                assert_eq!(s.flash.pose(), expected_pose);
+            };
+
+            state.swap_level(&mut parked);
+            check_siblings(&state);
+            assert!(Arc::ptr_eq(&state.locator().unwrap(), &terrain_b));
+            assert!(Arc::ptr_eq(parked.locator.as_ref().unwrap(), &terrain_a));
+
+            state.swap_level(&mut parked);
+            check_siblings(&state);
+            assert!(Arc::ptr_eq(&state.locator().unwrap(), &terrain_a));
+            assert!(Arc::ptr_eq(parked.locator.as_ref().unwrap(), &terrain_b));
+
+            let mut empty = EndLevelState::new(None);
+            state.swap_level(&mut empty);
+            check_siblings(&state);
+            assert!(state.locator().is_none());
+            assert!(Arc::ptr_eq(empty.locator.as_ref().unwrap(), &terrain_a));
+
+            state.swap_level(&mut empty);
+            check_siblings(&state);
+            assert!(Arc::ptr_eq(&state.locator().unwrap(), &terrain_a));
+            assert!(empty.locator.is_none());
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn production_level_swap_exchanges_all_six_subsystems_and_keeps_siblings() {
+        use crate::game::native_entity_refs::tests::{run_fresh_cases, with_game};
+        use std::rc::Rc;
+        use sunrise_core::{geometry::Vec3, position::BlockPos};
+        use sunrise_gameplay_common::game::end_state::{
+            Arriving, EndFlash, EndLevelState, EyeOfEnder, GatewayArrival, GatewayJob,
+        };
+        use sunrise_level::{
+            block_entity_ticks::{Bell, ConduitServer, EndGateway, Ticker},
+            chunk::Chunk,
+            sculk::WardenSpawnTracker,
+            shulker_box::{Shulker, ShulkerStatus},
+        };
+        use sunrise_sim::{
+            mobs::Who,
+            nether_portal::{PortalState, Process},
+            patrol::PatrolSpawner,
+            raid::Raids,
+            save::LevelShape,
+            ticket_levels::SpawnTicketKind,
+        };
+        use sunrise_world::registry::BlockStateId;
+
+        if run_fresh_cases(
+            "game::server_side::levels::tests::production_level_swap_exchanges_all_six_subsystems_and_keeps_siblings",
+            "SUNRISE_LEVEL_SWAP_CHILD",
+            &["swap"],
+        ) {
+            return;
+        }
+        mod_platform::testing::with_mods(Vec::new().into(), || {
+            with_game(|game| {
+                let root = tempfile::tempdir().unwrap();
+                game.server.world_root = root.path().to_path_buf();
+                game.server.save.0 = Arc::new(SaveDir::new(
+                    game.server.world_root.clone(),
+                    LevelShape::OVERWORLD,
+                    Some(Default::default()),
+                ));
+
+                // Populate Overworld level bundles before lazy-opening Nether so we also
+                // verify a lazily opened level starts with the default empty bundle state.
+                let grass = game
+                    .common
+                    .pack
+                    .assets
+                    .registry
+                    .default_state("minecraft:grass_block")
+                    .unwrap()
+                    .0;
+                let mut chunk_ow = Chunk::with_layout(-7, -8, game.common.world.layout());
+                chunk_ow.set(0, 64, 0, grass);
+                let chunk_ow = Arc::new(chunk_ow);
+                let facts = game.common.res.facts();
+                let behaviours = game.common.res.behaviours();
+                game.server.chunk_ticking.tickets.add_portal((-2, -3));
+                game.server
+                    .chunk_ticking
+                    .tickets
+                    .add_spawn((-4, -5), SpawnTicketKind::Player);
+                let (_, mask_ow) = game
+                    .server
+                    .chunk_ticking
+                    .random_tick_sections
+                    .next_masked(
+                        (-7, -8),
+                        &chunk_ow,
+                        facts,
+                        |id| behaviours.random_tick_candidate(BlockStateId(id)),
+                        0,
+                    )
+                    .unwrap();
+                game.server.knot_state.knot_ids = [([-1, 70, -2], 402)].into_iter().collect();
+                game.server.knot_state.broken_knots = vec![[-3, 71, -4]];
+                let ow_broken_ptr = game.server.knot_state.broken_knots.as_ptr();
+                game.server.lan_queues.block_events = vec![([-5, 72, -6], 4, 5, 6)];
+                let ow_block_events_ptr = game.server.lan_queues.block_events.as_ptr();
+                game.server.lan_queues.entity_events = vec![(602, 7)];
+                let ow_entity_events_ptr = game.server.lan_queues.entity_events.as_ptr();
+                game.server.lan_queues.critical_hits = vec![(None, 602, false)];
+                let ow_crit_ptr = game.server.lan_queues.critical_hits.as_ptr();
+
+                // Lazy-open Nether from Overworld and verify locator parking, raid load,
+                // and default bundle state on the newly opened level.
+                let terrain_ow = make_flat_terrain(game, 11111);
+                let terrain_nether = make_flat_terrain(game, 22222);
+                game.common.end.set_locator(Some(terrain_ow.clone()));
+                game.enter_level(Dim::Nether).unwrap();
+                assert_eq!(game.dim, Dim::Nether);
+                assert_eq!(game.server.raiding.0.level.loaded, Some(Dim::Nether));
+                assert!(game.server.levels.0.order.contains(&Dim::Nether));
+                assert!(
+                    game.server
+                        .chunk_ticking
+                        .tickets
+                        .portal_tickets()
+                        .is_empty()
+                );
+                assert!(
+                    game.server
+                        .chunk_ticking
+                        .tickets
+                        .spawn_areas()
+                        .next()
+                        .is_none()
+                );
+                assert!(
+                    game.server
+                        .chunk_ticking
+                        .tickets
+                        .levels()
+                        .random_tick_bounds()
+                        .is_none()
+                );
+                let (_, fresh_nether_mask) = game
+                    .server
+                    .chunk_ticking
+                    .random_tick_sections
+                    .next_masked(
+                        (-7, -8),
+                        &chunk_ow,
+                        game.common.res.facts(),
+                        |id| {
+                            game.common
+                                .res
+                                .behaviours()
+                                .random_tick_candidate(BlockStateId(id))
+                        },
+                        0,
+                    )
+                    .unwrap();
+                assert!(!Rc::ptr_eq(&fresh_nether_mask, &mask_ow));
+                game.server
+                    .chunk_ticking
+                    .random_tick_sections
+                    .remove(&(-7, -8));
+                assert!(game.server.knot_state.knot_ids.is_empty());
+                assert!(game.server.knot_state.broken_knots.is_empty());
+                assert!(game.server.lan_queues.block_events.is_empty());
+                assert!(game.server.lan_queues.entity_events.is_empty());
+                assert!(game.server.lan_queues.critical_hits.is_empty());
+                assert!(Arc::ptr_eq(
+                    &game
+                        .server
+                        .levels
+                        .0
+                        .parked_locator_of(Dim::Overworld.id())
+                        .unwrap(),
+                    &terrain_ow
+                ));
+
+                // Populate active (Nether) level bundles with distinct payloads.
+                let mut chunk_n = Chunk::with_layout(3, 4, game.common.world.layout());
+                chunk_n.set(0, 64, 0, grass);
+                let chunk_n = Arc::new(chunk_n);
+                game.server.chunk_ticking.tickets.add_portal((6, 7));
+                game.server
+                    .chunk_ticking
+                    .tickets
+                    .add_spawn((8, 9), SpawnTicketKind::Search);
+                let (_, mask_n) = game
+                    .server
+                    .chunk_ticking
+                    .random_tick_sections
+                    .next_masked(
+                        (3, 4),
+                        &chunk_n,
+                        game.common.res.facts(),
+                        |id| {
+                            game.common
+                                .res
+                                .behaviours()
+                                .random_tick_candidate(BlockStateId(id))
+                        },
+                        0,
+                    )
+                    .unwrap();
+                game.server.knot_state.knot_ids = [([1, 64, 2], 301)].into_iter().collect();
+                game.server.knot_state.broken_knots = vec![[3, 65, 4]];
+                let n_broken_ptr = game.server.knot_state.broken_knots.as_ptr();
+                game.server.lan_queues.block_events = vec![([5, 66, 6], 1, 2, 3)];
+                let n_block_events_ptr = game.server.lan_queues.block_events.as_ptr();
+                game.server.lan_queues.entity_events = vec![(501, 2)];
+                let n_entity_events_ptr = game.server.lan_queues.entity_events.as_ptr();
+                game.server.lan_queues.critical_hits = vec![(Some(9), 501, true)];
+                let n_crit_ptr = game.server.lan_queues.critical_hits.as_ptr();
+
+                // Populate active (Nether) per-level fields and unswapped siblings.
+                game.server.creaking.level.scanned = [(10, 11)].into_iter().collect();
+                game.server.creaking.level.unscanned = [(12, 13)].into_iter().collect();
+                game.server.creaking.level.revision = Some(101);
+                game.server.creaking.hearts = vec![false, true, true];
+
+                game.common.end.set_locator(Some(terrain_nether.clone()));
+                let mut traveller = sunrise_sim::end_gateway::Traveller::default();
+                traveller.enter_with_delay(BlockPos::new(2, 64, 3), 23);
+                game.common.end.gateway_cooldown = 19;
+                game.common.end.gateways = [(9, traveller)].into_iter().collect();
+                game.common.end.areas = vec![(7, 8)];
+                game.common.end.tickets = vec![((9, 10), 40)];
+                game.common.end.arrivals = vec![GatewayArrival {
+                    traveller: Arriving::Live(77),
+                    job: GatewayJob::Known {
+                        exit: [1, 2, 3],
+                        exact: true,
+                    },
+                    target: Vec3::new(4.0, 5.0, 6.0),
+                }];
+                game.common.end.eyes = vec![EyeOfEnder {
+                    id: 55,
+                    position: glam::DVec3::new(1.0, 2.0, 3.0),
+                    previous: glam::DVec3::new(0.5, 1.5, 2.5),
+                    velocity: glam::DVec3::new(0.1, 0.2, 0.3),
+                    target: glam::DVec3::new(10.0, 20.0, 30.0),
+                    life: 12,
+                    survive: true,
+                }];
+                let mut flash = EndFlash::default();
+                flash.tick(150);
+                flash.x_angle = 11.0;
+                flash.y_angle = 22.0;
+                let expected_flash_intensity = flash.intensity(0.5);
+                game.common.end.flash = flash;
+
+                game.server.portals.level.entities = [(
+                    101,
+                    PortalState {
+                        cooldown: 250,
+                        process: Some(Process {
+                            entry: BlockPos::new(1, 64, 2),
+                            time: 4,
+                            inside: true,
+                        }),
+                    },
+                )]
+                .into_iter()
+                .collect();
+                game.server.portals.before = [(11, Vec3::new(1.0, 2.0, 3.0))].into_iter().collect();
+                game.server.portals.carrying = vec![(Dim::Nether, 12, BlockPos::new(3, 65, 4))];
+                game.server.portals.carried_motion =
+                    [(12, Vec3::new(0.1, 0.2, 0.3))].into_iter().collect();
+                game.server.portals.carried_cooldown = [(12, 7)].into_iter().collect();
+                game.server.portals.carried_at =
+                    [(12, Vec3::new(3.5, 65.0, 4.5))].into_iter().collect();
+                game.server.portals.loaded = true;
+                game.server.portals.dirty = true;
+
+                let shulker_n = Shulker {
+                    open_count: 3,
+                    status: ShulkerStatus::Opening,
+                    progress: 0.5,
+                    progress_old: 0.25,
+                };
+                let bell_n = Bell {
+                    ticks: 12,
+                    shaking: true,
+                    click_direction: Some(2),
+                    last_ring_timestamp: 90,
+                    nearby: Some(vec![7]),
+                    resonating: true,
+                    resonation_ticks: 3,
+                };
+                let gateway_n = EndGateway {
+                    age: 300,
+                    teleport_cooldown: 20,
+                };
+                let mut conduit_n = ConduitServer::default();
+                conduit_n.target = Some(77);
+                game.server.be_anims.level.shulkers =
+                    [([1, 2, 3], shulker_n.clone())].into_iter().collect();
+                game.server.be_anims.level.bells =
+                    [([4, 5, 6], bell_n.clone())].into_iter().collect();
+                game.server.be_anims.level.gateway_servers =
+                    [([7, 8, 9], gateway_n)].into_iter().collect();
+                game.server.be_anims.level.conduit_servers =
+                    [([10, 11, 12], conduit_n)].into_iter().collect();
+                let expected_kinds = vec![None, Some(Ticker::Bell), Some(Ticker::Conduit)];
+                game.server.be_anims.kinds = expected_kinds.clone();
+
+                let mut raids_n = Raids::default();
+                let (id_n, _) = raids_n.create_or_extend([10, 64, 20], 2, Some(1), 11);
+                raids_n.tick = 111;
+                let nbt_n = raids_n.to_nbt();
+                game.server.raiding.0.level.raids = raids_n;
+                game.server.raiding.0.level.loaded = Some(Dim::Nether);
+                game.server.raiding.0.level.unseeded = Some(vec![(id_n, 1)]);
+                game.server.raiding.0.level.bar_hurts = [(id_n, 44)].into_iter().collect();
+                game.server.raiding.0.level.homes = [(id_n, (111, Arc::new(vec![[1, 64, 2]])))]
+                    .into_iter()
+                    .collect();
+                game.server.raiding.0.patrol = PatrolSpawner { next_tick: 777 };
+                game.server.raiding.0.siege.tonight = true;
+                game.server.raiding.0.siege.zombies_to_spawn = 9;
+                game.server.raiding.0.omen_position = Some([5, 65, 6]);
+                game.server.raiding.0.omen_loaded = true;
+
+                game.server.sculk.level.index = Default::default();
+                game.server.sculk.level.index.insert((2, 64, 3));
+                game.server.sculk.level.known = [(2, 3)].into_iter().collect();
+                game.server.sculk.tracker = WardenSpawnTracker {
+                    ticks_since_last_warning: 120,
+                    warning_level: 2,
+                    cooldown_ticks: 45,
+                };
+                game.server.sculk.tables.built = true;
+                game.server.sculk.known_revision = Some(99);
+                game.server.sculk.falling_items = [101].into_iter().collect();
+                game.server.sculk.damaged = [(14, 500)].into_iter().collect();
+                game.server.sculk.last_health = Some(18.5);
+                game.server.sculk.actor = Some(Who::Player);
+                game.server.sculk.ticks = 77;
+                game.server.sculk.tracker_loaded = true;
+                game.server.sculk.listeners = vec![3, 5];
+
+                // Populate parked (Overworld) per-level bundles.
+                let shulker_ow = Shulker {
+                    open_count: 1,
+                    status: ShulkerStatus::Opened,
+                    progress: 1.0,
+                    progress_old: 1.0,
+                };
+                let bell_ow = Bell {
+                    ticks: 5,
+                    shaking: false,
+                    click_direction: None,
+                    last_ring_timestamp: 200,
+                    nearby: None,
+                    resonating: false,
+                    resonation_ticks: 0,
+                };
+                let gateway_ow = EndGateway {
+                    age: 40,
+                    teleport_cooldown: 8,
+                };
+                let mut conduit_ow = ConduitServer::default();
+                conduit_ow.target = Some(88);
+                let mut raids_ow = Raids::default();
+                raids_ow.next_id = 5;
+                let (id_ow, _) = raids_ow.create_or_extend([-30, 70, 40], 3, Some(2), 22);
+                raids_ow.tick = 222;
+                let nbt_ow = raids_ow.to_nbt();
+                {
+                    let parked = game.server.levels.0.parked_mut(Dim::Overworld).unwrap();
+                    parked.creaking.scanned = [(-1, -2)].into_iter().collect();
+                    parked.creaking.unscanned = [(-3, -4)].into_iter().collect();
+                    parked.creaking.revision = Some(202);
+                    parked.end = EndLevelState::new(Some(terrain_ow.clone()));
+                    parked.portal_states.entities = [(
+                        202,
+                        PortalState {
+                            cooldown: 33,
+                            process: None,
+                        },
+                    )]
+                    .into_iter()
+                    .collect();
+                    parked.anims.shulkers =
+                        [([-1, -2, -3], shulker_ow.clone())].into_iter().collect();
+                    parked.anims.bells = [([-4, -5, -6], bell_ow.clone())].into_iter().collect();
+                    parked.anims.gateway_servers =
+                        [([-7, -8, -9], gateway_ow)].into_iter().collect();
+                    parked.anims.conduit_servers =
+                        [([-10, -11, -12], conduit_ow)].into_iter().collect();
+                    parked.raiding.raids = raids_ow;
+                    parked.raiding.loaded = Some(Dim::Overworld);
+                    parked.raiding.unseeded = Some(vec![(id_ow, 2)]);
+                    parked.raiding.bar_hurts = [(id_ow, 66)].into_iter().collect();
+                    parked.raiding.homes = [(id_ow, (222, Arc::new(vec![[-5, 64, -6]])))]
+                        .into_iter()
+                        .collect();
+                    parked.sculk.index = Default::default();
+                    parked.sculk.index.insert((-4, 70, -5));
+                    parked.sculk.known = [(-4, -5)].into_iter().collect();
+                }
+
+                let check_siblings = |g: &crate::game::ServerGame<'_>| {
+                    assert_eq!(g.server.creaking.hearts, vec![false, true, true]);
+                    assert_eq!(g.common.end.gateway_cooldown, 19);
+                    assert_eq!(g.common.end.gateways.len(), 1);
+                    let mut gw = g.common.end.gateways[&9];
+                    assert_eq!(
+                        gw.travel_with_delay(true, 23),
+                        Some(BlockPos::new(2, 64, 3))
+                    );
+                    assert_eq!(g.common.end.areas, vec![(7, 8)]);
+                    assert_eq!(g.common.end.tickets, vec![((9, 10), 40)]);
+                    assert_eq!(g.common.end.arrivals.len(), 1);
+                    assert_eq!(g.common.end.eyes.len(), 1);
+                    assert_eq!(g.common.end.eyes[0].id, 55);
+                    assert_eq!(g.common.end.flash.x_angle, 11.0);
+                    assert_eq!(g.common.end.flash.y_angle, 22.0);
+                    assert_eq!(g.common.end.flash.intensity(0.5), expected_flash_intensity);
+                    assert_eq!(g.server.portals.before.len(), 1);
+                    assert_eq!(
+                        g.server.portals.before.get(&11),
+                        Some(&Vec3::new(1.0, 2.0, 3.0))
+                    );
+                    assert_eq!(
+                        g.server.portals.carrying,
+                        vec![(Dim::Nether, 12, BlockPos::new(3, 65, 4))]
+                    );
+                    assert_eq!(
+                        g.server.portals.carried_motion.get(&12),
+                        Some(&Vec3::new(0.1, 0.2, 0.3))
+                    );
+                    assert_eq!(g.server.portals.carried_cooldown.get(&12), Some(&7));
+                    assert_eq!(
+                        g.server.portals.carried_at.get(&12),
+                        Some(&Vec3::new(3.5, 65.0, 4.5))
+                    );
+                    assert!(g.server.portals.loaded && g.server.portals.dirty);
+                    assert_eq!(g.server.be_anims.kinds, expected_kinds);
+                    assert_eq!(g.server.raiding.0.patrol.next_tick, 777);
+                    assert!(g.server.raiding.0.siege.tonight);
+                    assert_eq!(g.server.raiding.0.siege.zombies_to_spawn, 9);
+                    assert_eq!(g.server.raiding.0.omen_position, Some([5, 65, 6]));
+                    assert!(g.server.raiding.0.omen_loaded);
+                    assert_eq!(g.server.sculk.tracker.warning_level, 2);
+                    assert!(g.server.sculk.tables.built);
+                    assert_eq!(g.server.sculk.known_revision, Some(99));
+                    assert!(g.server.sculk.falling_items.contains(&101));
+                    assert_eq!(g.server.sculk.damaged.get(&14), Some(&500));
+                    assert_eq!(g.server.sculk.last_health, Some(18.5));
+                    assert_eq!(g.server.sculk.actor, Some(Who::Player));
+                    assert_eq!(g.server.sculk.ticks, 77);
+                    assert!(g.server.sculk.tracker_loaded);
+                    assert_eq!(g.server.sculk.listeners, vec![3, 5]);
+                };
+
+                // First transition: Nether -> Overworld through production enter_level / swap_level.
+                game.enter_level(Dim::Overworld).unwrap();
+                assert_eq!(game.dim, Dim::Overworld);
+                check_siblings(game);
+
+                assert_eq!(game.server.creaking.level.scanned.len(), 1);
+                assert!(game.server.creaking.level.scanned.contains(&(-1, -2)));
+                assert_eq!(game.server.creaking.level.unscanned.len(), 1);
+                assert!(game.server.creaking.level.unscanned.contains(&(-3, -4)));
+                assert_eq!(game.server.creaking.level.revision, Some(202));
+                assert!(Arc::ptr_eq(
+                    &game.common.end.locator().unwrap(),
+                    &terrain_ow
+                ));
+                assert_eq!(game.server.portals.level.entities.len(), 1);
+                assert_eq!(game.server.portals.level.entities[&202].cooldown, 33);
+                assert!(game.server.portals.level.entities[&202].process.is_none());
+                assert_eq!(game.server.be_anims.level.shulkers.len(), 1);
+                assert_eq!(
+                    game.server.be_anims.level.shulkers[&[-1, -2, -3]],
+                    shulker_ow
+                );
+                assert_eq!(game.server.be_anims.level.bells.len(), 1);
+                assert_eq!(game.server.be_anims.level.bells[&[-4, -5, -6]], bell_ow);
+                assert_eq!(game.server.be_anims.level.gateway_servers.len(), 1);
+                assert_eq!(
+                    game.server.be_anims.level.gateway_servers[&[-7, -8, -9]],
+                    gateway_ow
+                );
+                assert_eq!(game.server.be_anims.level.conduit_servers.len(), 1);
+                assert_eq!(
+                    game.server.be_anims.level.conduit_servers[&[-10, -11, -12]].target,
+                    Some(88)
+                );
+                assert_eq!(game.server.raiding.0.level.raids.to_nbt(), nbt_ow);
+                assert_eq!(game.server.raiding.0.level.loaded, Some(Dim::Overworld));
+                assert_eq!(
+                    game.server.raiding.0.level.unseeded.as_deref(),
+                    Some(&[(id_ow, 2)][..])
+                );
+                assert_eq!(game.server.raiding.0.level.bar_hurts.len(), 1);
+                assert_eq!(game.server.raiding.0.level.bar_hurts.get(&id_ow), Some(&66));
+                assert_eq!(game.server.raiding.0.level.homes.len(), 1);
+                assert_eq!(game.server.raiding.0.level.homes[&id_ow].0, 222);
+                assert_eq!(
+                    game.server.raiding.0.level.homes[&id_ow].1.as_slice(),
+                    &[[-5, 64, -6]]
+                );
+                assert_eq!(game.server.sculk.level.index.order, vec![(-4, 70, -5)]);
+                assert_eq!(game.server.sculk.level.known.len(), 1);
+                assert!(game.server.sculk.level.known.contains(&(-4, -5)));
+                assert_eq!(
+                    game.server
+                        .chunk_ticking
+                        .tickets
+                        .portal_tickets()
+                        .iter()
+                        .map(|t| t.chunk)
+                        .collect::<Vec<_>>(),
+                    vec![(-2, -3)]
+                );
+                assert_eq!(
+                    game.server
+                        .chunk_ticking
+                        .tickets
+                        .spawn_areas()
+                        .map(|(c, _)| c)
+                        .collect::<Vec<_>>(),
+                    vec![(-4, -5)]
+                );
+                let (_, ow_after_first) = game
+                    .server
+                    .chunk_ticking
+                    .random_tick_sections
+                    .next_masked(
+                        (-7, -8),
+                        &chunk_ow,
+                        game.common.res.facts(),
+                        |id| {
+                            game.common
+                                .res
+                                .behaviours()
+                                .random_tick_candidate(BlockStateId(id))
+                        },
+                        0,
+                    )
+                    .unwrap();
+                assert!(Rc::ptr_eq(&ow_after_first, &mask_ow));
+                assert_eq!(
+                    game.server.knot_state.knot_ids.get(&[-1, 70, -2]),
+                    Some(&402)
+                );
+                assert_eq!(game.server.knot_state.knot_ids.len(), 1);
+                assert_eq!(game.server.knot_state.broken_knots, vec![[-3, 71, -4]]);
+                assert_eq!(game.server.knot_state.broken_knots.as_ptr(), ow_broken_ptr);
+                assert_eq!(
+                    game.server.lan_queues.block_events,
+                    vec![([-5, 72, -6], 4, 5, 6)]
+                );
+                assert_eq!(
+                    game.server.lan_queues.block_events.as_ptr(),
+                    ow_block_events_ptr
+                );
+                assert_eq!(game.server.lan_queues.entity_events, vec![(602, 7)]);
+                assert_eq!(
+                    game.server.lan_queues.entity_events.as_ptr(),
+                    ow_entity_events_ptr
+                );
+                assert_eq!(
+                    game.server.lan_queues.critical_hits,
+                    vec![(None, 602, false)]
+                );
+                assert_eq!(game.server.lan_queues.critical_hits.as_ptr(), ow_crit_ptr);
+
+                {
+                    let parked_n = game.server.levels.0.parked.get(&Dim::Nether).unwrap();
+                    assert_eq!(parked_n.creaking.scanned.len(), 1);
+                    assert!(parked_n.creaking.scanned.contains(&(10, 11)));
+                    assert_eq!(parked_n.creaking.unscanned.len(), 1);
+                    assert!(parked_n.creaking.unscanned.contains(&(12, 13)));
+                    assert_eq!(parked_n.creaking.revision, Some(101));
+                    assert!(Arc::ptr_eq(
+                        parked_n.end.locator.as_ref().unwrap(),
+                        &terrain_nether
+                    ));
+                    assert!(
+                        game.server
+                            .levels
+                            .0
+                            .parked_terrains()
+                            .any(|t| Arc::ptr_eq(t, &terrain_nether))
+                    );
+                    assert_eq!(parked_n.portal_states.entities.len(), 1);
+                    let ps_n = &parked_n.portal_states.entities[&101];
+                    assert_eq!(ps_n.cooldown, 250);
+                    assert_eq!(
+                        ps_n.process.as_ref().map(|p| p.entry),
+                        Some(BlockPos::new(1, 64, 2))
+                    );
+                    assert_eq!(parked_n.anims.shulkers.len(), 1);
+                    assert_eq!(parked_n.anims.shulkers[&[1, 2, 3]], shulker_n);
+                    assert_eq!(parked_n.anims.bells.len(), 1);
+                    assert_eq!(parked_n.anims.bells[&[4, 5, 6]], bell_n);
+                    assert_eq!(parked_n.anims.gateway_servers.len(), 1);
+                    assert_eq!(parked_n.anims.gateway_servers[&[7, 8, 9]], gateway_n);
+                    assert_eq!(parked_n.anims.conduit_servers.len(), 1);
+                    assert_eq!(
+                        parked_n.anims.conduit_servers[&[10, 11, 12]].target,
+                        Some(77)
+                    );
+                    assert_eq!(parked_n.raiding.raids.to_nbt(), nbt_n);
+                    assert_eq!(parked_n.raiding.loaded, Some(Dim::Nether));
+                    assert_eq!(parked_n.raiding.unseeded.as_deref(), Some(&[(id_n, 1)][..]));
+                    assert_eq!(parked_n.raiding.bar_hurts.len(), 1);
+                    assert_eq!(parked_n.raiding.bar_hurts.get(&id_n), Some(&44));
+                    assert_eq!(parked_n.raiding.homes.len(), 1);
+                    assert_eq!(parked_n.raiding.homes[&id_n].0, 111);
+                    assert_eq!(parked_n.raiding.homes[&id_n].1.as_slice(), &[[1, 64, 2]]);
+                    assert_eq!(parked_n.sculk.index.order, vec![(2, 64, 3)]);
+                    assert_eq!(parked_n.sculk.known.len(), 1);
+                    assert!(parked_n.sculk.known.contains(&(2, 3)));
+                    assert_eq!(
+                        parked_n
+                            .chunk_ticking
+                            .tickets
+                            .portal_tickets()
+                            .iter()
+                            .map(|t| t.chunk)
+                            .collect::<Vec<_>>(),
+                        vec![(6, 7)]
+                    );
+                    assert_eq!(
+                        parked_n
+                            .chunk_ticking
+                            .tickets
+                            .spawn_areas()
+                            .map(|(c, _)| c)
+                            .collect::<Vec<_>>(),
+                        vec![(8, 9)]
+                    );
+                    assert_eq!(parked_n.knot_state.knot_ids.get(&[1, 64, 2]), Some(&301));
+                    assert_eq!(parked_n.knot_state.knot_ids.len(), 1);
+                    assert_eq!(parked_n.knot_state.broken_knots, vec![[3, 65, 4]]);
+                    assert_eq!(parked_n.knot_state.broken_knots.as_ptr(), n_broken_ptr);
+                    assert_eq!(
+                        parked_n.lan_queues.block_events,
+                        vec![([5, 66, 6], 1, 2, 3)]
+                    );
+                    assert_eq!(
+                        parked_n.lan_queues.block_events.as_ptr(),
+                        n_block_events_ptr
+                    );
+                    assert_eq!(parked_n.lan_queues.entity_events, vec![(501, 2)]);
+                    assert_eq!(
+                        parked_n.lan_queues.entity_events.as_ptr(),
+                        n_entity_events_ptr
+                    );
+                    assert_eq!(
+                        parked_n.lan_queues.critical_hits,
+                        vec![(Some(9), 501, true)]
+                    );
+                    assert_eq!(parked_n.lan_queues.critical_hits.as_ptr(), n_crit_ptr);
+                }
+
+                // Return transition: Overworld -> Nether restores both sides completely.
+                game.enter_level(Dim::Nether).unwrap();
+                assert_eq!(game.dim, Dim::Nether);
+                check_siblings(game);
+
+                assert_eq!(game.server.creaking.level.scanned.len(), 1);
+                assert!(game.server.creaking.level.scanned.contains(&(10, 11)));
+                assert_eq!(game.server.creaking.level.unscanned.len(), 1);
+                assert!(game.server.creaking.level.unscanned.contains(&(12, 13)));
+                assert_eq!(game.server.creaking.level.revision, Some(101));
+                assert!(Arc::ptr_eq(
+                    &game.common.end.locator().unwrap(),
+                    &terrain_nether
+                ));
+                assert_eq!(game.server.portals.level.entities.len(), 1);
+                let ps_n = &game.server.portals.level.entities[&101];
+                assert_eq!(ps_n.cooldown, 250);
+                assert_eq!(
+                    ps_n.process.as_ref().map(|p| p.entry),
+                    Some(BlockPos::new(1, 64, 2))
+                );
+                assert_eq!(game.server.be_anims.level.shulkers.len(), 1);
+                assert_eq!(game.server.be_anims.level.shulkers[&[1, 2, 3]], shulker_n);
+                assert_eq!(game.server.be_anims.level.bells.len(), 1);
+                assert_eq!(game.server.be_anims.level.bells[&[4, 5, 6]], bell_n);
+                assert_eq!(game.server.be_anims.level.gateway_servers.len(), 1);
+                assert_eq!(
+                    game.server.be_anims.level.gateway_servers[&[7, 8, 9]],
+                    gateway_n
+                );
+                assert_eq!(game.server.be_anims.level.conduit_servers.len(), 1);
+                assert_eq!(
+                    game.server.be_anims.level.conduit_servers[&[10, 11, 12]].target,
+                    Some(77)
+                );
+                assert_eq!(game.server.raiding.0.level.raids.to_nbt(), nbt_n);
+                assert_eq!(game.server.raiding.0.level.loaded, Some(Dim::Nether));
+                assert_eq!(
+                    game.server.raiding.0.level.unseeded.as_deref(),
+                    Some(&[(id_n, 1)][..])
+                );
+                assert_eq!(game.server.raiding.0.level.bar_hurts.len(), 1);
+                assert_eq!(game.server.raiding.0.level.bar_hurts.get(&id_n), Some(&44));
+                assert_eq!(game.server.raiding.0.level.homes.len(), 1);
+                assert_eq!(game.server.raiding.0.level.homes[&id_n].0, 111);
+                assert_eq!(
+                    game.server.raiding.0.level.homes[&id_n].1.as_slice(),
+                    &[[1, 64, 2]]
+                );
+                assert_eq!(game.server.sculk.level.index.order, vec![(2, 64, 3)]);
+                assert_eq!(game.server.sculk.level.known.len(), 1);
+                assert!(game.server.sculk.level.known.contains(&(2, 3)));
+                assert_eq!(
+                    game.server
+                        .chunk_ticking
+                        .tickets
+                        .portal_tickets()
+                        .iter()
+                        .map(|t| t.chunk)
+                        .collect::<Vec<_>>(),
+                    vec![(6, 7)]
+                );
+                assert_eq!(
+                    game.server
+                        .chunk_ticking
+                        .tickets
+                        .spawn_areas()
+                        .map(|(c, _)| c)
+                        .collect::<Vec<_>>(),
+                    vec![(8, 9)]
+                );
+                let (_, n_after_return) = game
+                    .server
+                    .chunk_ticking
+                    .random_tick_sections
+                    .next_masked(
+                        (3, 4),
+                        &chunk_n,
+                        game.common.res.facts(),
+                        |id| {
+                            game.common
+                                .res
+                                .behaviours()
+                                .random_tick_candidate(BlockStateId(id))
+                        },
+                        0,
+                    )
+                    .unwrap();
+                assert!(Rc::ptr_eq(&n_after_return, &mask_n));
+                assert_eq!(game.server.knot_state.knot_ids.get(&[1, 64, 2]), Some(&301));
+                assert_eq!(game.server.knot_state.knot_ids.len(), 1);
+                assert_eq!(game.server.knot_state.broken_knots, vec![[3, 65, 4]]);
+                assert_eq!(game.server.knot_state.broken_knots.as_ptr(), n_broken_ptr);
+                assert_eq!(
+                    game.server.lan_queues.block_events,
+                    vec![([5, 66, 6], 1, 2, 3)]
+                );
+                assert_eq!(
+                    game.server.lan_queues.block_events.as_ptr(),
+                    n_block_events_ptr
+                );
+                assert_eq!(game.server.lan_queues.entity_events, vec![(501, 2)]);
+                assert_eq!(
+                    game.server.lan_queues.entity_events.as_ptr(),
+                    n_entity_events_ptr
+                );
+                assert_eq!(
+                    game.server.lan_queues.critical_hits,
+                    vec![(Some(9), 501, true)]
+                );
+                assert_eq!(game.server.lan_queues.critical_hits.as_ptr(), n_crit_ptr);
+
+                let parked_ow = game.server.levels.0.parked.get(&Dim::Overworld).unwrap();
+                assert_eq!(parked_ow.creaking.scanned.len(), 1);
+                assert!(parked_ow.creaking.scanned.contains(&(-1, -2)));
+                assert_eq!(parked_ow.creaking.unscanned.len(), 1);
+                assert!(parked_ow.creaking.unscanned.contains(&(-3, -4)));
+                assert_eq!(parked_ow.creaking.revision, Some(202));
+                assert!(Arc::ptr_eq(
+                    parked_ow.end.locator.as_ref().unwrap(),
+                    &terrain_ow
+                ));
+                assert_eq!(parked_ow.portal_states.entities.len(), 1);
+                assert_eq!(parked_ow.portal_states.entities[&202].cooldown, 33);
+                assert!(parked_ow.portal_states.entities[&202].process.is_none());
+                assert_eq!(parked_ow.anims.shulkers.len(), 1);
+                assert_eq!(parked_ow.anims.shulkers[&[-1, -2, -3]], shulker_ow);
+                assert_eq!(parked_ow.anims.bells.len(), 1);
+                assert_eq!(parked_ow.anims.bells[&[-4, -5, -6]], bell_ow);
+                assert_eq!(parked_ow.anims.gateway_servers.len(), 1);
+                assert_eq!(parked_ow.anims.gateway_servers[&[-7, -8, -9]], gateway_ow);
+                assert_eq!(parked_ow.anims.conduit_servers.len(), 1);
+                assert_eq!(
+                    parked_ow.anims.conduit_servers[&[-10, -11, -12]].target,
+                    Some(88)
+                );
+                assert_eq!(parked_ow.raiding.raids.to_nbt(), nbt_ow);
+                assert_eq!(parked_ow.raiding.loaded, Some(Dim::Overworld));
+                assert_eq!(
+                    parked_ow.raiding.unseeded.as_deref(),
+                    Some(&[(id_ow, 2)][..])
+                );
+                assert_eq!(parked_ow.raiding.bar_hurts.len(), 1);
+                assert_eq!(parked_ow.raiding.bar_hurts.get(&id_ow), Some(&66));
+                assert_eq!(parked_ow.raiding.homes.len(), 1);
+                assert_eq!(parked_ow.raiding.homes[&id_ow].0, 222);
+                assert_eq!(
+                    parked_ow.raiding.homes[&id_ow].1.as_slice(),
+                    &[[-5, 64, -6]]
+                );
+                assert_eq!(parked_ow.sculk.index.order, vec![(-4, 70, -5)]);
+                assert_eq!(parked_ow.sculk.known.len(), 1);
+                assert!(parked_ow.sculk.known.contains(&(-4, -5)));
+                assert_eq!(
+                    parked_ow
+                        .chunk_ticking
+                        .tickets
+                        .portal_tickets()
+                        .iter()
+                        .map(|t| t.chunk)
+                        .collect::<Vec<_>>(),
+                    vec![(-2, -3)]
+                );
+                assert_eq!(
+                    parked_ow
+                        .chunk_ticking
+                        .tickets
+                        .spawn_areas()
+                        .map(|(c, _)| c)
+                        .collect::<Vec<_>>(),
+                    vec![(-4, -5)]
+                );
+                assert_eq!(parked_ow.knot_state.knot_ids.get(&[-1, 70, -2]), Some(&402));
+                assert_eq!(parked_ow.knot_state.knot_ids.len(), 1);
+                assert_eq!(parked_ow.knot_state.broken_knots, vec![[-3, 71, -4]]);
+                assert_eq!(parked_ow.knot_state.broken_knots.as_ptr(), ow_broken_ptr);
+                assert_eq!(
+                    parked_ow.lan_queues.block_events,
+                    vec![([-5, 72, -6], 4, 5, 6)]
+                );
+                assert_eq!(
+                    parked_ow.lan_queues.block_events.as_ptr(),
+                    ow_block_events_ptr
+                );
+                assert_eq!(parked_ow.lan_queues.entity_events, vec![(602, 7)]);
+                assert_eq!(
+                    parked_ow.lan_queues.entity_events.as_ptr(),
+                    ow_entity_events_ptr
+                );
+                assert_eq!(parked_ow.lan_queues.critical_hits, vec![(None, 602, false)]);
+                assert_eq!(parked_ow.lan_queues.critical_hits.as_ptr(), ow_crit_ptr);
+            });
+        });
     }
 }

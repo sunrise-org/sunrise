@@ -339,6 +339,10 @@ pub(crate) mod titles;
 pub(crate) mod startup_menu;
 
 #[cfg(feature = "client")]
+#[path = "interface/startup_shader_options_tests.rs"]
+mod startup_shader_options_tests;
+
+#[cfg(feature = "client")]
 #[path = "interface/spectator.rs"]
 pub(crate) mod spectator;
 

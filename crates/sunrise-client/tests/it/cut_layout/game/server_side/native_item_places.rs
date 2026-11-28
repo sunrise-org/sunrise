@@ -462,8 +462,8 @@ pub(crate) mod tests {
             // With no tickets every chunk is entity-ticking; the zombie must lie outside that
             // range for the tracker to describe it idle (`ChunkMap.tick`).
             game.server
+                .chunk_ticking
                 .tickets
-                .0
                 .update(Some(sunrise_sim::ticket_levels::Sources {
                     players: vec![(40, 40)],
                     view_distance: 2,

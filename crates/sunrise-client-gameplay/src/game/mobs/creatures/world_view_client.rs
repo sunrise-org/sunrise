@@ -232,6 +232,7 @@ impl crate::game::ClientGame<'_> {
             others,
             MobWorldSideParams {
                 side,
+                variant_tables: None,
                 trading_players: None,
                 player: self.client_player_view(),
                 player_identity: None,

@@ -1,8 +1,6 @@
 //! Local particle and firework requests from native client hooks.
 use crate::game::ClientGame;
-use mod_api::{
-    Direction, FireworksRequest, LevelRef, LevelWriteError, client::particles::PositionSource,
-};
+use mod_api::{Direction, FireworksRequest, LevelRef, LevelWriteError, PositionSource};
 use sunrise_client::particles::{Particle, ParticleLevel};
 use sunrise_level::particle_options::ParticleOptions;
 use sunrise_world::registry::BlockStateId;

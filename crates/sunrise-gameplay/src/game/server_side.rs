@@ -1106,11 +1106,7 @@ pub struct ServerState {
     pub(in crate::game::server_side) watched_vehicles: Vec<lan_vehicles::WatchedVehicle>,
     /// The ender dragon fight (game/mobs/dragon.rs).
     pub fight: dragon::Fight,
-    /// The entity ids a hosted server gives the knots its mobs hang on, by
-    /// block, while a lead is tied there.
-    pub knot_ids: HashMap<[i32; 3], u32>,
-    /// Fence posts whose natural knot was killed and whose leads drop next tick.
-    pub broken_knots: Vec<[i32; 3]>,
+    pub knot_state: levels::KnotLevelState,
     /// This window's player's place in `riding`'s passengers, as `Guest.vehicle_order` is a guest's.
     pub(in crate::game::server_side) riding_order: i64,
     /// Vehicles that gained a rider this tick whose `START_RIDING_TRIGGER` was
@@ -1199,11 +1195,7 @@ pub struct ServerState {
     pub lan_songs: Vec<([i32; 3], Option<String>)>,
     pub(in crate::game::server_side) lan_cushion_breaks:
         Vec<(sunrise_world::registry::BlockStateId, [f64; 3])>,
-    /// Block events (position, b0, b1, state) and entity events (id, event) for the guests.
-    pub lan_block_events: Vec<([i32; 3], i32, i32, u32)>,
-    pub lan_entity_events: Vec<(i32, i8)>,
-    /// Successful crits (attacking guest, hit entity), queued while the hub is taken.
-    pub(in crate::game::server_side) lan_critical_hits: Vec<(Option<u32>, i32, bool)>,
+    pub lan_queues: levels::LanEventLevelState,
     /// Spear stabs that landed (the stabbing guest), queued while the hub is
     /// taken: `broadcastEntityEvent(player, 2)`.
     pub(in crate::game::server_side) lan_kinetic_hits: Vec<Option<u32>>,
@@ -1331,9 +1323,7 @@ pub struct ServerState {
     pub server_loot: ServerOnly<sunrise_sim::structure_blocks::LootSnapshot>,
     /// A server's levels other than the one in place (game/world/levels.rs).
     pub levels: ServerOnly<levels::Levels>,
-    pub tickets: ServerShared<sunrise_sim::ticket_levels::ChunkTickets>,
-    pub(in crate::game::server_side) random_tick_sections:
-        ServerOnly<sunrise_sim::random_tick_sections::RandomTickSections>,
+    pub chunk_ticking: levels::ChunkTickingLevelState,
     /// Entities of types Sunrise does not simulate.
     pub others: ServerShared<sunrise_sim::join_seq::ResidentList<commands::OtherEntity>>,
     /// Item entities spawned and block entities removed while the block
@@ -1469,8 +1459,7 @@ impl ServerState {
             leash_boats: Vec::new(),
             watched_vehicles: Vec::new(),
             fight: dragon::Fight::default(),
-            knot_ids: Default::default(),
-            broken_knots: Vec::new(),
+            knot_state: Default::default(),
             riding_order: 0,
             started_riding: Vec::new(),
             rotation_forced: false,
@@ -1508,9 +1497,7 @@ impl ServerState {
             lan_events: Vec::new(),
             lan_songs: Vec::new(),
             lan_cushion_breaks: Vec::new(),
-            lan_block_events: Vec::new(),
-            lan_entity_events: Vec::new(),
-            lan_critical_hits: Vec::new(),
+            lan_queues: Default::default(),
             lan_kinetic_hits: Vec::new(),
             stabbed: HashMap::new(),
             stab_players: Vec::new(),
@@ -1568,8 +1555,7 @@ impl ServerState {
             world_tables: ws.world_tables,
             server_loot: ws.server_loot,
             levels: ws.levels,
-            tickets: ws.tickets,
-            random_tick_sections: ws.random_tick_sections,
+            chunk_ticking: ws.chunk_ticking,
             others: ServerShared::new(Default::default()),
             spill: ws.spill,
             creative_catalog,
@@ -1627,7 +1613,7 @@ impl sunrise_gameplay_common::game::Side for ServerState {
     fn shulkers(
         &self,
     ) -> &sunrise_level::fast_hash::FxHashMap<[i32; 3], sunrise_level::shulker_box::Shulker> {
-        &self.be_anims.shulkers
+        &self.be_anims.level.shulkers
     }
 
     #[inline(always)]

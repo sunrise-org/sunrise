@@ -17,12 +17,35 @@ pub use mod_api::PathType;
 pub const PATH_TYPES: usize = PathType::COUNT;
 
 impl MobWorld<'_> {
+    #[inline]
+    fn classify_block_path_type(
+        &self,
+        state: sunrise_world::registry::BlockStateId,
+        x: i32,
+        y: i32,
+        z: i32,
+    ) -> PathType {
+        self.mob_hooks
+            .and_then(|hooks| hooks.block_path_type(state, [x, y, z]))
+            .unwrap_or_else(|| self.data.path_type(state))
+    }
+    #[inline]
     pub fn path_type_from_state(&self, x: i32, y: i32, z: i32) -> PathType {
         self.world.cached_path_type(BlockPos::new(x, y, z), || {
             let state = self.world.block(x, y, z);
-            self.mob_hooks
-                .and_then(|hooks| hooks.block_path_type(state, [x, y, z]))
-                .unwrap_or_else(|| self.data.path_type(state))
+            self.classify_block_path_type(state, x, y, z)
+        })
+    }
+    #[inline]
+    fn path_type_from_known_state(
+        &self,
+        x: i32,
+        y: i32,
+        z: i32,
+        state: sunrise_world::registry::BlockStateId,
+    ) -> PathType {
+        self.world.cached_path_type(BlockPos::new(x, y, z), || {
+            self.classify_block_path_type(state, x, y, z)
         })
     }
     /// WalkNodeEvaluator.getPathTypeStatic.
@@ -52,31 +75,49 @@ impl MobWorld<'_> {
     /// (`getAdjacentBlockPathType`) decides it. The neighbour step saturates, so a
     /// node at the edge of the `i32` range still reads its eight neighbours (#4443).
     pub fn check_neighbours(&self, x: i32, y: i32, z: i32, t: PathType) -> PathType {
+        // Cache the last chunk lookup across the 24 neighbours: interior nodes
+        // hit a single chunk instead of hashing `(cx, cz)` 24 times.
+        let mut cached_chunk: Option<((i32, i32), Option<&crate::chunk::Chunk>)> = None;
+        let mut block_at = |bx: i32, by: i32, bz: i32| {
+            let key = (bx >> 4, bz >> 4);
+            let chunk = match cached_chunk {
+                Some((k, c)) if k == key => c,
+                _ => {
+                    let c = self.world.chunk_at(key.0, key.1);
+                    cached_chunk = Some((key, c));
+                    c
+                }
+            };
+            self.world.block_with_chunk(bx, by, bz, chunk)
+        };
         for dx in -1..=1 {
+            let nx = x.saturating_add(dx);
             for dy in -1..=1 {
+                let ny = y.saturating_add(dy);
                 for dz in -1..=1 {
                     if dx == 0 && dz == 0 {
                         continue;
                     }
-                    let pos = [
-                        x.saturating_add(dx),
-                        y.saturating_add(dy),
-                        z.saturating_add(dz),
-                    ];
-                    let state = self.world.block(pos[0], pos[1], pos[2]);
-                    let own = self.path_type_from_state(pos[0], pos[1], pos[2]);
-                    let facts = self.facts.get(state);
-                    let default = if facts.name.as_ref() == "minecraft:sweet_berry_bush" {
+                    let nz = z.saturating_add(dz);
+                    let pos = [nx, ny, nz];
+                    let state = block_at(nx, ny, nz);
+                    let own = self.path_type_from_known_state(nx, ny, nz, state);
+                    let raw_flags = self.data.state(state).flags;
+                    let adj_flags = if raw_flags & data::ADJACENT_KNOWN != 0 {
+                        raw_flags
+                    } else {
+                        data::adjacent_bits_for_fact(self.facts.get(state))
+                    };
+                    let default = if adj_flags & data::ADJACENT_BERRY_BUSH != 0 {
                         Some(PathType::DamagingInNeighbor)
-                    } else if data::vanilla_burning_block(
-                        &facts.name,
-                        facts.emission > 0,
-                        self.state_flag(state, BlockTagFlags::FIRE),
-                    ) {
+                    } else if adj_flags & data::ADJACENT_BURNING != 0
+                        || self.state_flag(state, BlockTagFlags::FIRE)
+                    {
                         Some(PathType::FireInNeighbor)
                     } else {
                         None
                     };
+                    let modded_fluid = adj_flags & data::ADJACENT_MODDED_FLUID != 0;
                     let adjacent = self.mob_hooks.map_or(default, |hooks| {
                         hooks.adjacent_block_path_type(state, pos, own, default)
                     });
@@ -86,7 +127,7 @@ impl MobWorld<'_> {
                     // Custom fluids retain their default neighbour contribution.
                     // Vanilla water contributes through its classified path type:
                     // a solid waterlogged block is BLOCKED, not WATER.
-                    if facts.fluid == Fluid::Modded {
+                    if modded_fluid {
                         return PathType::WaterBorder;
                     }
                     if let Some(adjacent) = data::vanilla_adjacent(own) {
@@ -593,9 +634,11 @@ impl<'a, 'w> Finder<'a, 'w> {
         }
         t
     }
-    fn within_bb(&self, x: i32, y: i32, z: i32) -> Vec<PathType> {
-        let mut out = Vec::with_capacity(4);
+    fn within_bb(&self, x: i32, y: i32, z: i32) -> u32 {
+        const _: () = assert!(PATH_TYPES <= u32::BITS as usize);
+        let mut out = 0u32;
         let mp = self.mob.block_position();
+        let mut mob_on_rail: Option<bool> = None;
         for dx in 0..self.entity_width {
             for dy in 0..self.entity_height {
                 for dz in 0..self.entity_depth {
@@ -613,15 +656,17 @@ impl<'a, 'w> Finder<'a, 'w> {
                     if t == PathType::DoorOpen && !self.mob.can_pass_doors {
                         t = PathType::Blocked;
                     }
-                    if t == PathType::Rail
-                        && self.path_type(mp[0], mp[1], mp[2]) != PathType::Rail
-                        && self.path_type(mp[0], mp[1].saturating_sub(1), mp[2]) != PathType::Rail
-                    {
-                        t = PathType::UnpassableRail;
+                    if t == PathType::Rail {
+                        let on_rail = *mob_on_rail.get_or_insert_with(|| {
+                            self.path_type(mp[0], mp[1], mp[2]) == PathType::Rail
+                                || self.path_type(mp[0], mp[1].saturating_sub(1), mp[2])
+                                    == PathType::Rail
+                        });
+                        if !on_rail {
+                            t = PathType::UnpassableRail;
+                        }
                     }
-                    if !out.contains(&t) {
-                        out.push(t);
-                    }
+                    out |= 1u32 << (t as u32);
                 }
             }
         }
@@ -632,28 +677,31 @@ impl<'a, 'w> Finder<'a, 'w> {
         if let Evaluator::Swim { .. } = self.eval {
             return self.swim_path_type(x, y, z);
         }
-        let mut types = self.within_bb(x, y, z);
-        // EnumSet iteration follows declaration order.
-        types.sort_by_key(|t| *t as u8);
-        if types.len() == 1 {
-            return types[0];
+        let types = self.within_bb(x, y, z);
+        if types.count_ones() == 1 {
+            return PathType::ALL[types.trailing_zeros() as usize];
         }
-        if types.contains(&PathType::Fence) {
+        if types & (1u32 << PathType::Fence as u32) != 0 {
             return PathType::Fence;
         }
-        if types.contains(&PathType::UnpassableRail) {
+        if types & (1u32 << PathType::UnpassableRail as u32) != 0 {
             return PathType::UnpassableRail;
         }
         let mut highest = PathType::Blocked;
         let mut highest_malus = self.malus(highest);
-        for t in &types {
-            let m = self.malus(*t);
+        // Bit indices follow PathType declaration order, matching EnumSet iteration.
+        let mut rem = types;
+        while rem != 0 {
+            let idx = rem.trailing_zeros() as usize;
+            rem &= rem - 1;
+            let t = PathType::ALL[idx];
+            let m = self.malus(t);
             if m < 0.0 {
-                return *t;
+                return t;
             }
             if m >= highest_malus {
                 highest_malus = m;
-                highest = *t;
+                highest = t;
             }
         }
         let current = self.path_type(x, y, z);

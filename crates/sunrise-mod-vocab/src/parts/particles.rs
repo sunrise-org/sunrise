@@ -25,7 +25,7 @@ impl dyn super::Registrar + '_ {
         codec: crate::ParticleMapCodec<T>,
         stream_codec: crate::ParticleStreamCodec<T>,
     ) -> crate::ParticleType<T> {
-        use crate::client::particle_types::{ParticleType, TypedCodec};
+        use crate::world::particle_types::{ParticleType, TypedCodec};
         ParticleType::new(self.add_particle_type(
             id,
             override_limiter,

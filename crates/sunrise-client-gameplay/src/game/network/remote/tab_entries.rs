@@ -4,6 +4,11 @@ use super::session_state::Remote;
 use sunrise_level::profile_lookup::TabPlayer;
 
 impl Remote {
+    /// The player list's entry for a UUID (`ClientPacketListener.getPlayerInfo(UUID)`),
+    /// whether or not it is listed now.
+    pub(in crate::game) fn player_info(&self, uuid: u128) -> Option<&TabPlayer> {
+        self.tab_players.get(&uuid)
+    }
     /// The listed players (`ClientPacketListener.getListedOnlinePlayers`) in encounter order.
     /// `tab_list::sorted_players` gives the overlay's display order.
     pub(in crate::game) fn listed_tab_player_refs(&self) -> impl Iterator<Item = &TabPlayer> {

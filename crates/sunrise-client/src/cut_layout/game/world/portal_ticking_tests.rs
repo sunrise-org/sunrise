@@ -64,7 +64,7 @@ fn mobs_past_the_simulation_distance_neither_enter_portals_nor_cool_down() {
             game.handle_entity_portals();
             game.find_entity_portals();
         }
-        let state = |id| game.server.portals.entities.get(&id);
+        let state = |id| game.server.portals.level.entities.get(&id);
         let here = |id| game.mobs.iter().any(|m| m.id == id);
         // A mob crosses a nether portal at once: the ticking zombie has gone.
         assert!(!here(1), "the ticking zombie went through its portal");

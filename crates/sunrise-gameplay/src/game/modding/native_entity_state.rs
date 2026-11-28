@@ -289,6 +289,7 @@ impl crate::game::ServerGame<'_> {
         Some(
             self.server
                 .portals
+                .level
                 .entities
                 .get(&id)
                 .map_or(0, |p| p.cooldown),
@@ -334,7 +335,13 @@ impl crate::game::ServerGame<'_> {
                 {
                     return false;
                 }
-                self.server.portals.entities.entry(id).or_default().cooldown = ticks;
+                self.server
+                    .portals
+                    .level
+                    .entities
+                    .entry(id)
+                    .or_default()
+                    .cooldown = ticks;
                 true
             }
             Some(Target::Mob(id))
@@ -345,7 +352,13 @@ impl crate::game::ServerGame<'_> {
             | Some(Target::Tnt(id))
             | Some(Target::Rocket(id))
             | Some(Target::Trident(id)) => {
-                self.server.portals.entities.entry(id).or_default().cooldown = ticks;
+                self.server
+                    .portals
+                    .level
+                    .entities
+                    .entry(id)
+                    .or_default()
+                    .cooldown = ticks;
                 true
             }
             _ => false,

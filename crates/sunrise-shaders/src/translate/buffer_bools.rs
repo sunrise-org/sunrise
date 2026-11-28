@@ -31,7 +31,8 @@ struct Block<'a> {
     members: Vec<Member<'a>>,
 }
 
-/// `pp` with its buffers' `bool` members rewritten, and what could not be.
+/// `pp` with its buffers' `bool` members rewritten, or errors locating what could not be
+/// rewritten without changing its meaning or invalidating the line map.
 /// A member's `layout` without a following token is reported at the `layout` keyword.
 pub(super) fn rewrite(pp: &Preprocessed) -> (Option<Preprocessed>, Vec<Error>) {
     if !pp.code().contains("buffer") || !(pp.code().contains("bool") || pp.code().contains("bvec"))
@@ -320,7 +321,10 @@ pub(super) fn rewrite(pp: &Preprocessed) -> (Option<Preprocessed>, Vec<Error>) {
             code.push_str(text);
         }
     }
-    (Some(pp.with_code(code)), errors)
+    match pp.with_code("buffer bool rewrite", code) {
+        Ok(out) => (Some(out), errors),
+        Err(error) => (None, vec![error]),
+    }
 }
 
 #[cfg(test)]

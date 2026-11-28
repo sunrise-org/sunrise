@@ -51,6 +51,15 @@ pub fn block_states_generation() -> u64 {
     BLOCK_STATES_GENERATION.load(Ordering::Acquire)
 }
 
+/// Restores a captured palette state for isolated tests. Unlike
+/// [`set_block_states`], this preserves the generation observed by callers.
+#[cfg(feature = "test-support")]
+pub(crate) fn restore_block_state_palette(bits: u8, states: u32, generation: u64) {
+    BLOCK_BITS.store(bits, Ordering::Relaxed);
+    BLOCK_STATES.store(states, Ordering::Relaxed);
+    BLOCK_STATES_GENERATION.store(generation, Ordering::Release);
+}
+
 #[derive(Clone, Copy)]
 pub struct StateFacts {
     air: bool,

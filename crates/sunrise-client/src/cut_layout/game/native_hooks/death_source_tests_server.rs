@@ -87,7 +87,13 @@ fn zombie_ai_melee_armor_hurt_retains_the_real_source() {
                 assert!(game.run_command("difficulty normal"));
                 assert!(game.run_command("forceload add 0 0"));
                 game.update_chunk_tickets();
-                assert!(game.server.tickets.0.levels().entity_ticking_at(5, 4));
+                assert!(
+                    game.server
+                        .chunk_ticking
+                        .tickets
+                        .levels()
+                        .entity_ticking_at(5, 4)
+                );
                 assert!(game.player.as_ref().unwrap().client_loaded);
                 game.armor[1] = Some(ItemStack::new("minecraft:iron_chestplate", 1));
                 game.apply_equipment();

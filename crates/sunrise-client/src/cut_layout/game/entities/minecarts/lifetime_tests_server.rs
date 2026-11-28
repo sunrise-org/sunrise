@@ -41,7 +41,7 @@ pub(crate) fn bound_cart_case(
     action: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>),
 ) {
     super::super::native_entity_refs::tests::with_resident_game(|game| {
-        game.server.tickets.0.update(None);
+        game.server.chunk_ticking.tickets.update(None);
         game.carts
             .push(Minecart::new(71, kind, Vec3::new(0.5, 70.0, 0.5)));
         let holder = {
@@ -164,7 +164,7 @@ fn destroyed_carts_retain_authoritative_state_and_retire_their_registration() {
         mod_platform::testing::with_mods(mods, || {
             super::super::native_entity_refs::tests::with_resident_game(|game| {
                 game.options.dedicated = Some(Vec::new());
-                game.server.tickets.0.update(None);
+                game.server.chunk_ticking.tickets.update(None);
                 game.reset_entity_residency();
                 let start = Vec3::new(0.5, 70.0, 0.5);
                 let mut cart = Minecart::new(
@@ -278,7 +278,7 @@ fn disabled_tnt_rule_discards_primed_carts_but_keeps_unprimed_ticks() {
         for primed in [false, true] {
             super::super::native_entity_refs::tests::with_game(|game| {
                 game.options.dedicated = Some(Vec::new());
-                game.server.tickets.0.update(None);
+                game.server.chunk_ticking.tickets.update(None);
                 game.reset_entity_residency();
                 assert!(game.ui.rules.set(
                     "tnt_explodes",
@@ -349,7 +349,7 @@ fn terminal_vehicle_damage_and_native_removal_retire_residency() {
         for mode in 0..3 {
             super::super::native_entity_refs::tests::with_resident_game(|game| {
                 game.reset_entity_residency();
-                game.server.tickets.0.update(None);
+                game.server.chunk_ticking.tickets.update(None);
                 game.summon_with_nbt(
                     if cart {
                         "minecraft:minecart"

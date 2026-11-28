@@ -318,6 +318,7 @@ mod tests {
             {
                 let w = MobWorld {
                     side: crate::motion::dry_side(),
+                    variant_tables: None,
                     goal_host: None,
                     asks_baby_spawn: ask_mods,
                     mob_drops,

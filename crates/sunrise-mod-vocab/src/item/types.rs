@@ -699,7 +699,7 @@ pub struct ToolUse {
     /// The acting entity ID, if present.
     pub player: Option<u32>,
     /// The hand holding the tool.
-    pub hand: crate::client::first_person::Hand,
+    pub hand: crate::Hand,
     /// The clicked block position.
     pub pos: [i32; 3],
     /// The clicked face's direction.
@@ -850,4 +850,28 @@ impl InteractionResult {
     pub fn consumes_action(self) -> bool {
         matches!(self, Self::Success | Self::SuccessServer | Self::Consume)
     }
+}
+
+/// One player's open menu, invalidated on close, replacement or reconnect.
+/// Client menu handles are also invalidated on respawn.
+///
+/// Clicks require a mutable client host, not a server or a read-only hook:
+/// ```compile_fail
+/// use mod_api::{MenuRef, ServerHost};
+/// fn wrong(menu: MenuRef, host: &mut dyn ServerHost) {
+///     menu.click(host, &[]);
+/// }
+/// ```
+/// ```compile_fail
+/// use mod_api::{MenuRef, ClientHost};
+/// fn wrong(menu: MenuRef, host: &dyn ClientHost) {
+///     menu.click(host, &[]);
+/// }
+/// ```
+#[derive(sunrise_mod_api_macros::Wire, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+// exhaustive: its fields are private, so mods cannot build or destructure it
+pub struct MenuRef {
+    pub(crate) player: PlayerRef,
+    pub(crate) window: i32,
+    pub(crate) generation: u64,
 }

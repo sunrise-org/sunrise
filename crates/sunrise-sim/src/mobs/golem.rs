@@ -1134,6 +1134,7 @@ mod tests {
                 let seen = [villager.seen(None, &crate::items::Items::empty())];
                 let world = crate::mobs::MobWorld {
                     side: crate::motion::dry_side(),
+                    variant_tables: None,
                     others: &seen,
                     ..world
                 };

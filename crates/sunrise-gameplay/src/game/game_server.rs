@@ -575,7 +575,7 @@ impl crate::game::ServerGame<'_> {
         self.server.save.0 = self.with_profession_save_snapshot(save);
         // MinecraftServer.prepareLevels restores the saved tickets after the
         // built-in levels have been published.
-        self.server.tickets.0 = Default::default();
+        self.server.chunk_ticking.tickets = Default::default();
         self.server.startup_ticket_restore_pending =
             self.common.options.execution_role.is_logical_server();
         // The ride the player's file names, once the vehicle is in the world.
@@ -633,11 +633,8 @@ impl crate::game::ServerGame<'_> {
         self.restore_effects();
         self.common.mining = None;
         self.common.container = None;
-        let kinds = std::mem::take(&mut self.server.be_anims.kinds);
-        self.server.be_anims = sunrise_level::block_entity_ticks::BlockEntityTicks {
-            kinds,
-            ..Default::default()
-        };
+        self.server.be_anims.level =
+            sunrise_level::block_entity_ticks::BlockEntityLevelTicks::default();
         self.common.carried = None;
         self.common.using = None;
         self.server.streaming.radius =
@@ -1334,12 +1331,12 @@ impl crate::game::ServerGame<'_> {
         });
         // The levels' changes are kept only for a listener, so that a tick
         // with none looks at no chunk.
-        self.server.tickets.0.record_changes(
+        self.server.chunk_ticking.tickets.record_changes(
             notify
                 && self.common.is_logical_server()
                 && mod_api::__private::listened(mod_api::HookId::ChunkTicketLevelUpdated),
         );
-        self.server.tickets.0.update(sources);
+        self.server.chunk_ticking.tickets.update(sources);
         if notify {
             self.run_chunk_ticket_level_updates();
         }
@@ -1349,7 +1346,7 @@ impl crate::game::ServerGame<'_> {
     /// (block ticking, with its neighbours loaded). Chunks become ticking
     /// between ticks in vanilla: before this tick's clock advanced.
     pub fn start_ticking_chunks(&mut self) {
-        let levels = self.server.tickets.0.levels();
+        let levels = self.server.chunk_ticking.tickets.levels();
         let world = &self.common.world;
         let started = self
             .server
@@ -2500,7 +2497,7 @@ impl crate::game::ServerGame<'_> {
             attachment_query_scopes: &self.common.transactions.attachment_query_scopes,
             command_block_transition: None,
             positions: piston_carry_common::PositionState {
-                gateways: &mut self.server.be_anims.gateway_servers,
+                gateways: &mut self.server.be_anims.level.gateway_servers,
                 hoppers: &mut self.server.hoppers,
             },
             border: self.common.border.geometry(),
@@ -2566,8 +2563,8 @@ impl crate::game::ServerGame<'_> {
             rand_sequences: &mut self.server.rand_sequences,
             pending: &mut self.common.pending,
             spill: &mut self.server.spill.0,
-            tickets: self.server.tickets.0.levels(),
-            random_tick_sections: &mut self.server.random_tick_sections.0,
+            tickets: self.server.chunk_ticking.tickets.levels(),
+            random_tick_sections: &mut self.server.chunk_ticking.random_tick_sections,
             lid_openers: &mut self.server.lid_openers,
             open_containers: &open_containers,
             golem_chests: &golem_chests,

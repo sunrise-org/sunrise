@@ -378,6 +378,7 @@ impl crate::game::ServerGame<'_> {
         let mut keys: Vec<(i32, i32)> = self
             .server
             .creaking
+            .level
             .unscanned
             .iter()
             .copied()
@@ -385,8 +386,8 @@ impl crate::game::ServerGame<'_> {
             .collect();
         keys.sort_unstable();
         for key in keys {
-            self.server.creaking.unscanned.remove(&key);
-            self.server.creaking.scanned.insert(key);
+            self.server.creaking.level.unscanned.remove(&key);
+            self.server.creaking.level.scanned.insert(key);
             let Some(chunk) = self.common.world.chunks.get(&key).cloned() else {
                 continue;
             };
@@ -429,15 +430,21 @@ impl crate::game::ServerGame<'_> {
     }
 }
 
-/// What the creaking code remembers between ticks.
+/// Per-level creaking heart chunk scan state.
 #[derive(Default)]
-pub(in crate::game) struct CreakingState {
+pub(in crate::game) struct CreakingLevelState {
     /// Chunks already scanned for heart blocks.
     pub(in crate::game) scanned: sunrise_level::fast_hash::FxHashSet<(i32, i32)>,
     /// Resident chunks not scanned yet (not lit yet, or just arrived).
     pub(in crate::game) unscanned: sunrise_level::fast_hash::FxHashSet<(i32, i32)>,
     /// The chunk map's membership revision the two sets follow.
     pub(in crate::game) revision: Option<u64>,
+}
+
+/// What the creaking code remembers between ticks.
+#[derive(Default)]
+pub(in crate::game) struct CreakingState {
+    pub(in crate::game) level: CreakingLevelState,
     /// Which block states are creaking hearts, by state id.
     pub(in crate::game) hearts: Vec<bool>,
 }
@@ -445,10 +452,8 @@ pub(in crate::game) struct CreakingState {
 impl CreakingState {
     /// Exchange the chunks scanned for creaking hearts with another level's
     /// (game/world/levels.rs).
-    pub(in crate::game::server_side) fn swap_level(&mut self, other: &mut Self) {
-        std::mem::swap(&mut self.scanned, &mut other.scanned);
-        std::mem::swap(&mut self.unscanned, &mut other.unscanned);
-        std::mem::swap(&mut self.revision, &mut other.revision);
+    pub(in crate::game::server_side) fn swap_level(&mut self, other: &mut CreakingLevelState) {
+        std::mem::swap(&mut self.level, other);
     }
     /// Bring `scanned` and `unscanned` up to the chunks resident now: a
     /// chunk that left is forgotten (it is scanned again if it comes back
@@ -456,23 +461,23 @@ impl CreakingState {
     /// membership changes, or from all its keys when they can't be replayed.
     pub(in crate::game::server_side) fn follow_chunks(&mut self, chunks: &ChunkMap) {
         let revision = chunks.membership_revision();
-        if self.revision == Some(revision) {
+        if self.level.revision == Some(revision) {
             return;
         }
-        let deltas = self.revision.and_then(|r| chunks.deltas_since(r));
+        let deltas = self.level.revision.and_then(|r| chunks.deltas_since(r));
         match deltas {
             Some(deltas) => {
                 for (_, delta) in deltas {
                     match delta {
                         ChunkMembershipDelta::Added(key) => {
-                            if chunks.contains_key(&key) && !self.scanned.contains(&key) {
-                                self.unscanned.insert(key);
+                            if chunks.contains_key(&key) && !self.level.scanned.contains(&key) {
+                                self.level.unscanned.insert(key);
                             }
                         }
                         ChunkMembershipDelta::Removed(key) => {
                             if !chunks.contains_key(&key) {
-                                self.scanned.remove(&key);
-                                self.unscanned.remove(&key);
+                                self.level.scanned.remove(&key);
+                                self.level.unscanned.remove(&key);
                             }
                         }
                         ChunkMembershipDelta::Reset => {}
@@ -480,15 +485,15 @@ impl CreakingState {
                 }
             }
             None => {
-                self.scanned.retain(|k| chunks.contains_key(k));
-                self.unscanned = chunks
+                self.level.scanned.retain(|k| chunks.contains_key(k));
+                self.level.unscanned = chunks
                     .keys()
-                    .filter(|k| !self.scanned.contains(k))
+                    .filter(|k| !self.level.scanned.contains(k))
                     .copied()
                     .collect();
             }
         }
-        self.revision = Some(revision);
+        self.level.revision = Some(revision);
     }
 }
 
@@ -542,7 +547,7 @@ use sunrise_gameplay_common::game::creatures::ModGameExt1 as _;
 
 #[cfg(test)]
 pub(in crate::game) mod tests {
-    use super::CreakingState;
+    use super::{CreakingLevelState, CreakingState};
     use std::sync::Arc;
     use sunrise_level::{chunk::Chunk, chunk_map::ChunkMap};
 
@@ -565,30 +570,65 @@ pub(in crate::game) mod tests {
         add(&mut chunks, (0, 0));
         add(&mut chunks, (1, 0));
         state.follow_chunks(&chunks);
-        assert_eq!(sorted(&state.unscanned), [(0, 0), (1, 0)]);
+        assert_eq!(sorted(&state.level.unscanned), [(0, 0), (1, 0)]);
         // Scanned, as scan_for_hearts does once a chunk is lit.
-        state.unscanned.remove(&(0, 0));
-        state.scanned.insert((0, 0));
+        state.level.unscanned.remove(&(0, 0));
+        state.level.scanned.insert((0, 0));
         add(&mut chunks, (2, 0));
         chunks.remove(&(1, 0));
         // Gone and back between two ticks: still scanned, as before.
         chunks.remove(&(0, 0));
         add(&mut chunks, (0, 0));
         state.follow_chunks(&chunks);
-        assert_eq!(sorted(&state.scanned), [(0, 0)]);
-        assert_eq!(sorted(&state.unscanned), [(2, 0)]);
+        assert_eq!(sorted(&state.level.scanned), [(0, 0)]);
+        assert_eq!(sorted(&state.level.unscanned), [(2, 0)]);
         // Gone over a tick: forgotten, and scanned again when it returns.
         chunks.remove(&(0, 0));
         state.follow_chunks(&chunks);
-        assert!(state.scanned.is_empty());
+        assert!(state.level.scanned.is_empty());
         add(&mut chunks, (0, 0));
         state.follow_chunks(&chunks);
-        assert_eq!(sorted(&state.unscanned), [(0, 0), (2, 0)]);
+        assert_eq!(sorted(&state.level.unscanned), [(0, 0), (2, 0)]);
         // A cleared map can't be replayed: rebuilt from its keys.
         chunks.clear();
         add(&mut chunks, (5, 5));
         state.follow_chunks(&chunks);
-        assert_eq!(sorted(&state.unscanned), [(5, 5)]);
-        assert!(state.scanned.is_empty());
+        assert_eq!(sorted(&state.level.unscanned), [(5, 5)]);
+        assert!(state.level.scanned.is_empty());
+    }
+
+    #[test]
+    fn swap_level_exchanges_per_level_fields_only() {
+        let mut state = CreakingState {
+            level: CreakingLevelState {
+                scanned: [(1, 2), (3, 4)].into_iter().collect(),
+                unscanned: [(5, 6)].into_iter().collect(),
+                revision: Some(11),
+            },
+            hearts: vec![false, true, false, true],
+        };
+        let mut parked = CreakingLevelState {
+            scanned: [(-1, -2)].into_iter().collect(),
+            unscanned: [(7, 8), (9, 10)].into_iter().collect(),
+            revision: Some(42),
+        };
+
+        state.swap_level(&mut parked);
+        assert_eq!(state.hearts, vec![false, true, false, true]);
+        assert_eq!(sorted(&state.level.scanned), [(-1, -2)]);
+        assert_eq!(sorted(&state.level.unscanned), [(7, 8), (9, 10)]);
+        assert_eq!(state.level.revision, Some(42));
+        assert_eq!(sorted(&parked.scanned), [(1, 2), (3, 4)]);
+        assert_eq!(sorted(&parked.unscanned), [(5, 6)]);
+        assert_eq!(parked.revision, Some(11));
+
+        state.swap_level(&mut parked);
+        assert_eq!(state.hearts, vec![false, true, false, true]);
+        assert_eq!(sorted(&state.level.scanned), [(1, 2), (3, 4)]);
+        assert_eq!(sorted(&state.level.unscanned), [(5, 6)]);
+        assert_eq!(state.level.revision, Some(11));
+        assert_eq!(sorted(&parked.scanned), [(-1, -2)]);
+        assert_eq!(sorted(&parked.unscanned), [(7, 8), (9, 10)]);
+        assert_eq!(parked.revision, Some(42));
     }
 }

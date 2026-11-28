@@ -89,6 +89,8 @@ def main():
                lab.ROOT / "crates/sunrise-world/src/damage_source.rs",
                lab.ROOT / "crates/sunrise-world/src/damage_source/resources.rs",
                lab.ROOT / "crates/sunrise-sim/src/health/datapack_tests.rs",
+               lab.ROOT / "crates/sunrise-sim/src/motion/hurt_tests.rs",
+               lab.ROOT / "crates/sunrise-sim/src/motion.rs",
                lab.ROOT / "crates/sunrise-sim/src/landing.rs",
                lab.ROOT / "crates/sunrise-sim/src/lan/data.rs",
                lab.ROOT / "crates/sunrise-gameplay/src/game/network/lan/mod.rs"]

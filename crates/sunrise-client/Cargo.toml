@@ -13,6 +13,8 @@ autotests = false
 sunrise-hooks = { path = "../sunrise-hooks" }
 sunrise-mod-runtime = { path = "../sunrise-mod-runtime" }
 mod_api = { package = "sunrise-mod-vocab", path = "../sunrise-mod-vocab" }
+# The client-side lib-test fixtures shared with the `it` target. These are hidden behind `test-support`.
+tempfile = { version = "3", optional = true }
 sunrise-mod-api-macros = { path = "../sunrise-mod-api-macros" }
 sunrise-client-lib = { path = "../sunrise-client-lib", default-features = false, optional = true }
 sunrise-gameplay = { path = "../sunrise-gameplay" }
@@ -111,7 +113,13 @@ default = ["client", "audio", "controllers", "sunrise-extras"]
 client = ["dep:cap-fs-ext", "dep:cap-std", "dep:chrono", "dep:cipher", "dep:crypto-common", "dep:digest", "dep:flate2", "dep:fnv", "dep:fs4", "dep:glam", "dep:indexmap", "dep:libc", "dep:png", "dep:sha1", "dep:sha2", "dep:socket2", "dep:sunrise-client-gameplay", "dep:sunrise-client-input", "dep:sunrise-client-lib", "dep:sunrise-client-render", "dep:sunrise-narrator", "dep:ureq", "dep:winit", "dep:zip", "sunrise-client-gameplay/client"]
 # Scoped trait-mod installation for a mod's own tests.
 testing = []
-test-support = ["sunrise-client-gameplay?/test-support"]
+test-support = [
+    "sunrise-client-gameplay?/test-support",
+    "sunrise-gameplay/test-support",
+    "sunrise-gameplay-common/test-support",
+    "sunrise-level/test-support",
+    "dep:tempfile",
+]
 # Per-level-tick state digest for determinism checks (game/world/state_digest.rs).
 state-digest = ["sunrise-gameplay/state-digest"]
 # Sound output. Without it (and `controllers`) the program links neither libasound nor libudev on
@@ -157,7 +165,9 @@ workspace = true
 # The prepared-root boundary and its input lists, for unit tests.
 sunrise-core = { path = "../sunrise-core", features = ["test-support"] }
 sunrise-gameplay-common = { path = "../sunrise-gameplay-common", features = ["test-support"] }
-# Forward test support only when the optional client gameplay dependency is active.
+# Resource fixtures temporarily publish process-wide palette state.
+sunrise-level = { path = "../sunrise-level", features = ["test-support"] }
+# The integration target uses the same client-side fixtures as the lib tests.
 sunrise-client = { path = ".", default-features = false, features = ["test-support"] }
 sunrise-gameplay = { path = "../sunrise-gameplay", features = ["test-support"] }
 sunrise-hooks = { path = "../sunrise-hooks", features = ["test-support"] }

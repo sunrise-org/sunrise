@@ -36,8 +36,8 @@ pub(crate) mod peaceful_tests {
             let trader = game.mobs.iter().find(|mob| mob.id == id).unwrap();
             assert!(trader.persistent && trader.no_ai);
             game.server
+                .chunk_ticking
                 .tickets
-                .0
                 .update(Some(sunrise_sim::ticket_levels::Sources {
                     forced: vec![(0, 0)],
                     ..Default::default()

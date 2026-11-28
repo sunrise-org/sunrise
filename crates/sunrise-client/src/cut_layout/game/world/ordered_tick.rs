@@ -56,7 +56,7 @@ pub(crate) mod tests {
             }
             // Existing residents whose spawn packets were already announced.
             game.server.ordered.announced = sunrise_sim::join_seq::JoinSeq::MAX;
-            game.server.tickets.0.update(None);
+            game.server.chunk_ticking.tickets.update(None);
             game.begin_ordered_ticks();
             game.run_ordered_ticks(sunrise_sim::join_seq::JoinSeq::MAX, false)
                 .unwrap();
@@ -99,7 +99,7 @@ pub(crate) mod tests {
                     );
                 }
                 ids = game.server.others.0.iter().map(|o| o.id).collect();
-                game.server.tickets.0.update(None);
+                game.server.chunk_ticking.tickets.update(None);
                 game.begin_ordered_ticks();
                 game.run_ordered_ticks(sunrise_sim::join_seq::JoinSeq::MAX, false)
                     .unwrap();

@@ -140,8 +140,8 @@ impl crate::game::ServerGame<'_> {
                 Ok(at) => at,
                 Err(chunk) => {
                     self.server
+                        .chunk_ticking
                         .tickets
-                        .0
                         .add_spawn(chunk, sunrise_sim::ticket_levels::SpawnTicketKind::Search);
                     return Err(RespawnTargetUnavailable::Loading);
                 }

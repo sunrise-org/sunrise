@@ -1,7 +1,7 @@
 //! `LivingEntity.isBlocking` for native mods through a `LivingRef`: a player or a mob holding up
 //! an item that blocks attacks, past the item's block delay.
 use super::held_items::block_delay_passed;
-use mod_api::{EquipmentSlot, LivingRef, client::first_person::Hand};
+use mod_api::{EquipmentSlot, Hand, LivingRef};
 
 pub trait NativeLivingBlockingGameExt1<'__sg>: crate::game::SideGame<'__sg> {
     /// `LivingEntity.isBlocking` (`getItemBlockingWith` is not null): the entity uses an item

@@ -22,8 +22,8 @@ impl crate::game::ServerGame<'_> {
         // ServerChunkCache.tick: the tickets that time out.
         let world = &self.common.world;
         self.server
+            .chunk_ticking
             .tickets
-            .0
             .tick_portal(|ticket| portal_ticket_can_expire(world, ticket));
         self.sync_tick_chunks();
         self.start_ticking_chunks();
@@ -313,7 +313,7 @@ impl crate::game::ServerGame<'_> {
     /// order is the same every run; vanilla's exact order is its fastutil
     /// table's slot order, which follows that table's whole history.
     pub fn random_tick_chunks(&self, out: &mut Vec<(i32, i32)>) {
-        let levels = self.server.tickets.0.levels();
+        let levels = self.server.chunk_ticking.tickets.levels();
         let bounds = levels.random_tick_bounds();
         out.clear();
         out.extend(self.common.world.chunks.keys().copied().filter(|&(x, z)| {
@@ -341,7 +341,7 @@ impl crate::game::ServerGame<'_> {
             self.register_chunk_ticks(key);
         }
         for &key in self.server.tick_chunks.removed() {
-            self.server.random_tick_sections.0.remove(&key);
+            self.server.chunk_ticking.random_tick_sections.remove(&key);
             self.common.portal_sections.remove(&key);
             self.common
                 .block_ticks

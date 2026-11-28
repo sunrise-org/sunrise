@@ -1006,7 +1006,7 @@ impl crate::game::ServerGame<'_> {
         }
         let mut scratch = std::mem::take(&mut self.server.spawn_scratch);
         self.spawning_chunks(&self.level_players(), &mut scratch);
-        let levels = self.server.tickets.0.levels();
+        let levels = self.server.chunk_ticking.tickets.levels();
         scratch
             .candidates
             .retain(|&(x, z)| levels.random_ticking(x, z));

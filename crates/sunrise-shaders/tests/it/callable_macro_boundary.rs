@@ -148,11 +148,11 @@ fn expanded_calls_continue_across_lines_and_keep_original_file_origins() {
     let pack = original.open();
     let fragment = preprocess(&pack, "final.fsh", &Macros::default());
     assert!(
-        fragment.diagnostics.is_empty(),
+        fragment.diagnostics().is_empty(),
         "{:?}",
-        fragment.diagnostics
+        fragment.diagnostics()
     );
-    assert!(fragment.warnings.is_empty(), "{:?}", fragment.warnings);
+    assert!(fragment.warnings().is_empty(), "{:?}", fragment.warnings());
     let lines: Vec<_> = fragment.code().lines().collect();
     let value = lines
         .iter()
@@ -195,7 +195,7 @@ fn continuation_detection_does_not_consume_preprocessor_directives() {
         "#define ROUTE OFFSET\n#define OFFSET(x) x\nROUTE(\n#define VALUE 9\nVALUE\n)",
     )]);
     let output = preprocess(&original.open(), "final.fsh", &Macros::default());
-    assert!(output.diagnostics.is_empty());
+    assert!(output.diagnostics().is_empty());
     assert_eq!(
         output.code().lines().collect::<Vec<_>>(),
         ["", "", "OFFSET(", "", "9", ")"]
@@ -210,7 +210,7 @@ fn an_expanded_callable_can_take_an_opening_parenthesis_from_the_next_line() {
         "#define ROUTE OFFSET\n#define OFFSET(x) x\nROUTE\n\n(9)\nfloat after;",
     )]);
     let output = preprocess(&original.open(), "final.fsh", &Macros::default());
-    assert!(output.diagnostics.is_empty());
+    assert!(output.diagnostics().is_empty());
     assert_eq!(
         output.code().lines().collect::<Vec<_>>(),
         ["", "", "9", "", "", "float after;"]

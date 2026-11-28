@@ -1,4 +1,7 @@
 use super::*;
+use crate::game::state_seam::{
+    ActorInLevel, LevelId, LevelView, PlayerId, PlayerWrite, active_views,
+};
 
 fn snap_use_item_rotation(yaw: &mut f32, pitch: &mut f32, target_yaw: f32, target_pitch: f32) {
     let target_yaw = sunrise_gameplay_common::game::remote::wrap_degrees(target_yaw);
@@ -667,17 +670,22 @@ impl crate::game::ServerGame<'_> {
             }
         };
         let (mut consumed, mut block_fell_through) = (false, false);
+        let level = LevelId::loaded(self, self.common.dim);
         let Some(host) = self.server.lan.as_mut() else {
             return Err(ActionRefused::Stale);
         };
+        let actor = host
+            .hub
+            .guests
+            .get(gi)
+            .filter(|g| g.conn == conn)
+            .map(PlayerId::guest);
         // handleUseItemOn: within reach, then the hit point within
         // a block of the block's centre (logged when it isn't).
         let context = &host.hub.loop_context;
-        if !host
-            .hub
-            .guests
-            .update(gi, |g| g.reaches_block(context, hit.pos))
-        {
+        if !PlayerWrite::update(&mut host.hub.guests, gi, |view| {
+            view.guest.reaches_block(context, hit.pos)
+        }) {
             return Err(ActionRefused::OutOfReach);
         }
         let inside = (0..3).all(|k| (hit.point[k] - f64::from(hit.pos[k]) - 0.5).abs() < 1.0000001);
@@ -697,19 +705,24 @@ impl crate::game::ServerGame<'_> {
             self.lan_log_event(sunrise_sim::lan::hub::HostEvent::Warn(line));
             return Err(ActionRefused::OutOfReach);
         }
-        let spectator = self
-            .server
-            .lan
-            .as_ref()
-            .is_some_and(|host| host.hub.guests[gi].spectator());
+        let actor = actor
+            .zip(level)
+            .map(|(player, level)| ActorInLevel { player, level });
+        let (spectator, min_y, max_y) = if let Some((level, player)) = active_views(self, level, gi)
+        {
+            let spectator = player.guest.spectator();
+            let (min, max) = level.build_limits();
+            (spectator, min, max)
+        } else {
+            let (min, max) = LevelView::resume(self, level).build_limits();
+            (false, min, max)
+        };
         let face = hit.face;
         // handleUseItemOn: above or below the world nothing is used and
         // the player is told the limit (the blocks are not resent);
         // under spawn protection nothing is used or placed; the player
         // is told and the blocks below go back. mayInteract: nothing is
         // used on a block outside the world border either.
-        let min_y = self.common.world.shape.min_y;
-        let max_y = self.common.world.shape.max_y() - 1;
         if hit.pos[1] > max_y {
             self.build_limit_message(conn, true, max_y);
             return Err(ActionRefused::Protected);
@@ -722,9 +735,7 @@ impl crate::game::ServerGame<'_> {
         if self.under_spawn_protection(gi, hit.pos) {
             self.spawn_protection_message(conn, hit.pos);
             refused = Some(ActionRefused::Protected);
-        } else if self
-            .common
-            .border
+        } else if LevelView::resume(self, level)
             .contains(f64::from(hit.pos[0]), f64::from(hit.pos[2]))
         {
             if spectator && self.spectator_use_portal(conn, gi, hit.pos) {
@@ -733,7 +744,7 @@ impl crate::game::ServerGame<'_> {
             }
             let logged = self.common.world.block_log.as_ref().map_or(0, Vec::len);
             let heard = self.server.pending_sounds.len();
-            let used = self.as_guest_at(gi, conn, |g| {
+            let action = |g: &mut Self| {
                 let attempt = g.was_block_placement_attempt(hand);
                 let saved = (g.server.forced_hit, g.server.guest_use);
                 g.server.forced_hit = Some(hit);
@@ -766,10 +777,16 @@ impl crate::game::ServerGame<'_> {
                     attempt,
                     fell_through,
                 )
-            });
+            };
+            let used = match actor {
+                Some(actor) => actor.with_guest(self, gi, conn, action),
+                None => self.as_guest_at(gi, conn, action),
+            };
             let (swung, result, attempt, fell_through) = used.map_err(|_| ActionRefused::Stale)?;
             block_fell_through = fell_through;
             self.lan_swing_back(conn, Some(swung));
+            #[cfg(test)]
+            crate::game::state_seam::tests::record_pending_placement_sounds(self, conn, heard);
             self.guest_use_sounds(conn, logged, heard);
             // A placement that did nothing at the top or bottom of the
             // world says why. Vanilla asks twice for the top (once
@@ -807,12 +824,15 @@ impl crate::game::ServerGame<'_> {
             );
         }
         // The client predicted a result: correct it with what really is.
-        let Some(host) = self.server.lan.as_mut() else {
+        let level = actor.map_or_else(
+            || LevelView::resume(self, level),
+            |actor| actor.resume_level(self),
+        );
+        let Some(host) = self.server.lan.as_ref() else {
             return refused.map_or(Ok(consumed), Err);
         };
         for pos in [hit.pos, hit.beside()] {
-            host.hub
-                .send_authoritative_block(conn, &self.common.world, pos);
+            host.hub.send_authoritative_block(conn, level.world(), pos);
         }
         refused.map_or(Ok(consumed), Err)
     }
@@ -829,6 +849,7 @@ impl crate::game::ServerGame<'_> {
     /// The fence of the knot whose entity id is `id` (`lan_assign_ids`).
     pub(in crate::game::server_side) fn knot_at_id(&self, id: i32) -> Option<[i32; 3]> {
         self.server
+            .knot_state
             .knot_ids
             .iter()
             .find(|&(_, &knot)| knot as i32 == id)

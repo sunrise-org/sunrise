@@ -17,7 +17,7 @@ pub(crate) mod tests {
 
     use mod_api::EquipmentSlot;
 
-    use mod_api::client::first_person::Hand;
+    use mod_api::Hand;
 
     use sunrise_gameplay::game::commands::Target;
 

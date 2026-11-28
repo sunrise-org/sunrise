@@ -407,8 +407,8 @@ pub(crate) mod postbaseline_lodestone_controls {
         // Direct class ticks do not refresh the headless fixture's tickets.
         // Use the existing ticket model: only chunk zero is forced to tick.
         game.server
+            .chunk_ticking
             .tickets
-            .0
             .update(Some(sunrise_sim::ticket_levels::Sources {
                 forced: vec![(0, 0)],
                 ..Default::default()

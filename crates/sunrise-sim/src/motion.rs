@@ -2,11 +2,15 @@
 //! jump, collision, support, restitution and stored health bindings, and
 //! powder snow's block-inside effects and freezing. Entity lifecycle, other
 //! block-inside effects and audiovisual event consumers remain separate work.
+mod hurt;
+#[cfg(test)]
+mod hurt_tests;
 mod integrate;
 mod player_init;
+mod pose_update;
 use crate::{
-    Result, assets::Assets, collisions::SceneCollisions, health::LivingLend,
-    living_attributes::attribute_error, world::World,
+    Result, assets::Assets, collisions::SceneCollisions, living_attributes::attribute_error,
+    mobs::LivingLend, world::World,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -17,6 +21,7 @@ use std::{
 use sunrise_core::{
     geometry::{Aabb, Direction, Vec3, VoxelShape, traverse_blocks, trig},
     position::BlockPos,
+    random::LegacyRandom,
     random::RandomSource,
 };
 use sunrise_world::native_load_context::LoopContext;
@@ -59,6 +64,25 @@ mod exclusions;
 mod restitution;
 pub use body_restitution::{BodyCollision, BodyContact, BodyMotion, BodyMove, BodyRestitution};
 pub mod section_writes;
+
+/// `Entity.random` of a client's copy of entity `id` first seen at `position`: vanilla's is its
+/// own (`RandomSource.create()`), drawn on by nothing else; this one is seeded from the two.
+pub fn entity_random(id: u32, position: Vec3) -> LegacyRandom {
+    let mut random = LegacyRandom::new(
+        i64::from(id).wrapping_mul(0x5DEE_CE66D)
+            ^ (position.x.to_bits() as i64)
+            ^ (position.z.to_bits() as i64).rotate_left(17),
+    );
+    let _ = random.next_int();
+    random
+}
+
+/// `SlimeBlock.stepOn`: a slow walk or slide on slime drags the horizontal
+/// speed (`0.4 + |dy| * 0.2`); a fast vertical speed leaves it alone.
+pub fn slime_step_on_scale(velocity_y: f64) -> Option<f64> {
+    let abs_delta_y = velocity_y.abs();
+    (abs_delta_y < 0.1).then_some(0.4 + abs_delta_y * 0.2)
+}
 
 /// A living entity jumped (`LivingEvent.LivingJumpEvent`); `velocity` is its motion right after
 /// the jump.
@@ -2160,6 +2184,7 @@ mod tests {
 
     use super::environment::fly_into_wall_damage;
     use super::*;
+    use sunrise_world::block_landing::{BlockLandingWorld, LandingDamage};
 
     /// `LocalPlayer.isHorizontalCollisionMinor`: sliding along a wall at a
     /// small angle to the input is minor; a sideways slide is not.
@@ -5807,5 +5832,87 @@ mod tests {
         assert_eq!(kept(soul_sand, -59.8, false, true), 1.0, "gliding");
         let walking = kept(soul_sand, -60.125, false, false);
         assert!((walking - 0.4).abs() < 1.0e-6, "walking: {walking}");
+    }
+
+    /// Both landing sources use the world's frozen definitions and current
+    /// damage tags, including a tag-only reload with no pack definitions left.
+    #[test]
+    #[ignore = "daily"]
+    fn datapack_damage_landing_uses_world_armor_tags_and_exhaustion() {
+        use crate::{assets::Assets, motion::MotionResources, world::World};
+        use sunrise_world::loot::PackOverlay;
+        let root = crate::prepared_test_root::prepared_root(&[]);
+        let assets = Assets::load(&root).unwrap();
+        let collision = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let files = vec![
+            (
+                "damage_type/minecraft:fall".into(),
+                vec![br#"{"message_id":"fall","scaling":"never","exhaustion":0.75}"#.to_vec()],
+            ),
+            (
+                "damage_type/minecraft:stalagmite".into(),
+                vec![br#"{"message_id":"stalagmite","scaling":"never","exhaustion":0.5}"#.to_vec()],
+            ),
+            (
+                "tags/minecraft:damage_type/bypasses_armor".into(),
+                vec![br#"{"replace":true,"values":[]}"#.to_vec()],
+            ),
+        ];
+        let open = resources
+            .health
+            .with_packs(&root, &PackOverlay::new(&files), false)
+            .unwrap();
+        let reloaded = open.with_packs(&root, &PackOverlay::NONE, true).unwrap();
+        let mut scene = World::test_scene_with_placements(&assets, &[], 1).unwrap();
+        for (source, exhaustion, name) in [
+            (LandingDamage::Fall, 0.75, "minecraft:fall"),
+            (LandingDamage::Stalagmite, 0.5, "minecraft:stalagmite"),
+        ] {
+            for (health, bypass) in [(&resources.health, true), (&open, false), (&reloaded, true)] {
+                let mut player = crate::motion::PlayerMotion::new(&resources, Vec3::ZERO);
+                let key = player.attributes.key("minecraft:armor").unwrap();
+                let armor = player.attributes.get_instance(Some(key)).unwrap().unwrap();
+                player
+                    .attributes
+                    .edit(&armor, |a, o| a.set_base_value(20.0, o))
+                    .unwrap();
+                BlockLandingWorld::cause_fall_damage(
+                    &mut MotionWorld {
+                        side: crate::motion::dry_side(),
+                        entities: &[],
+                        player: &mut player,
+                        scene: &mut scene,
+                        assets: &assets,
+                        collision_binding: &collision,
+                        resources: &resources,
+                        health,
+                        tag_items: None,
+                        block_registries: None,
+                        loop_context: crate::test_resources::server_loop_context(),
+                        damage_hooks: &crate::health::DamageHooks::NONE,
+                    },
+                    7.0,
+                    1.0,
+                    source,
+                )
+                .unwrap();
+                if bypass {
+                    assert_eq!(player.health.health(), 16.0, "{name}");
+                } else {
+                    assert!(
+                        player.health.health() > 16.0 && player.health.health() < 20.0,
+                        "{name}"
+                    );
+                }
+                assert_eq!(player.hurt_log.last().unwrap().source, name);
+                let expected = if std::ptr::eq(health, &resources.health) {
+                    0.0
+                } else {
+                    exhaustion
+                };
+                assert_eq!(player.health.food.exhaustion, expected, "{name}");
+            }
+        }
     }
 }

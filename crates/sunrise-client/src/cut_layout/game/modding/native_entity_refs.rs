@@ -151,8 +151,6 @@ pub(crate) mod tests {
     use sunrise_gameplay_common::game::native_server::NativeServerGameExt3;
     #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::player_identity::PlayerIdentityGameExt1;
-    #[cfg(feature = "client")]
-    pub use sunrise_gameplay_common::game::test_fixtures::{fixture_facts_mut, resolve_parts};
     pub use sunrise_gameplay_common::game::test_fixtures::{
         fixture_root, record_key, run_fresh_cases,
     };
@@ -208,280 +206,10 @@ pub(crate) mod tests {
     }
 
     #[cfg(feature = "client")]
-    pub(crate) fn with_game(test: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>)) {
-        with_game_at(fixture_root(), test);
-    }
-
-    /// Boots a server with the origin's entity-ticking neighbourhood loaded.
-    #[cfg(feature = "client")]
-    pub(crate) fn with_resident_game(
-        test: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>),
-    ) {
-        with_game(|game| {
-            prepare_entity_ticking_neighborhood(game, sunrise_core::position::ChunkPos::new(0, 0));
-            test(game);
-        });
-    }
-
-    #[cfg(feature = "client")]
-    pub(crate) fn with_game_at(
-        root: std::path::PathBuf,
-        test: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>),
-    ) {
-        with_game_role(
-            root,
-            sunrise_gameplay_common::game::execution_role::ExecutionRole::IntegratedServer,
-            test,
-        );
-    }
-
-    #[cfg(feature = "client")]
-    pub(crate) fn with_client_game(
-        test: impl FnOnce(&mut sunrise_client_gameplay::game::ClientGame<'_>),
-    ) {
-        with_game_role_client(
-            fixture_root(),
-            sunrise_gameplay_common::game::execution_role::ExecutionRole::Client,
-            test,
-        );
-    }
-
-    #[cfg(feature = "client")]
-    pub(crate) fn with_uncached_client_game(
-        test: impl FnOnce(&mut sunrise_client_gameplay::game::ClientGame<'_>),
-    ) {
-        with_game_role_and_facts_with_client(
-            fixture_root(),
-            sunrise_gameplay_common::game::execution_role::ExecutionRole::Client,
-            None,
-            false,
-            test,
-        );
-    }
-
-    #[cfg(feature = "client")]
-    pub(crate) fn with_game_role(
-        root: std::path::PathBuf,
-        role: sunrise_gameplay_common::game::execution_role::ExecutionRole,
-        test: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>),
-    ) {
-        with_game_role_and_facts(root, role, None, test);
-    }
-
-    #[cfg(feature = "client")]
-    pub(crate) fn with_game_role_client(
-        root: std::path::PathBuf,
-        role: sunrise_gameplay_common::game::execution_role::ExecutionRole,
-        test: impl FnOnce(&mut sunrise_client_gameplay::game::ClientGame<'_>),
-    ) {
-        with_game_role_and_facts_client(root, role, None, test);
-    }
-
-    /// Configure the fixture's owned gameplay facts before constructing the game.
-    #[cfg(feature = "client")]
-    pub(crate) fn with_game_role_and_facts(
-        root: std::path::PathBuf,
-        role: sunrise_gameplay_common::game::execution_role::ExecutionRole,
-        configure: Option<
-            fn(&sunrise_world::registry::BlockRegistry, &mut sunrise_items::blocks::BlockFacts),
-        >,
-        test: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>),
-    ) {
-        with_game_role_and_facts_with(root, role, configure, configure.is_none(), test);
-    }
-
-    #[cfg(feature = "client")]
-    pub(crate) fn with_game_role_and_facts_client(
-        root: std::path::PathBuf,
-        role: sunrise_gameplay_common::game::execution_role::ExecutionRole,
-        configure: Option<
-            fn(&sunrise_world::registry::BlockRegistry, &mut sunrise_items::blocks::BlockFacts),
-        >,
-        test: impl FnOnce(&mut sunrise_client_gameplay::game::ClientGame<'_>),
-    ) {
-        with_game_role_and_facts_with_client(root, role, configure, configure.is_none(), test);
-    }
-
-    #[cfg(feature = "client")]
-    fn with_game_role_and_facts_with(
-        root: std::path::PathBuf,
-        role: sunrise_gameplay_common::game::execution_role::ExecutionRole,
-        configure: Option<
-            fn(&sunrise_world::registry::BlockRegistry, &mut sunrise_items::blocks::BlockFacts),
-        >,
-        cached: bool,
-        test: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>),
-    ) {
-        use crate::game::{load_resources, load_resources_uncached};
-        use crate::settings::Settings;
-        use mod_api::Authority;
-        use sunrise_gameplay_common::game::{Options, Progress};
-
-        sunrise_gameplay_common::game::test_fixtures::prepare_game_boot(
-            &root,
-            mod_platform::__private::part_tests::register_game_keys,
-        );
-        let saves = tempfile::tempdir().unwrap();
-        let settings = Settings::default();
-        let mut loaded = if cached {
-            load_resources(
-                sunrise_assets::resource_source::ResourceRoot::directory(root.clone()),
-                Vec::new(),
-                None,
-                &root,
-                &settings,
-                std::time::Instant::now(),
-                false,
-                role,
-                &Progress::new(),
-                &mut |_, _| unreachable!(),
-            )
-            .unwrap()
-        } else {
-            load_resources_uncached(
-                sunrise_assets::resource_source::ResourceRoot::directory(root.clone()),
-                Vec::new(),
-                None,
-                &root,
-                &settings,
-                std::time::Instant::now(),
-                false,
-                role,
-                &Progress::new(),
-                &mut |_, _| unreachable!(),
-            )
-            .unwrap()
-        };
-        if let Some(configure) = configure {
-            configure(
-                loaded.pack.assets.registry,
-                fixture_facts_mut(&mut loaded.resources),
-            );
-        }
-        let mut options = Options::parse(std::iter::empty()).unwrap().unwrap();
-        options.resources = root.clone();
-        options.execution_role = role;
-        options.game_dir = Some(saves.path().to_path_buf());
-        let mut game = sunrise_gameplay::game::ServerGame::new(
-            &loaded.resources,
-            loaded.pack,
-            options,
-            settings.sim_settings(),
-            None,
-            crate::game::profile_resolver,
-        )
-        .unwrap();
-        game.reset_entity_residency();
-        game.native_lifecycle
-            .begin_open(Some(Authority::IntegratedServer));
-
-        // A game that opened its world resolves its parts; the harness stops
-        // short of the open, so do it here for the by-state part table.
-        resolve_parts(&game).unwrap();
-        game.install_root_block_transformers();
-        // The title's save folder is under the working directory: give each test its own, so a
-        // test that saves leaves the checkout clean and parallel tests don't share files.
-        game.server.save.0 = std::sync::Arc::new(sunrise_sim::save::SaveDir::new(
-            saves.path().to_path_buf(),
-            sunrise_sim::save::LevelShape::OVERWORLD,
-            Some(Default::default()),
-        ));
-        test(&mut game);
-    }
-
-    #[cfg(feature = "client")]
-    fn with_game_role_and_facts_with_client(
-        root: std::path::PathBuf,
-        role: sunrise_gameplay_common::game::execution_role::ExecutionRole,
-        configure: Option<
-            fn(&sunrise_world::registry::BlockRegistry, &mut sunrise_items::blocks::BlockFacts),
-        >,
-        cached: bool,
-        test: impl FnOnce(&mut sunrise_client_gameplay::game::ClientGame<'_>),
-    ) {
-        use crate::audio::Audio;
-        use crate::game::{load_resources, load_resources_uncached};
-        use crate::settings::Settings;
-        use mod_api::Authority;
-        use sunrise_gameplay_common::game::execution_role::ExecutionRole;
-        use sunrise_gameplay_common::game::{Options, Progress};
-
-        assert_eq!(role, ExecutionRole::Client);
-        sunrise_gameplay_common::game::test_fixtures::prepare_game_boot(
-            &root,
-            mod_platform::__private::part_tests::register_game_keys,
-        );
-        let saves = tempfile::tempdir().unwrap();
-        let settings = Settings::default();
-        let mut loaded = if cached {
-            load_resources(
-                sunrise_assets::resource_source::ResourceRoot::directory(root.clone()),
-                Vec::new(),
-                None,
-                &root,
-                &settings,
-                std::time::Instant::now(),
-                false,
-                role,
-                &Progress::new(),
-                &mut |_, _| unreachable!(),
-            )
-            .unwrap()
-        } else {
-            load_resources_uncached(
-                sunrise_assets::resource_source::ResourceRoot::directory(root.clone()),
-                Vec::new(),
-                None,
-                &root,
-                &settings,
-                std::time::Instant::now(),
-                false,
-                role,
-                &Progress::new(),
-                &mut |_, _| unreachable!(),
-            )
-            .unwrap()
-        };
-        if let Some(configure) = configure {
-            configure(
-                loaded.pack.assets.registry,
-                fixture_facts_mut(&mut loaded.resources),
-            );
-        }
-        let mut options = Options::parse(std::iter::empty()).unwrap().unwrap();
-        options.resources = root.clone();
-        options.execution_role = role;
-        options.game_dir = Some(saves.path().to_path_buf());
-        let mut game = sunrise_client_gameplay::game::ClientGame::new(
-            &loaded.resources,
-            loaded.client_res.unwrap(),
-            loaded.pack,
-            loaded.client_pack.unwrap(),
-            loaded.gui.unwrap(),
-            options,
-            settings,
-            Audio::silent(&sunrise_assets::resource_source::ResourceSource::directory(
-                root.to_path_buf(),
-            )),
-            None,
-            sunrise_gameplay::game::server_side::integrated::serve,
-            sunrise_gameplay::game::server_side::integrated::run_component_harness_on_server,
-            crate::game::session_verifier(),
-            crate::game::profile_resolver,
-        )
-        .unwrap();
-
-        game.native_lifecycle
-            .begin_open(Some(Authority::IntegratedServer));
-
-        // A game that opened its world resolves its parts; the harness stops
-        // short of the open, so do it here for the by-state part table.
-        resolve_parts(&game).unwrap();
-        // The title's save folder is under the working directory: give each test its own, so a
-        // test that saves leaves the checkout clean and parallel tests don't share files.
-
-        test(&mut game);
-    }
+    pub(crate) use super::super::super::native_item_places_test_support::{
+        with_client_game, with_game, with_game_at, with_game_role, with_game_role_client,
+        with_resident_game, with_uncached_client_game,
+    };
 
     #[test]
     #[ignore = "daily"]
@@ -1124,6 +852,130 @@ pub(crate) mod tests {
                 assert_eq!(game.world.block(x, y, z), lit);
             }
             assert_eq!(game.world.block(c[0], c[1], c[2]), glass);
+        });
+    }
+
+    /// `DiodeBlock.checkTickOnNeighbor` schedules from `neighborChanged` at `HIGH` through
+    /// `level.scheduleTick(pos, block, delay, priority)` (#6354): a part's
+    /// `schedule_block_tick_with_priority` from the in-line level writer, heard while a vanilla
+    /// repeater's scheduled tick powers it, joins the queue `LevelRef::schedule_block_tick`
+    /// writes. It does not run in the tick that scheduled it, and on the tick it is due it runs
+    /// before a `NORMAL` tick due then that was scheduled earlier (`LevelTicks`'s
+    /// trigger tick, priority, then sub-tick order). Its `schedule_fluid_tick_with_priority`
+    /// queues a water tick at `VERY_HIGH` in the fluid queue.
+    #[test]
+    #[ignore = "daily"]
+    fn a_part_schedules_a_high_priority_tick_from_neighbor_changed_that_runs_first_next_tick() {
+        use mod_platform::__private::part_tests::{
+            PriorityTick, priority_tick_game_thread, priority_ticks,
+        };
+        use sunrise_core::{position::BlockPos, ticks::TickPriority};
+
+        // The fixture installs its mod for the process: run it in a child of its own.
+        if run_fresh_cases(
+            "cut_layout::game::server_side::native_entity_refs::tests::a_part_schedules_a_high_priority_tick_from_neighbor_changed_that_runs_first_next_tick",
+            "SUNRISE_PRIORITY_TICK_CHILD",
+            &["repeater"],
+        ) {
+            return;
+        }
+        priority_tick_game_thread();
+        with_game(|game| {
+            game.options.dedicated = Some(Vec::new());
+            let registry = game.pack.assets.registry;
+            let glass = registry.default_state("minecraft:glass").unwrap();
+            let state = |name: &str, properties: &[(&str, &str)]| {
+                registry
+                    .resolve(&sunrise_world::chunk::BlockState {
+                        name: name.into(),
+                        properties: properties
+                            .iter()
+                            .map(|&(key, value)| (key.into(), value.into()))
+                            .collect(),
+                    })
+                    .unwrap()
+            };
+            let repeater = |powered: &str| {
+                state(
+                    "minecraft:repeater",
+                    &[
+                        ("facing", "west"),
+                        ("delay", "1"),
+                        ("locked", "false"),
+                        ("powered", powered),
+                    ],
+                )
+            };
+            for (x, z) in (-1..=1).flat_map(|x| (-1..=1).map(move |z| (x, z))) {
+                let mut chunk = sunrise_level::chunk::Chunk::empty(x, z);
+                chunk.lit = true;
+                game.world.chunks.insert((x, z), std::sync::Arc::new(chunk));
+            }
+            game.block_ticks
+                .add_empty_chunk(sunrise_core::position::ChunkPos::new(0, 0))
+                .unwrap();
+            // A repeater on stone reading a redstone block west of it, its output glass `a`
+            // east of it; glass `b` far from both.
+            let (a, b) = ([8, 64, 5], [8, 64, 12]);
+            let stone = registry.default_state("minecraft:stone").unwrap();
+            game.world.set(7, 63, 5, stone).unwrap();
+            game.world
+                .set(6, 64, 5, state("minecraft:redstone_block", &[]))
+                .unwrap();
+            game.world.set(7, 64, 5, repeater("false")).unwrap();
+            for [x, y, z] in [a, b] {
+                game.world.set(x, y, z, glass).unwrap();
+            }
+            let start = game.world.game_time;
+            let glass_block = game.res.behaviours().block(glass);
+            let repeater_block = game.res.behaviours().block(repeater("false"));
+            // `b`'s NORMAL tick, due next tick, is queued first; then the repeater's, due now.
+            game.block_ticks.schedule_block(
+                start,
+                BlockPos::new(b[0], b[1], b[2]),
+                glass_block,
+                1,
+                TickPriority::Normal,
+            );
+            game.block_ticks.schedule_block(
+                start,
+                BlockPos::new(7, 64, 5),
+                repeater_block,
+                0,
+                TickPriority::Normal,
+            );
+            assert!(priority_ticks().is_empty());
+
+            // The repeater's tick powers it (`DiodeBlock.tick`), and its `onPlace` updates `a`
+            // (`updateNeighborsInFront`): `a` schedules its HIGH tick, which waits, and a
+            // VERY_HIGH water tick, which the in-line writer queues at that priority.
+            game.tick_scheduled().unwrap();
+            assert_eq!(game.world.block(7, 64, 5), repeater("true"));
+            assert_eq!(
+                priority_ticks(),
+                [
+                    PriorityTick::Scheduled(a, true),
+                    PriorityTick::ScheduledFluid(a, true)
+                ]
+            );
+            let water =
+                sunrise_core::ticks::TickTypeId(sunrise_world::fluid::FluidKind::Water.tick_id());
+            let fluid_ticks: Vec<_> = game
+                .block_ticks
+                .fluids
+                .all_queued()
+                .filter(|tick| tick.pos == BlockPos::new(a[0], a[1], a[2]) && tick.kind == water)
+                .map(|tick| (tick.trigger_tick, tick.priority))
+                .collect();
+            assert_eq!(fluid_ticks, [(start + 5, TickPriority::VeryHigh)]);
+
+            // Both due now: `a`'s HIGH tick runs before `b`'s NORMAL one, queued before it.
+            game.world.game_time = start + 1;
+            game.tick_scheduled().unwrap();
+            assert_eq!(
+                priority_ticks(),
+                [PriorityTick::Ticked(a), PriorityTick::Ticked(b)]
+            );
         });
     }
 
@@ -3273,7 +3125,7 @@ pub(crate) mod tests {
             // hooks run, and before tick_block_entities synchronizes animations.
             // Exercise that producer with both an absent and a closed snapshot.
             for had_snapshot in [false, true] {
-                game.server.be_anims.shulkers.remove(&[0, 64, 0]);
+                game.server.be_anims.level.shulkers.remove(&[0, 64, 0]);
                 game.world.shulkers.remove(&[0, 64, 0]);
                 if had_snapshot {
                     game.world.shulkers.insert([0, 64, 0], Shulker::default());
@@ -3286,7 +3138,7 @@ pub(crate) mod tests {
                 }
                 assert!(game.container_openers_changed((0, 64, 0), true));
                 assert_eq!(
-                    game.server.be_anims.shulkers[&[0, 64, 0]].status,
+                    game.server.be_anims.level.shulkers[&[0, 64, 0]].status,
                     ShulkerStatus::Opening
                 );
                 for parked in [false, true] {
@@ -3323,7 +3175,7 @@ pub(crate) mod tests {
                     );
                 }
             }
-            game.server.be_anims.shulkers.remove(&[0, 64, 0]);
+            game.server.be_anims.level.shulkers.remove(&[0, 64, 0]);
             for status in [
                 ShulkerStatus::Closed,
                 ShulkerStatus::Opening,

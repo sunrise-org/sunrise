@@ -51,6 +51,23 @@ random-ticks the position as `tickChunk` does, lava's fluid tick included. Both 
 level random and send their level events exactly as the normal ticks do; neither reads or changes
 the tick queue, which `schedule_block_tick` fills.
 
+`schedule_block_tick(host, pos, block, delay, priority)` and `schedule_fluid_tick(host, pos,
+fluid, delay, priority)` queue a tick from any server hook, as `ScheduledTickAccess.scheduleTick`
+(which `LevelAccessor` inherits) does: the queue `update_shape` writes, saved with its chunk. A
+chunk's own queue runs by trigger tick, then priority, then the order scheduled; across chunks
+there is no single order, as each chunk with a due tick competes by its next tick's priority,
+then the order scheduled, not by trigger tick (`LevelTicks.collectTicks`). So ticks due on the
+same game tick run by priority, then the order scheduled, in every chunk, but an overdue `Low`
+tick in one chunk can run after a newer `High` tick in another. A block tick is
+ignored when the block at `pos` is no longer `block` as it comes due. The queue keeps one tick per
+type and position: a repeat with another delay or priority is dropped, and the first keeps its
+deadline and priority. Inside a transaction the tick is queued at commit, its delay counted from
+there. `Ok(false)` is a chunk with no tick container (unloaded, or loaded with no tick list yet);
+the height is not checked, as vanilla's queue checks only the container. An in-line level writer
+(`neighbor_changed`, `tick_block`, `update_shape`) has the same call as
+`LevelTicksHost::schedule_block_tick_with_priority(pos, block, delay, priority)` and
+`schedule_fluid_tick_with_priority`: one engine call, one queue, one `TickPriority`.
+
 `can_see_sky(host, pos)` is `canSeeSky`: full sky light. `line_of_sight(host, from, to)` delegates
 to `clip` with `ClipBlock::Collider` and `ClipFluid::None` (with no 128-block entity distance
 check) and reports whether the segment misses; it returns `None` when the segment enters an

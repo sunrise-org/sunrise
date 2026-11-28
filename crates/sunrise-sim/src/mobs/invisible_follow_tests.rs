@@ -24,6 +24,7 @@ fn a_follow_mob_goal_ignores_an_invisible_mob() {
             let seen = [target.seen(None, &crate::items::Items::empty())];
             let world = crate::mobs::MobWorld {
                 side: crate::motion::dry_side(),
+                variant_tables: None,
                 others: &seen,
                 ..w.clone()
             };

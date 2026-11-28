@@ -1404,8 +1404,21 @@ pub fn vanilla_id(s: Species) -> &'static str {
             .map(|d| format!("minecraft:{}", d.name))
             .collect()
     });
-    let index = ALL.iter().position(|d| d.species == s).unwrap_or(0);
-    &IDS[index]
+    // A species' index in `ALL`, resolved once so a hit's damage path does not scan the table.
+    static INDEX: std::sync::LazyLock<Vec<usize>> = std::sync::LazyLock::new(|| {
+        let count = ALL
+            .iter()
+            .map(|d| d.species as usize + 1)
+            .max()
+            .unwrap_or(0);
+        let mut index = vec![usize::MAX; count];
+        for (row, d) in ALL.iter().enumerate() {
+            index[d.species as usize] = row;
+        }
+        index
+    });
+    let index = INDEX.get(s as usize).copied().unwrap_or(0);
+    &IDS[if index == usize::MAX { 0 } else { index }]
 }
 /// The species of the vanilla entity type `id` (`minecraft:` and a [`Def::name`]), from a table
 /// built once: the first definition with that name, as a scan of [`ALL`] finds it. None for

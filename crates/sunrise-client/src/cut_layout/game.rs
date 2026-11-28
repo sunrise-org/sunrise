@@ -1,6 +1,10 @@
 pub use crate::game_facade::*;
 #[cfg(test)]
-pub(crate) use resource_load::{load_resources, load_resources_skip_lang, load_resources_uncached};
+pub(crate) use resource_load::load_resources;
+#[cfg(test)]
+pub(crate) use resource_load::load_resources_skip_lang;
+#[cfg(test)]
+pub(crate) use resource_load::load_resources_uncached;
 #[cfg(all(test, feature = "client"))]
 pub(crate) use sunrise_client_gameplay::game::client_side::test_key_codes::{
     drop_held_behind_dialog, gameplay_has_keyboard, glfw_button, glfw_modifiers, keyboard_button,
@@ -852,6 +856,15 @@ pub(crate) fn run_with(
         ticket_activation,
     )
 }
+
+#[cfg(all(test, feature = "client", not(feature = "test-support")))]
+#[path = "game/modding/native_item_places_test_support.rs"]
+pub(crate) mod native_item_places_test_support;
+
+#[cfg(all(feature = "test-support", feature = "client"))]
+#[path = "game/modding/native_item_places_test_support.rs"]
+#[doc(hidden)]
+pub mod native_item_places_test_support;
 
 #[path = "game/server_side.rs"]
 #[doc(hidden)]

@@ -1758,6 +1758,7 @@ mod breeding_variant_tests {
             for asks_baby_spawn in [false, true] {
                 let w = MobWorld {
                     side: crate::motion::dry_side(),
+                    variant_tables: None,
                     goal_host: None,
                     asks_baby_spawn,
                     mob_drops: false,
@@ -1823,6 +1824,7 @@ mod breeding_variant_tests {
                 {
                     let world = MobWorld {
                         side: crate::motion::dry_side(),
+                        variant_tables: None,
                         goal_host: None,
                         asks_baby_spawn: ask_mods,
                         mob_drops,

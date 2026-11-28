@@ -9,7 +9,7 @@ pub fn tnt_cart(game: &mut crate::game::ServerGame<'_>, id: u32, silent: bool) {
         .carts
         .push(Minecart::new(id, CartKind::Tnt, Vec3::new(0.5, 64.0, 0.5)));
     game.common.persist.raw.remove(&id);
-    game.server.lan_entity_events.clear();
+    game.server.lan_queues.entity_events.clear();
     if silent {
         let (tag, _) = sunrise_core::nbt::parse_snbt("{Silent:1b}").unwrap();
         game.common.persist.raw.insert(id, tag);

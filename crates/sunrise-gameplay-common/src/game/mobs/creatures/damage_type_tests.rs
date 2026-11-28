@@ -37,6 +37,7 @@ fn a_creeper_blast_is_a_player_explosion() {
     assert_eq!(source_damage_type(blast(None)), "minecraft:explosion");
     // The other kinds do not ask.
     let bite = Damage {
+        direct: None,
         kind: DamageKind::MobAttack,
         ..creeper
     };

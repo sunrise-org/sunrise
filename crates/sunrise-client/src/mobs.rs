@@ -15,3 +15,6 @@ pub use crate::mobs_render::{
 };
 pub use model::{ModelNormals, Part, Polygon};
 // END CLIENT-ONLY MOBS BLOCK
+
+#[cfg(test)]
+mod stab_pause_tests;

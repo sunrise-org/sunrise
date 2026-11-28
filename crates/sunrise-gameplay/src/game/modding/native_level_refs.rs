@@ -504,7 +504,7 @@ impl<'g> ServerGame<'g> {
             return None;
         }
         let (world, shulkers) = if self.common.dim.key() == level.dimension() {
-            (&self.common.world, &self.server.be_anims.shulkers)
+            (&self.common.world, &self.server.be_anims.level.shulkers)
         } else {
             self.server.side_parked_block_shapes(level.dimension())?
         };
@@ -899,6 +899,87 @@ impl<'g> ServerGame<'g> {
         self.with_level(|b, level, ticks| b.scheduled_fluid_tick(level, ticks, at));
         let _ = self.server_process_level_events();
         true
+    }
+    /// Whether a mod may queue a tick at `pos` of the level in place: `Err` for a stale handle, a
+    /// client or another level; false for a cell a carrier transfer holds, as for every mod
+    /// write. Neither the height nor residency is checked here: `LevelTicks.schedule` needs only
+    /// the chunk's tick container, which the queue checks.
+    fn level_tick_position(
+        &self,
+        level: LevelRef,
+        pos: [i32; 3],
+    ) -> Result<bool, mod_api::LevelWriteError> {
+        self.native_level_world_result(level)?;
+        if self.common.dim.key() != level.dimension() {
+            return Err(mod_api::LevelWriteError::Unavailable);
+        }
+        Ok(!self.common.world.carrier_fences.locks_cell(&pos))
+    }
+    /// `ScheduledTickAccess.scheduleTick(pos, block, delay, priority)` (which `LevelAccessor`
+    /// inherits) in the level in place: the queue a due tick runs from, through
+    /// `api_values::schedule_block_tick`, the call the in-line hosts'
+    /// `schedule_block_tick_with_priority` makes. Inside a transaction the tick is queued at
+    /// commit, its delay counted from there.
+    pub(in crate::game) fn level_schedule_block_tick(
+        &mut self,
+        level: LevelRef,
+        pos: [i32; 3],
+        block: mod_api::BlockKey,
+        delay: i32,
+        priority: mod_api::TickPriority,
+    ) -> Result<bool, mod_api::LevelWriteError> {
+        use mod_api::LevelTicksHost as _;
+        if !self.level_tick_position(level, pos)? {
+            return Ok(false);
+        }
+        if let Some(mut host) = super::journal_level_write::JournalLevelWrite::new(self, level) {
+            return Ok(host.schedule_block_tick_with_priority(pos, block, delay, priority));
+        }
+        let time = self.common.world.game_time;
+        Ok(
+            sunrise_gameplay_common::game::api_values::schedule_block_tick(
+                &mut self.common.block_ticks,
+                self.common.res.behaviours(),
+                time,
+                pos,
+                block,
+                delay,
+                priority,
+            ),
+        )
+    }
+    /// `ScheduledTickAccess.scheduleTick(pos, fluid, delay, priority)` in the level in place, as
+    /// `level_schedule_block_tick`.
+    pub(in crate::game) fn level_schedule_fluid_tick(
+        &mut self,
+        level: LevelRef,
+        pos: [i32; 3],
+        fluid: mod_api::FluidKey,
+        delay: i32,
+        priority: mod_api::TickPriority,
+    ) -> Result<bool, mod_api::LevelWriteError> {
+        if !self.level_tick_position(level, pos)? {
+            return Ok(false);
+        }
+        let Some(kind) =
+            sunrise_gameplay_common::game::native_world_read_common::engine_fluid_kind(fluid)
+        else {
+            return Ok(false);
+        };
+        if let Some(mut host) = super::journal_level_write::JournalLevelWrite::new(self, level) {
+            return Ok(host.schedule_fluid_kind_tick(pos, kind, delay, priority));
+        }
+        let time = self.common.world.game_time;
+        Ok(
+            sunrise_gameplay_common::game::api_values::schedule_fluid_tick(
+                &mut self.common.block_ticks,
+                time,
+                pos,
+                kind,
+                delay,
+                priority,
+            ),
+        )
     }
     /// `tickChunk`'s random tick of `pos` now (`Behaviours::random_tick`). False as for
     /// `level_block_tick`.

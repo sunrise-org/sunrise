@@ -1426,7 +1426,7 @@ pub fn with_controller_tables<R>(
 ) -> R {
     let controllers: Vec<ControllerInfo> = controllers.into_iter().map(Into::into).collect();
     let controllers: &'static [_] = Box::leak(controllers.into_boxed_slice());
-    let _poses = crate::client::arm_pose::test_table(poses.into_iter().map(Into::into).collect());
+    let _poses = crate::content::arm_pose::test_table(poses.into_iter().map(Into::into).collect());
     let _controllers = RestoreControllers(TEST_CONTROLLERS.replace(Some(controllers)));
     f()
 }

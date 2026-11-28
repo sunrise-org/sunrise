@@ -767,7 +767,7 @@ impl crate::game::ServerGame<'_> {
                 if let Some(player) = self.common.player.as_ref() {
                     let mut cancel = false;
                     let reads = || crate::game::server_side::entity_server::hit_reads_of!(self);
-                    let healed = sunrise_sim::health::LivingLend::player(
+                    let healed = sunrise_sim::mobs::LivingLend::player(
                         player.entity_id,
                         &player.attributes,
                         &player.health.data,

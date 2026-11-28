@@ -2,7 +2,7 @@
 //! decoded by the type's own codec (`ParticleTypes.CODEC`); `/particle`
 //! decodes its options with the same function.
 
-use mod_api::client::particles::PositionSource;
+use mod_api::PositionSource;
 use sunrise_core::nbt::{Compound, Tag};
 use sunrise_level::particle_options::{ParticleOptions, ParticleType};
 

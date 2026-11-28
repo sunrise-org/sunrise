@@ -109,7 +109,7 @@ pub(crate) mod tests {
                 let level = host.level("minecraft:overworld").unwrap();
                 let hand = mod_api::ItemPlace::PlayerHand {
                     player: event.player,
-                    hand: mod_api::client::first_person::Hand::Main,
+                    hand: mod_api::Hand::Main,
                 };
                 self.seen.lock().unwrap().push((
                     level.block_state(host, [2, 64, 2]),
@@ -903,7 +903,7 @@ pub(crate) mod tests {
         let me = game.native_acting_id();
         let hand = mod_api::ItemPlace::PlayerHand {
             player: me,
-            hand: mod_api::client::first_person::Hand::Main,
+            hand: mod_api::Hand::Main,
         };
         let water = ItemResource::of(&bucket("minecraft:water_bucket", 1).try_into_api().unwrap());
         let host: &mut dyn ServerHost = &mut game;

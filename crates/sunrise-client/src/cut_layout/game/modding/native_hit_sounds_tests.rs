@@ -19,6 +19,8 @@ use sunrise_sim::motion::PlayerMotion;
 #[derive(Default)]
 struct Handles {
     attacker: Option<EntityRef>,
+    /// `HitHost::causing()`'s id as the listener sees it, unsigned like the level's ids.
+    causing: Option<u32>,
     other: Option<EntityRef>,
     stale: Option<EntityRef>,
     refused: Option<Refusals>,
@@ -43,6 +45,7 @@ impl Hooks for Probe {
         event: &mut LivingIncomingDamageEvent<'_>,
     ) -> Flow {
         let mut handles = self.0.lock().unwrap();
+        handles.causing = level.causing().map(|view| view.id());
         let attacker = handles.attacker.unwrap();
         let (roll, zero_bound) = attacker
             .with_random(level, |rng| {
@@ -144,11 +147,21 @@ fn check(
             for id in [300, 301, 302] {
                 game.mobs.push(Mob::new(id, kind.clone(), Vec3::ZERO, 0.0));
             }
+            if attacker != 7 && !(300..=302).contains(&(attacker as u32)) {
+                // The level allocates unsigned ids; one above `i32::MAX` still names this body.
+                game.mobs
+                    .push(Mob::new(attacker as u32, kind.clone(), Vec3::ZERO, 0.0));
+            }
             let epoch = game.entity(7).unwrap().epoch();
             {
                 let mut handles = handles.lock().unwrap();
-                handles.attacker = game.entity(attacker as u32);
-                handles.other = game.entity(301);
+                // The listener holds the attacker's own level handle, as a mod would after a
+                // lookup: the epoch and the unsigned id are all a handle carries.
+                handles.attacker = Some(EntityRef::new(
+                    WorldEpoch::new(epoch.get()),
+                    attacker as u32,
+                ));
+                handles.other = Some(EntityRef::new(WorldEpoch::new(epoch.get()), 301));
                 handles.stale = Some(EntityRef::new(WorldEpoch::new(epoch.get() + 1), 7));
             }
             // Independently seeded expectations.
@@ -202,6 +215,8 @@ fn check(
             };
             assert_eq!(after, attacker_random.next_int());
             assert_eq!(game.world.random.next_int(), level_random.next_int());
+            // The hook view itself names the causer by the level's unsigned id, high bit intact.
+            assert_eq!(handles.lock().unwrap().causing, Some(attacker as u32));
             // A mob the hit does not lend, and a handle of another open, refuse and queue nothing.
             assert_eq!(
                 handles.lock().unwrap().refused,
@@ -245,6 +260,24 @@ fn a_cancelled_mob_hit_on_a_mob_plays_sounds_and_draws_the_attacking_mobs_random
 fn a_cancelled_mob_hit_on_the_player_plays_sounds_and_draws_the_attacking_mobs_random() {
     check(302, [0.0, 0.0, 0.0], |game| {
         game.mob_hits_player_caused(4.0, [0.0, 0.0, 0.0], "minecraft:mob_attack", Some(302));
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn a_high_bit_mob_id_still_reaches_the_hook_view() {
+    // The level's ids are unsigned; the hit view must not drop one whose high bit an `i32`
+    // cast would sign. The listener still draws the attacker's random and plays its sound.
+    let attacker = 0x8000_0002u32 as i32;
+    check(attacker, [0.0, 0.0, 0.0], |game| {
+        let source = Damage {
+            kind: DamageKind::MobAttack,
+            attacker: Some(Who::Mob(attacker as u32)),
+            from: Some([0.0, 0.0, 0.0]),
+            direct: None,
+            attacker_species: None,
+        };
+        assert!(!game.mob_hits_mob(300, 4.0, source));
     });
 }
 

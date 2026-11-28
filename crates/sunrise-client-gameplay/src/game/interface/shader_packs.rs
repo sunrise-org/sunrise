@@ -221,6 +221,20 @@ pub(in crate::game::client_side) fn read_shader_options(
     Some(options)
 }
 
+/// The macros the Shader Options page reads the pick with, in game and on the title screen:
+/// the standard set, then `renderer`'s (`Renderer::define_pack_macros`: its device's feature
+/// answers, such as `IRIS_FEATURE_PER_BUFFER_BLENDING`, among them), as the load reads it. With
+/// no renderer made yet, the standard set alone, so the device's answers are not there.
+pub(in crate::game) fn shader_options_macros(
+    renderer: Option<&sunrise_client::gfx::Renderer>,
+) -> Macros {
+    let mut macros = Macros::standard();
+    if let Some(renderer) = renderer {
+        renderer.define_pack_macros(&mut macros);
+    }
+    macros
+}
+
 /// Saves the values chosen on the Shader Options page; none chosen removes the file.
 /// Writes the chosen options of `options.pack`; whether they were written.
 pub(in crate::game::client_side) fn write_shader_options(options: &ShaderOptions) -> bool {
@@ -1575,10 +1589,7 @@ impl crate::game::ClientGame<'_> {
 
     /// The Shader Options page opened: the picked pack's options, screens and names.
     pub(in crate::game::client_side) fn open_shader_options(&mut self) {
-        let mut macros = Macros::standard();
-        if let Some(renderer) = &self.client.renderer.0 {
-            renderer.define_pack_macros(&mut macros);
-        }
+        let macros = shader_options_macros(self.client.renderer.0.as_deref());
         let name = &self.client.settings.sunrise.shader_pack;
         let mode = self.client.settings.sunrise.iris_compat_of(name);
         self.client.settings.shader_options =
@@ -2979,13 +2990,17 @@ pub(in crate::game) mod native_pack_tests {
             "iris.features.required = SSBO NO_SUCH_FEATURE\nnot a pair\n\
              sunrise.hdr = maybe\n",
         );
-        let expected = [
-            "the pack requires `NO_SUCH_FEATURE`, which is not supported yet",
-            "shaders.properties:2: not a key=value line",
-        ];
-        assert_eq!(load(&mut state, &others, false, None), expected);
+        // The first names the flag, the second the file and line: not the English of either.
+        let order_of = |logged: &[String]| {
+            let flag = logged[0].split('`').nth(1).map(str::to_owned);
+            (flag, logged[1].starts_with("shaders.properties:2:"))
+        };
+        let expected = (Some("NO_SUCH_FEATURE".to_owned()), true);
+        let without_switch = load(&mut state, &others, false, None);
+        assert_eq!(without_switch.len(), 2, "{without_switch:?}");
+        assert_eq!(order_of(&without_switch), expected);
         let with_switch = load(&mut state, &others, true, None);
-        assert_eq!(with_switch[..2], expected);
+        assert_eq!(order_of(&with_switch), expected);
         assert_eq!(with_switch.len(), 3, "{with_switch:?}");
         assert!(names_value(&with_switch[2], 3, "sunrise.hdr", "maybe"));
 

@@ -343,6 +343,7 @@ mod tests {
         let lid_openers = std::collections::HashMap::new();
         let w = MobWorld {
             side: crate::motion::dry_side(),
+            variant_tables: None,
             mob_maps: crate::neoforge_mob_maps::NeoForgeMobMaps::vanilla(),
             goal_host: None,
             live_mobs: None,

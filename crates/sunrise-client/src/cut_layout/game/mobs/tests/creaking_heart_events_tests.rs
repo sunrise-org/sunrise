@@ -96,7 +96,8 @@ fn a_heart_spawn_posts_entity_place_and_the_poof() {
     );
     let poofs: Vec<_> = game
         .server
-        .lan_entity_events
+        .lan_queues
+        .entity_events
         .iter()
         .filter(|(mob, event)| *mob == id as i32 && *event == 60)
         // The packet carries only the entity id and event; clients resolve
@@ -114,7 +115,7 @@ fn a_heart_spawn_posts_entity_place_and_the_poof() {
         poofs,
         vec![(id as i32, 60, at)],
         "{:?}",
-        game.server.lan_entity_events
+        game.server.lan_queues.entity_events
     );
 }
 

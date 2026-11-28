@@ -297,7 +297,7 @@ impl mod_api::__private::LivingReads for BodyReads<'_> {
 /// `dispatch` runs with it once its reads are built, and not at all where they cannot be (no
 /// open world names the entity). Called only behind the hook's subscription check.
 pub fn with_lent_view(
-    lend: sunrise_sim::health::LivingLend<'_>,
+    lend: sunrise_sim::mobs::LivingLend<'_>,
     dispatch: impl FnOnce(&mod_api::LivingView<'_>),
 ) {
     let Some(reads) = (lend.reads)() else {

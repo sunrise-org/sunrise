@@ -382,6 +382,7 @@ pub(super) fn guard_stage(pp: &Preprocessed, stage: ShaderStage) -> Result<(), E
     Err(Error::new(file, line, message).with_stage(stage))
 }
 
+/// Translates the two stages, refusing any preparation rewrite that invalidates its stage's map.
 fn translate(
     vertex: &Preprocessed,
     fragment: &Preprocessed,
@@ -408,8 +409,8 @@ pub(super) fn translate_inner(
     } else {
         GBUFFERS_MATRICES.to_owned()
     };
-    let vertex_flat = reachability::prepare(vertex).map_err(|e| vec![e])?;
-    let fragment_flat = reachability::prepare(fragment).map_err(|e| vec![e])?;
+    let vertex_flat = reachability::prepare(vertex).map_err(|error| vec![error])?;
+    let fragment_flat = reachability::prepare(fragment).map_err(|error| vec![error])?;
     let vertex = vertex_flat.as_ref().unwrap_or(vertex);
     let fragment = fragment_flat.as_ref().unwrap_or(fragment);
     // A `bool` member of a storage buffer travels as a `uint` (`buffer_bools`).
@@ -1039,7 +1040,7 @@ fn resources(
     h
 }
 
-/// Translates a compute program (`.csh`).
+/// Translates a compute program (`.csh`), refusing preparation rewrites that invalidate its map.
 pub fn translate_compute(compute: &Preprocessed) -> Result<ComputeProgram, Vec<Error>> {
     translate_compute_with(compute, None)
 }
@@ -1052,9 +1053,12 @@ pub(crate) fn translate_compute_with(
     indirect: Option<crate::post::Indirect>,
 ) -> Result<ComputeProgram, Vec<Error>> {
     guard_stage(compute, ShaderStage::Compute).map_err(|e| vec![e])?;
-    let named = anonymous_structs::name(compute.code()).map(|code| compute.with_code(code));
+    let named = anonymous_structs::name(compute.code())
+        .map(|code| compute.with_code("anonymous struct naming", code))
+        .transpose()
+        .map_err(|error| vec![error])?;
     let compute = named.as_ref().unwrap_or(compute);
-    let split = atomic_vectors::rewrite(compute).map_err(|e| vec![e])?;
+    let split = atomic_vectors::rewrite(compute).map_err(|error| vec![error])?;
     let compute = split.as_ref().unwrap_or(compute);
     let (bools, bool_errors) = buffer_bools::rewrite(compute);
     let compute = bools.as_ref().unwrap_or(compute);

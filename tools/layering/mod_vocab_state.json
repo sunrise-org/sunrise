@@ -39,20 +39,15 @@
     "category": "reentrancy guard",
     "reason": "Per-thread flag marking that a retained mod callback is currently running under CallbackOwner containment so the panic hook knows the unwind will be caught and reported."
   },
-  "client/arm_pose.rs::TEST_POSES": {
-    "type": "std::cell::Cell<Option<&'static[PoseInfo]>>",
-    "category": "Parts lookup table",
-    "reason": "Thread-local test lookup of installed Parts metadata by engine-issued slot."
-  },
   "client/client_reload.rs::model_manager::ID": {
     "type": "LazyLock<Identifier>",
     "category": "immutable cache",
     "reason": "Immutable vanilla reload-boundary identifier, allocated once and shared by anchor declarations."
   },
-  "client/particle_keys.rs::resolved::EMPTY": {
-    "type": "OnceLock<Particles>",
-    "category": "immutable cache",
-    "reason": "Empty or set-once resolved registry lookup returned when no installed Parts inventory supplies one."
+  "content/arm_pose.rs::TEST_POSES": {
+    "type": "std::cell::Cell<Option<&'static[PoseInfo]>>",
+    "category": "Parts lookup table",
+    "reason": "Thread-local test lookup of installed Parts metadata by engine-issued slot."
   },
   "content/crash.rs::CURRENT_CRASH_OWNER": {
     "type": "Cell<CrashOwner>",
@@ -218,6 +213,11 @@
     "type": "std::cell::RefCell<Option<Box<SweepScratch>>>",
     "category": "scratch buffer",
     "reason": "Per-thread reusable inside-block collector storage, lent exclusively to one sweep and returned empty; a nested sweep takes its own, and no callback runs under the borrow."
+  },
+  "world/particle_keys.rs::resolved::EMPTY": {
+    "type": "OnceLock<Particles>",
+    "category": "immutable cache",
+    "reason": "Empty or set-once resolved registry lookup returned when no installed Parts inventory supplies one."
   },
   "world/scheduler.rs::allocate::NEXT_ID": {
     "type": "AtomicU64",

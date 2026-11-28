@@ -4,7 +4,7 @@
 //! (`ServerPlayer.findRespawnAndUseSpawnBlock`, `PlayerList.respawn`),
 //! using a charge.
 use super::Dim;
-use mod_api::client::first_person::Hand;
+use mod_api::Hand;
 use sunrise_core::{
     geometry::{Aabb, Axis, Vec3, VoxelShape},
     position::BlockPos,

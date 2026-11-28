@@ -4833,6 +4833,7 @@ mod tests {
             "SUNRISE_HDR",
             "SUNRISE_HDR_TONEMAP_PACK",
             "IRIS_FEATURE_SSBO",
+            "IRIS_FEATURE_PER_BUFFER_BLENDING",
             "IRIS_FEATURE_",
             "IS_IRIS",
             "IRIS_VERSION",

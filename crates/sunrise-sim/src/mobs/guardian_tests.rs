@@ -30,10 +30,12 @@ fn spikes(events: &[MobEvent]) -> Vec<&MobEvent> {
 #[ignore = "daily"]
 fn a_still_guardian_spikes_whoever_hits_it() {
     let by_mob = |kind| Damage {
+        direct: None,
         kind,
         ..Damage::mob(7, [3.0; 3])
     };
     let by_player = |kind| Damage {
+        direct: None,
         kind,
         ..Damage::player([3.0; 3])
     };

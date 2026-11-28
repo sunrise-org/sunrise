@@ -306,7 +306,7 @@ mod use_fixture_tests;
 pub(in crate::game) mod tests {
     use super::Stuck;
     use super::observer_tests::tests::Uses;
-    use mod_api::client::first_person::Hand;
+    use mod_api::Hand;
     use sunrise_core::geometry::Vec3;
     use sunrise_gameplay_common::game::{
         native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _,

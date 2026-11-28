@@ -5,8 +5,8 @@ use core::ops::ControlFlow;
 use mod_api::{
     BlockCapabilitySite, BlockEntityRef, BlockFace, BlockSide, CollisionFlags, Compound,
     DatapackRegistrySet, DimensionKey, EntityReadError, EntityRef, EntityResidency, EntityTypeKey,
-    EquipmentSlot, ItemEntityRef, LevelReadError, LevelRef, LivingRef, MainHand, MenuRef,
-    PlayerRef, SupportType, WorldEpoch, client::first_person::Hand,
+    EquipmentSlot, Hand, ItemEntityRef, LevelReadError, LevelRef, LivingRef, MainHand, MenuRef,
+    PlayerRef, SupportType, WorldEpoch,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;

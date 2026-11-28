@@ -50,6 +50,7 @@ fn a_crammed_frozen_enderman_is_hurt_by_the_freeze_first() {
                 let seen = crowd(types);
                 let crowded = MobWorld {
                     side: crate::motion::dry_side(),
+                    variant_tables: None,
                     others: &seen,
                     max_entity_cramming: 3,
                     // The crowd is read from `others`, not the world's empty index.

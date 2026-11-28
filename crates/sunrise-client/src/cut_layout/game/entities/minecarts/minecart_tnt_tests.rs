@@ -30,11 +30,12 @@ fn a_silent_tnt_cart_primes_without_its_sound() {
     assert_eq!(silent.fuse, 80, "a silent cart still primes");
     assert!(
         game.server
-            .lan_entity_events
+            .lan_queues
+            .entity_events
             .iter()
             .any(|(id, event)| *id == 42 && *event == 70),
         "a silent cart still broadcasts EntityEvent.TNT_PRIME: {:?}",
-        game.server.lan_entity_events
+        game.server.lan_queues.entity_events
     );
     let sounds = std::mem::take(&mut game.server.pending_sounds);
     game.stop_audio_capture();

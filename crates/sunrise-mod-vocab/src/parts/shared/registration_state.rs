@@ -61,7 +61,7 @@ pub(crate) struct Installed {
     /// The ticket controllers the mods registered; a [`TicketController`]'s slot indexes it.
     pub(crate) controllers: Vec<ControllerInfo>,
     pub(crate) consume_effects: Vec<crate::parts::RegisteredConsumeEffect>,
-    pub(crate) arm_poses: Vec<crate::client::arm_pose::PoseInfo>,
+    pub(crate) arm_poses: Vec<crate::content::arm_pose::PoseInfo>,
     pub(crate) structure_types: Vec<crate::world::structure_type::StructureTypeInfo>,
     pub(crate) pool_element_types: Vec<crate::world::pool_element::PoolElementTypeInfo>,
     pub(crate) structure_processor_types:

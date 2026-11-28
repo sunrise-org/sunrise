@@ -1324,6 +1324,46 @@ pub enum ClipBlock {
     Visual,
 }
 
+/// The order a scheduled tick runs in among those due on the same game tick
+/// (`net.minecraft.world.ticks.TickPriority`): lower runs first, then the earlier scheduled;
+/// `Normal` is the default. Within one chunk an earlier trigger tick still comes first; across
+/// chunks the trigger tick is not compared, so an overdue tick can run after a higher-priority
+/// one due later in another chunk (`LevelTicks.collectTicks`).
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
+pub enum TickPriority {
+    /// `EXTREMELY_HIGH` (-3).
+    ExtremelyHigh,
+    /// `VERY_HIGH` (-2).
+    VeryHigh,
+    /// `HIGH` (-1).
+    High,
+    /// `NORMAL` (0), what `scheduleTick(pos, block, delay)` uses.
+    #[default]
+    Normal,
+    /// `LOW` (1).
+    Low,
+    /// `VERY_LOW` (2).
+    VeryLow,
+    /// `EXTREMELY_LOW` (3).
+    ExtremelyLow,
+}
+
+impl TickPriority {
+    /// `TickPriority.getValue()`: -3 for `ExtremelyHigh` to 3 for `ExtremelyLow`, 0 for `Normal`.
+    pub const fn value(self) -> i32 {
+        match self {
+            Self::ExtremelyHigh => -3,
+            Self::VeryHigh => -2,
+            Self::High => -1,
+            Self::Normal => 0,
+            Self::Low => 1,
+            Self::VeryLow => 2,
+            Self::ExtremelyLow => 3,
+        }
+    }
+}
+
 /// Fluid mode for a level ray (`ClipContext.Fluid`).
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
@@ -2131,13 +2171,41 @@ pub trait HitHost: LevelRandomHost {
 
 /// A `LevelReader` with vanilla's `ScheduledTickAccess`. Shape updates cannot write blocks.
 pub trait LevelTicksHost: LevelHost {
-    /// Schedule a block tick through `native_schedule_block_tick`.
+    /// Schedule a block tick through `native_schedule_block_tick`, at `TickPriority::Normal`
+    /// (`ScheduledTickAccess.scheduleTick(pos, block, delay)`).
     fn schedule_block_tick(&mut self, _pos: [i32; 3], _block: BlockKey, _delay: i32) -> bool {
         unimplemented!("LevelTicksHost::schedule_block_tick")
     }
-    /// Schedule a fluid tick through `native_schedule_fluid_tick`.
+    /// Schedule a fluid tick through `native_schedule_fluid_tick`, at `TickPriority::Normal`
+    /// (`ScheduledTickAccess.scheduleTick(pos, fluid, delay)`).
     fn schedule_fluid_tick(&mut self, _pos: [i32; 3], _fluid: &str, _delay: i32) -> bool {
         unimplemented!("LevelTicksHost::schedule_fluid_tick")
+    }
+    /// `schedule_block_tick` at `priority` (`ScheduledTickAccess.scheduleTick(pos, block, delay,
+    /// priority)`), as `DiodeBlock.checkTickOnNeighbor` schedules a diode's tick at `HIGH`,
+    /// `VERY_HIGH` or `EXTREMELY_HIGH` from `neighborChanged`. The same queue and the same
+    /// [`TickPriority`] as `LevelRef::schedule_block_tick`: among the ticks that come due on the
+    /// same game tick, a higher priority runs first, then the earlier scheduled; the order across
+    /// chunks of ticks due on different game ticks is `LevelRef::schedule_block_tick`'s.
+    fn schedule_block_tick_with_priority(
+        &mut self,
+        _pos: [i32; 3],
+        _block: BlockKey,
+        _delay: i32,
+        _priority: TickPriority,
+    ) -> bool {
+        unimplemented!("LevelTicksHost::schedule_block_tick_with_priority")
+    }
+    /// `schedule_fluid_tick` at `priority` (`ScheduledTickAccess.scheduleTick(pos, fluid, delay,
+    /// priority)`): the same queue and type as `LevelRef::schedule_fluid_tick`.
+    fn schedule_fluid_tick_with_priority(
+        &mut self,
+        _pos: [i32; 3],
+        _fluid: &str,
+        _delay: i32,
+        _priority: TickPriority,
+    ) -> bool {
+        unimplemented!("LevelTicksHost::schedule_fluid_tick_with_priority")
     }
 }
 
@@ -2311,5 +2379,174 @@ impl From<BlockStateError> for BlockEditError {
             BlockStateError::Unavailable => Self::Unavailable,
             error => Self::InvalidState(error),
         }
+    }
+}
+
+/// The mixer group a sound plays on (`SoundSource`), in vanilla's order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+// no wire: local sound mixer category.
+pub enum SoundSource {
+    /// The master volume, which scales every other source.
+    Master,
+    /// Music discs aside, the game's music.
+    Music,
+    /// Jukeboxes and music discs.
+    Records,
+    /// Rain and thunder.
+    Weather,
+    /// Sounds blocks make.
+    Blocks,
+    /// Hostile creatures.
+    Hostile,
+    /// Friendly and neutral creatures.
+    Neutral,
+    /// Players.
+    Players,
+    /// Ambient and cave sounds.
+    Ambient,
+    /// Voice sounds.
+    Voice,
+    /// Interface sounds, such as a button click.
+    Ui,
+}
+
+impl SoundSource {
+    /// Its position in vanilla's `SoundSource` order, as the network sends it.
+    pub fn index(self) -> usize {
+        self as usize
+    }
+    /// Every source, in vanilla's order (`SoundSource.values()`).
+    pub const ALL: [SoundSource; 11] = [
+        Self::Master,
+        Self::Music,
+        Self::Records,
+        Self::Weather,
+        Self::Blocks,
+        Self::Hostile,
+        Self::Neutral,
+        Self::Players,
+        Self::Ambient,
+        Self::Voice,
+        Self::Ui,
+    ];
+}
+
+/// `ParticleStatus`: how many particles a client shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(sunrise_mod_api_macros::Wire)]
+pub enum ParticleStatus {
+    /// All particles.
+    All,
+    /// Fewer particles.
+    Decreased,
+    /// Only the essential particles.
+    Minimal,
+}
+
+/// A custom boss bar (vanilla's `CustomBossEvent`, the `/bossbar` ones) of an
+/// open server world. It holds the world's epoch and the bar's UUID, so a bar
+/// that was removed (even if its id was added again) or a handle from an
+/// earlier open reads as `None` and changes nothing. Mob and raid bars are not
+/// custom boss events and have no handle.
+#[derive(sunrise_mod_api_macros::Wire, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+// exhaustive: its fields are private, so mods cannot build or destructure it
+pub struct BossBarRef {
+    pub(crate) epoch: WorldEpoch,
+    pub(crate) uuid: u128,
+}
+
+/// `BossEvent.BossBarColor`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+#[derive(sunrise_mod_api_macros::Wire)]
+pub enum BossBarColor {
+    /// A pink bar.
+    Pink,
+    /// A blue bar.
+    Blue,
+    /// A red bar.
+    Red,
+    /// A green bar.
+    Green,
+    /// A yellow bar.
+    Yellow,
+    /// A purple bar.
+    Purple,
+    /// A white bar.
+    White,
+}
+
+impl BossBarColor {
+    /// Every color, in ordinal order.
+    pub const ALL: [Self; 7] = [
+        Self::Pink,
+        Self::Blue,
+        Self::Red,
+        Self::Green,
+        Self::Yellow,
+        Self::Purple,
+        Self::White,
+    ];
+    /// `BossBarColor.getName`: `pink`, `blue`, `red`, `green`, `yellow`,
+    /// `purple` or `white`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Pink => "pink",
+            Self::Blue => "blue",
+            Self::Red => "red",
+            Self::Green => "green",
+            Self::Yellow => "yellow",
+            Self::Purple => "purple",
+            Self::White => "white",
+        }
+    }
+    /// The color with that name, or None for one vanilla doesn't have.
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|color| color.name() == name)
+    }
+}
+
+/// `BossEvent.BossBarOverlay`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+#[derive(sunrise_mod_api_macros::Wire)]
+pub enum BossBarOverlay {
+    /// Progress.
+    Progress,
+    /// Notched6.
+    Notched6,
+    /// Notched10.
+    Notched10,
+    /// Notched12.
+    Notched12,
+    /// Notched20.
+    Notched20,
+}
+
+impl BossBarOverlay {
+    /// Every overlay, in ordinal order.
+    pub const ALL: [Self; 5] = [
+        Self::Progress,
+        Self::Notched6,
+        Self::Notched10,
+        Self::Notched12,
+        Self::Notched20,
+    ];
+    /// `BossBarOverlay.getName`: `progress`, `notched_6`, `notched_10`,
+    /// `notched_12` or `notched_20`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Progress => "progress",
+            Self::Notched6 => "notched_6",
+            Self::Notched10 => "notched_10",
+            Self::Notched12 => "notched_12",
+            Self::Notched20 => "notched_20",
+        }
+    }
+    /// The overlay with that name, or None for one vanilla doesn't have.
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|overlay| overlay.name() == name)
     }
 }

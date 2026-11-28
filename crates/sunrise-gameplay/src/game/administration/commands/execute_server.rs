@@ -10,7 +10,7 @@ impl crate::game::ServerGame<'_> {
     /// `ExecuteCommand.isChunkLoaded`: an entity-ticking loading status and
     /// completed entity loading, rather than merely a retained lit column.
     pub(in crate::game::server_side) fn command_chunk_loaded(&self, x: i32, z: i32) -> bool {
-        self.server.tickets.0.levels().loaded_entity_ticking(x, z)
+        self.server.chunk_ticking.tickets.levels().loaded_entity_ticking(x, z)
             && self.common.world.chunks.contains_key(&(x, z))
             && self.server.streaming.is_lit(x, z)
             // Streaming queues the saved tags before making the column resident;

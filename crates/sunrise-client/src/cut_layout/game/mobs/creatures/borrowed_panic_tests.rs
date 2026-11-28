@@ -972,7 +972,7 @@ fn player_living_breathe_panic_rolls_back_transactional_writes() {
             use mod_api::HostTransaction;
             let place = mod_api::ItemPlace::PlayerHand {
                 player: self.player,
-                hand: mod_api::client::first_person::Hand::Main,
+                hand: mod_api::Hand::Main,
             };
             host.transaction(|host, tx| place.edit(host, tx, |stack| stack.set_damage(5)))
                 .unwrap();

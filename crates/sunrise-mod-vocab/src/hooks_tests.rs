@@ -1041,11 +1041,30 @@ fn world_data_and_tick_queries_take_their_hosts(
     let _: bool = level.set_map_data(server, 0, &[0; 128 * 128]);
     let _: bool = level.block_tick(server, [0, 64, 0]);
     let _: bool = level.block_random_tick(server, [0, 64, 0]);
+    let _: Result<bool, LevelWriteError> =
+        level.schedule_block_tick(server, [0, 64, 0], BlockKey(0), 60, TickPriority::Normal);
+    let _: Result<bool, LevelWriteError> =
+        level.schedule_fluid_tick(server, [0, 64, 0], FluidKey(0), 5, TickPriority::Normal);
     let _: Option<[i32; 3]> = level.lightning_target(server, [0, 64, 0]);
     let _: bool = level.has_water_ticket(read, [0, 64, 0]);
     if let Some(ticket) = level.add_water_ticket(server, [0, 64, 0], [5, 65, 5]) {
         let _: bool = ticket.remove(server);
     }
+}
+
+/// Compile-only: an in-line level writer (`neighbor_changed`, `tick_block`) schedules a tick at a
+/// priority with the same `TickPriority` as `LevelRef::schedule_block_tick`.
+#[allow(dead_code)]
+fn in_line_writers_schedule_ticks_at_a_priority(level: &mut dyn LevelWriteHost) {
+    let _: bool = level.schedule_block_tick([0, 64, 0], BlockKey(0), 1);
+    let _: bool =
+        level.schedule_block_tick_with_priority([0, 64, 0], BlockKey(0), 1, TickPriority::High);
+    let _: bool = level.schedule_fluid_tick_with_priority(
+        [0, 64, 0],
+        "minecraft:water",
+        5,
+        TickPriority::Normal,
+    );
 }
 
 /// Compile-only: the level queries as a mod calls them, the reads on any host and the drop

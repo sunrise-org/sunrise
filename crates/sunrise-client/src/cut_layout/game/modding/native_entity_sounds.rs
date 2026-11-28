@@ -104,11 +104,11 @@ mod tests {
             );
             game.start_audio_capture();
             assert!(game.entity_broadcast_event(cow, 3));
-            assert_eq!(game.server.lan_entity_events, [(10, 3)]);
+            assert_eq!(game.server.lan_queues.entity_events, [(10, 3)]);
             let stale = EntityRef::new(WorldEpoch::new(cow.epoch().get() + 1), 10);
             assert!(!game.entity_broadcast_event(stale, 3));
             assert!(!game.entity_game_event(stale, "minecraft:step"));
-            assert_eq!(game.server.lan_entity_events.len(), 1);
+            assert_eq!(game.server.lan_queues.entity_events.len(), 1);
             game.stop_audio_capture();
         });
     }

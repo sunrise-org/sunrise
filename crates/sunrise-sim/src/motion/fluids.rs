@@ -481,15 +481,7 @@ impl FluidMembership for FluidTags {
         is_tagged(kind, tag)
     }
 }
-/// A pending `Entity.updateSwimming` entry. Its answer belongs only to this actor and sample.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SwimEntry {
-    entity: i32,
-    position: Vec3,
-    passenger: bool,
-    under_water: bool,
-    feet_fluid: FluidKind,
-}
+pub use crate::pose::SwimEntry;
 
 impl MotionWorld<'_, '_, '_> {
     pub(super) fn fluid_at(&self, p: BlockPos) -> FluidState {

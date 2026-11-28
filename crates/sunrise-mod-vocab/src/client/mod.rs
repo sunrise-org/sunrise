@@ -15,13 +15,11 @@ pub(crate) mod dynamic_texture;
 pub(crate) mod entity_layers;
 pub(crate) mod entity_render_attachments;
 pub(crate) mod entity_renderers;
+pub(crate) mod first_person;
+pub(crate) mod fluid_draw;
 pub(crate) mod item_extensions;
 pub(crate) mod stock_layers;
 pub(crate) mod storage_buffer;
-// hidden: a module of game-side types; mods use their re-exports
-#[doc(hidden)]
-pub mod first_person;
-pub(crate) mod fluid_draw;
 // hidden: a module of game-side types; mods use their re-exports
 #[doc(hidden)]
 pub mod fog;
@@ -60,13 +58,9 @@ pub(crate) mod baked_models;
 pub mod music;
 pub(crate) mod narration;
 pub(crate) mod pack_finders;
-pub(crate) mod particle_keys;
 pub(crate) mod particle_providers;
-mod particle_stacks;
-pub(crate) mod particle_types;
-// hidden: a module of game-side types; mods use their re-exports
-#[doc(hidden)]
-pub mod particles;
+pub(crate) mod particles;
+pub(crate) mod phase;
 // hidden: a module of game-side types; mods use their re-exports
 #[doc(hidden)]
 pub mod player_chat;

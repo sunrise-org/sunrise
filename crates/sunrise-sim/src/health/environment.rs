@@ -9,7 +9,7 @@ impl sunrise_world::blocking_rules::TypeMatchWorld for MatchedSets {
 }
 impl Environment<'_> {
     fn event(&mut self, event: HealthEvent) {
-        self.events.push(MotionEvent::Health(event));
+        self.events.push_health(event);
     }
     fn phase(&mut self, name: &'static str) -> io::Result<()> {
         self.event(HealthEvent::Phase(name));
@@ -492,7 +492,7 @@ impl HurtWorld for Environment<'_> {
     fn helmet_empty(&mut self, _: &mut State) -> io::Result<bool> {
         Ok(!self.helmet)
     }
-    /// The game wears it between the hit's halves ([`PlayerMotion::start_hurt`]).
+    /// The game wears it between the hit's halves ([`crate::motion::PlayerMotion::start_hurt`]).
     #[inline]
     fn hurt_helmet(&mut self, _: &mut State, _: f32) -> io::Result<()> {
         Ok(())
@@ -595,7 +595,7 @@ impl HurtWorld for Environment<'_> {
     fn hurt_sound(&mut self, _: &mut State) -> io::Result<()> {
         if !self.block_sound {
             let sound = hurt_sound(&self.source.definition().effects);
-            self.events.push(MotionEvent::HurtSound(sound));
+            self.events.push_hurt_sound(sound);
         }
         self.phase("hurt-sound")
     }

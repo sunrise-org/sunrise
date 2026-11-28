@@ -222,7 +222,7 @@ pub(super) fn tesselate<M: CellMasks>(
     parts: &PartTables,
     (nether, shader_pack_lighting, separate_ao, shader_pack): (bool, bool, bool, bool),
     pad: &Padded,
-    water_color: u32,
+    water_color: impl FnOnce() -> u32,
     out: &mut SectionMesh,
     [x, y, z]: [i32; 3],
     masks: &M,
@@ -302,7 +302,7 @@ pub(super) fn tesselate<M: CellMasks>(
     );
     let tint = match model.and_then(|model| model.tint) {
         Some(tint) => tint,
-        None if water => water_color & 0xFF_FFFF,
+        None if water => water_color() & 0xFF_FFFF,
         None => 0xFF_FFFF,
     };
     let emission = if water {
@@ -559,20 +559,8 @@ mod tests {
     #[test]
     fn fluid_models_emit_distinct_layers_and_stale_tables_fall_back() {
         use super::super::{ModFluidLayers, Tint, mod_tint::ModTints};
-        use sunrise_world::fluid::{ModFluidRules, ModFluidType, register_mod_fluid};
-        let fluid = register_mod_fluid(ModFluidType {
-            id: "mesh_fixture:oil".into(),
-            flowing_id: "mesh_fixture:flowing_oil".into(),
-            block_id: "mesh_fixture:oil".into(),
-            bucket: None,
-            rules: ModFluidRules {
-                tick_delay: 5,
-                drop_off: 1,
-                slope_find_distance: 4,
-                converts_to_source: false,
-            },
-        })
-        .unwrap();
+        use sunrise_world::fluid::ModFluid;
+        let fluid = ModFluid::for_test(0);
         let air = Info {
             air: true,
             solid: false,
@@ -647,7 +635,7 @@ mod tests {
                 &PartTables::NONE,
                 (false, false, true, false),
                 &pad,
-                0x00FF00,
+                || 0x00FF00,
                 &mut mesh,
                 [0, 0, 0],
                 &super::visibility_plan::NoMasks,
@@ -683,7 +671,7 @@ mod tests {
             &PartTables::NONE,
             (false, false, true, false),
             &pad,
-            0x00FF00,
+            || 0x00FF00,
             &mut mesh,
             [0, 0, 0],
             &super::visibility_plan::NoMasks,
@@ -790,7 +778,7 @@ mod tests {
                 &PartTables::NONE,
                 (false, false, true, false),
                 &pad,
-                0x00FF00,
+                || 0x00FF00,
                 &mut mesh,
                 at,
                 &Kept(kept.to_vec()),

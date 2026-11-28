@@ -289,7 +289,7 @@ impl ServerGame<'_> {
             Some(Who::Mob(id)) => {
                 let owner_species = owner
                     .and_then(|o| self.common.mobs.iter().find(|m| m.id == o))
-                    .map(|m| m.species());
+                    .map(|m| sunrise_sim::mobs::species::vanilla_id(m.species()));
                 let source = Damage {
                     kind,
                     attacker: live_owner,

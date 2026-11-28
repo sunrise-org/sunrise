@@ -96,7 +96,7 @@ impl ServerGame<'_> {
         }
         self.server.save.0.save_chunk_tickets(
             self.server.streaming.commanded(),
-            self.server.tickets.0.portal_tickets(),
+            self.server.chunk_ticking.tickets.portal_tickets(),
         )?;
         self.server.save.0.save_mod_tickets(
             self.server.streaming.mod_tickets(),

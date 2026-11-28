@@ -211,6 +211,7 @@ fn knockback_fires_and_lends_views_when_stacks_have_unprojectable_components_or_
         game.remember_mob_player_credit(42);
 
         let by_player = sunrise_sim::mobs::Damage {
+            direct: None,
             attacker: Some(Who::Player),
             ..sunrise_sim::mobs::Damage::of(sunrise_sim::mobs::DamageKind::Generic)
         };

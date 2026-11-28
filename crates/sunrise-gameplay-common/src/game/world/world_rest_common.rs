@@ -192,6 +192,7 @@ pub fn load_world_rest<P: RestPresentation + Sync>(
             })
             .collect();
         let mut mob_data = sunrise_sim::mobs::MobData::load(resource_root, facts.states.len())?;
+        mob_data.populate_adjacent_flags(facts);
         // NeoForge keys placements by EntityType, not by the subset backed by MobTypes.
         // Use exactly the registry the spawners will consult, with facts already validated.
         mob_data

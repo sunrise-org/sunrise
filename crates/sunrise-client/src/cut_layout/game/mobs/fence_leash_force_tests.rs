@@ -193,7 +193,7 @@ fn a_fence_leash_pulls_a_pig_as_vanilla_does() {
         let i = pig(&mut game, uuid);
         let leash = game.mobs[i].extra.leash;
         let pending = game.mobs[i].extra.leash_pending;
-        let knot = game.server.knot_ids.get(&fence).copied();
+        let knot = game.server.knot_state.knot_ids.get(&fence).copied();
         let state = knot_state(fence);
         eprintln!(
             "tick-1 binding {uuid}: leash={leash:?} pending={pending:?} knot entity={knot:?} at {:?}",

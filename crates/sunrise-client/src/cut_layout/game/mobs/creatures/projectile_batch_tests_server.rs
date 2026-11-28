@@ -48,7 +48,7 @@ fn a_first_shot_listener_can_clear_the_eggs_captured_block_before_landing() {
             assert_eq!(hits[0].block, [2, 64, 0]);
             assert_ne!(game.world.block(2, 64, 0), stone);
             assert_eq!(observed.lands.load(Ordering::Relaxed), 0);
-            assert!(game.server.lan_entity_events.is_empty());
+            assert!(game.server.lan_queues.entity_events.is_empty());
             assert_eq!(game.entity(71), Some(handle));
             assert_eq!(game.creatures.projectiles[0].join, join);
             assert_eq!(

@@ -1,6 +1,8 @@
 //! A mob's `CombatTracker`: the hits it took lately, which its death message
 //! is built from (`TamableAnimal.die` sends it to the owner).
-use super::{Damage, Mob, MobEvent, Species, WeaponAttack, WeaponHit, Who, goals::Cx};
+use super::{
+    Damage, Mob, MobEvent, Species, WeaponAttack, WeaponHit, Who, goals::Cx, with_species,
+};
 use crate::blocks::Fluid;
 use sunrise_core::{geometry::Vec3, random::RandomSource};
 
@@ -87,7 +89,7 @@ pub fn do_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
     }
     let mut amount = super::gear::attack_damage(m, cx.w.items);
     let from = [m.position.x, m.position.y, m.position.z];
-    let source = Damage::mob(m.id, from).with_species(m.species());
+    let source = with_species(Damage::mob(m.id, from), m.species());
     let first_event = cx.events.len();
     // `CaveSpider`, `Husk` and `WitherSkeleton.doHurtTarget` all test
     // `target instanceof LivingEntity`, so the effect reaches a mob the hit

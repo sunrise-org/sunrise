@@ -934,6 +934,13 @@ impl Renderer {
     pub fn device_lost(&self) -> bool {
         self.device_lost.load(std::sync::atomic::Ordering::Relaxed)
     }
+
+    /// The device this renderer draws on: equal for two renderers exactly when the later one was
+    /// made on the earlier one's device (`RendererDevice::Reuse`). A recovery after a device loss
+    /// or any other newly opened device gets a new one.
+    pub fn device_id(&self) -> u64 {
+        self.device_id
+    }
 }
 /// Encodes the copy of `texture`'s `size` pixels into a mappable buffer.
 pub(crate) fn copy_frame(

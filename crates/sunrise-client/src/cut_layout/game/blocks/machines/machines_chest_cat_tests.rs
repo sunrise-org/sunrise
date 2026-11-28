@@ -50,7 +50,13 @@ fn game<'a>(
         assert!(game.run_command(command), "{command}");
     }
     game.update_chunk_tickets();
-    assert!(game.server.tickets.0.levels().block_ticking(0, 0));
+    assert!(
+        game.server
+            .chunk_ticking
+            .tickets
+            .levels()
+            .block_ticking(0, 0)
+    );
     game
 }
 

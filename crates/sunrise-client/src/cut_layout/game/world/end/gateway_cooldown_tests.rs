@@ -162,8 +162,8 @@ fn game_gateway_phases() -> [[i32; 2]; 4] {
         ProjectileKind::EnderPearl
     ));
     game.server
+        .chunk_ticking
         .tickets
-        .0
         .update(Some(sunrise_sim::ticket_levels::Sources {
             forced: vec![(0, 0)],
             ..Default::default()

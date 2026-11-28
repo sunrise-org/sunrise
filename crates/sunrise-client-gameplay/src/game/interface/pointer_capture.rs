@@ -9,7 +9,7 @@ impl crate::game::ClientGame<'_> {
         LookOptions {
             sensitivity: self.client.settings.sensitivity,
             smooth_camera: self.client.smooth_camera,
-            scoping: self.scoping(),
+            scoping: self.scoping() && self.client.camera_type.is_first_person(),
             invert_x: self.client.settings.invert_x,
             invert_y: self.client.settings.invert_y,
         }

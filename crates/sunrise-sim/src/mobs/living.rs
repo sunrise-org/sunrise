@@ -1980,7 +1980,7 @@ impl Mob {
         let mut speed = self.ai.speed;
         let side = w.side;
         let reads = || side.hit_reads();
-        let living = crate::health::LivingLend::mob(self, &reads);
+        let living = crate::mobs::LivingLend::mob(self, &reads);
         crate::motion::native_living_speed(w.loop_context, living, &mut speed);
         speed
     }
@@ -1997,7 +1997,7 @@ impl Mob {
             0.02
         };
         let reads = || side.hit_reads();
-        let living = crate::health::LivingLend::mob(self, &reads);
+        let living = crate::mobs::LivingLend::mob(self, &reads);
         crate::motion::native_living_flying_speed(context, living, &mut speed);
         speed
     }
@@ -2557,7 +2557,7 @@ impl Mob {
             + self.jump_boost_power();
         let side = w.side;
         let reads = || side.hit_reads();
-        let living = crate::health::LivingLend::mob(self, &reads);
+        let living = crate::mobs::LivingLend::mob(self, &reads);
         crate::motion::native_living_jump_power(w.loop_context, living, &mut power);
         power
     }
@@ -3205,6 +3205,7 @@ mod tests {
             }
             let w = MobWorld {
                 side: crate::motion::dry_side(),
+                variant_tables: None,
                 mob_maps: crate::neoforge_mob_maps::NeoForgeMobMaps::vanilla(),
                 goal_host: None,
                 live_mobs: None,
@@ -3342,6 +3343,7 @@ mod tests {
                 .unwrap();
             let w = MobWorld {
                 side: crate::motion::dry_side(),
+                variant_tables: None,
                 mob_maps: crate::neoforge_mob_maps::NeoForgeMobMaps::vanilla(),
                 goal_host: None,
                 live_mobs: None,
@@ -3480,6 +3482,7 @@ mod tests {
         }
         let w = MobWorld {
             side: crate::motion::dry_side(),
+            variant_tables: None,
             mob_maps: crate::neoforge_mob_maps::NeoForgeMobMaps::vanilla(),
             goal_host: None,
             live_mobs: None,
@@ -3623,6 +3626,7 @@ mod tests {
             let others = [below.seen(None, &crate::items::Items::empty())];
             let w = MobWorld {
                 side: crate::motion::dry_side(),
+                variant_tables: None,
                 mob_maps: crate::neoforge_mob_maps::NeoForgeMobMaps::vanilla(),
                 professions: crate::mobs::villager::profession_table(),
                 loop_context: crate::test_resources::server_loop_context(),
@@ -3951,6 +3955,7 @@ mod tests {
             for (i, bordered) in [false, true].into_iter().enumerate() {
                 let w = MobWorld {
                     side: crate::motion::dry_side(),
+                    variant_tables: None,
                     goal_host: None,
                     live_mobs: None,
                     border: bordered.then_some(&border),

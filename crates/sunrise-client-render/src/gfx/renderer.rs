@@ -49,6 +49,10 @@ pub struct Renderer {
     /// Set by the device's lost callback. wgpu reports nothing else when an
     /// operation fails on a lost device (no error scope sees it).
     pub(crate) device_lost: Arc<std::sync::atomic::AtomicBool>,
+    /// Which opened device this renderer draws on ([`Self::device_id`]): a renderer made on the
+    /// previous one's device (`RendererDevice::Reuse`) keeps its number, one on a newly opened
+    /// device takes the next.
+    pub(crate) device_id: u64,
     pub config: wgpu::SurfaceConfiguration,
     pub(crate) solid: SolidPipeline,
     /// `solid` split in two passes for the world pass (terrain.wgsl's `opaque_quad`).

@@ -105,13 +105,7 @@ pub fn read_properties(
     macros: &mut crate::Macros,
 ) -> (crate::Properties, Vec<String>) {
     // The answers start from none: a set the caller reuses may hold another pack's.
-    let answers: Vec<String> = (macros.names())
-        .filter(|n| crate::macros::is_feature_answer(n))
-        .map(str::to_owned)
-        .collect();
-    for name in &answers {
-        macros.undef(name);
-    }
+    macros.drop_feature_answers();
     // The file and the options are read once, so both reads see the same pack.
     let text = pack.read_text("shaders.properties").unwrap_or_default();
     let mut options = with_options(pack, macros);
@@ -585,6 +579,9 @@ fn option_texts(pack: &Pack, read: fn(&Pack, &str) -> Option<String>) -> Vec<Str
 }
 
 #[cfg(test)]
+mod per_buffer_blending_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -623,7 +620,7 @@ mod tests {
     /// A pack with this `shaders.properties`, an `options.glsl` and a composite program whose
     /// fragment stage declares the uniform `seen_<name>` only where `IRIS_FEATURE_<NAME>` is
     /// defined, for each of `features`.
-    fn feature_pack(properties: &str, features: &[(&str, &str)]) -> Pack {
+    pub(super) fn feature_pack(properties: &str, features: &[(&str, &str)]) -> Pack {
         let mut fsh = String::from("#version 330\nout vec4 c;\n");
         let mut sum = String::from("0.0");
         for (seen, feature) in features {
@@ -644,7 +641,7 @@ mod tests {
     }
 
     /// The `seen_*` uniforms the pack's composite program declares, loaded as the game loads it.
-    fn composite_uniforms(
+    pub(super) fn composite_uniforms(
         pack: &Pack,
         properties: &crate::Properties,
         macros: &crate::Macros,

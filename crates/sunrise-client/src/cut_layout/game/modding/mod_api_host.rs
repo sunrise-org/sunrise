@@ -86,7 +86,7 @@ mod attachment_membership_tests {
                 None
             ));
             assert!(game.use_knot(natural_fence, false));
-            let id = game.server.knot_ids[&natural_fence];
+            let id = game.server.knot_state.knot_ids[&natural_fence];
             assert_membership(game, id);
             let mut player = sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::ZERO);
             player.entity_id = 880;

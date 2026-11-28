@@ -65,7 +65,7 @@ impl crate::game::ServerGame<'_> {
 
     /// `ShelfBlock.useItemOn`: a single swap, or a connected hotbar swap while powered.
     pub(in crate::game) fn use_shelf(&mut self, hit: &Hit) -> Option<bool> {
-        use mod_api::client::first_person::Hand;
+        use mod_api::Hand;
         if self.common.hand != Hand::Main {
             return None;
         }

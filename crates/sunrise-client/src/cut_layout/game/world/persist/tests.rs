@@ -1404,7 +1404,7 @@ fn an_orb_saves_its_live_portal_cooldown() {
         // One tick: the orb's own (ordered) tick, then Entity.handlePortal's
         // pass over the entities.
         game.server.ordered.announced = sunrise_sim::join_seq::JoinSeq::MAX;
-        game.server.tickets.0.update(None);
+        game.server.chunk_ticking.tickets.update(None);
         game.begin_ordered_ticks();
         game.run_ordered_ticks(sunrise_sim::join_seq::JoinSeq::MAX, false)
             .unwrap();
@@ -1412,7 +1412,12 @@ fn an_orb_saves_its_live_portal_cooldown() {
         assert_eq!(game.orbs[0].fire_ticks, 39, "one tick of Fire");
         assert_eq!(game.orbs[0].air, 299, "the stored air does not tick");
         assert_eq!(
-            game.server.portals.entities.get(&id).map(|p| p.cooldown),
+            game.server
+                .portals
+                .level
+                .entities
+                .get(&id)
+                .map(|p| p.cooldown),
             Some(19),
             "the tick's portal cooldown"
         );

@@ -102,11 +102,15 @@ impl crate::game::ServerGame<'_> {
     }
 
     pub fn test_update_tickets(&mut self, sources: Option<sunrise_sim::ticket_levels::Sources>) {
-        self.server.tickets.0.update(sources);
+        self.server.chunk_ticking.tickets.update(sources);
     }
 
     pub fn test_block_ticking(&self, cx: i32, cz: i32) -> bool {
-        self.server.tickets.0.levels().block_ticking(cx, cz)
+        self.server
+            .chunk_ticking
+            .tickets
+            .levels()
+            .block_ticking(cx, cz)
     }
 
     pub fn test_last_other_id(&self) -> u32 {

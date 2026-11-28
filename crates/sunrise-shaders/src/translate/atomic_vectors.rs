@@ -95,7 +95,8 @@ fn std430(ty: &str) -> Option<(u32, u32)> {
 
 /// `pp` with its shared and buffer vectors that atomic functions use by component rewritten,
 /// or `None` if nothing changes. An unclosed array index or a terminal selector refuses the
-/// stage at the `[` or `.` that starts it.
+/// stage at the `[` or `.` that starts it, and a rewrite that cannot keep the original line
+/// map is refused at the stage file.
 pub(super) fn rewrite(pp: &Preprocessed) -> Result<Option<Preprocessed>, Error> {
     if !ATOMICS.iter().any(|a| pp.code().contains(a)) {
         return Ok(None);
@@ -107,7 +108,8 @@ pub(super) fn rewrite(pp: &Preprocessed) -> Result<Option<Preprocessed>, Error> 
     let bracket = |open: usize| -> Option<(String, Option<usize>)> {
         let close = (open..tokens.len()).find(|&j| tokens[j] == "]")?;
         let size: String = tokens[open + 1..close].concat();
-        Some((size.trim().to_owned(), next(close)))
+        // The original line breaks stay in the blanked declaration; don't insert them again.
+        Some((size.trim().replace('\n', " "), next(close)))
     };
     // What an atomic function takes a component of: its first name, and the name after a `.`.
     let mut used: Vec<(&str, Option<&str>)> = Vec::new();
@@ -467,7 +469,8 @@ pub(super) fn rewrite(pp: &Preprocessed) -> Result<Option<Preprocessed>, Error> 
                 i = name_end + 1;
                 continue;
             }
-            // `name[k]`: the index's tokens, written back as they are.
+            // `name[k]`: copy the index to the replacement without the line breaks, which
+            // stay where they were when the original tokens are blanked.
             let Some(open) = next(name_end).filter(|&j| tokens[j] == "[") else {
                 i += 1;
                 continue;
@@ -490,7 +493,7 @@ pub(super) fn rewrite(pp: &Preprocessed) -> Result<Option<Preprocessed>, Error> 
             let close = close.ok_or_else(|| {
                 error_at_token(pp, &tokens, open, "unclosed atomic vector array index")
             })?;
-            let index: String = tokens[open + 1..close].concat();
+            let index = tokens[open + 1..close].concat().replace('\n', " ");
             base = format!("{base}[{index}]");
             // GLSL won't turn a `uint` index into the `int` the getter and setter take.
             getter_args = format!("int({index})");
@@ -575,7 +578,8 @@ pub(super) fn rewrite(pp: &Preprocessed) -> Result<Option<Preprocessed>, Error> 
         }
         i = end + 1;
     }
-    Ok(Some(pp.with_code(out.concat())))
+    pp.with_code("atomic vector rewrite", out.concat())
+        .map(Some)
 }
 
 /// `hz_get_<key>` and `hz_set_<key>`: a whole vector of `split` (of an array: the `k`th),
@@ -641,6 +645,21 @@ mod tests {
         assert!(out.contains("atomicMax(lights_hz[k + 1][0], 3u);"));
         assert!(out.contains("hz_set_lights(int(k), hz_get_lights(int(k)) + ( uvec2(1u)));"));
         assert!(out.contains("uvec2 l = hz_get_lights(int(k));"));
+    }
+
+    #[test]
+    fn multiline_array_sizes_and_indices_do_not_move_later_origins() {
+        let pp = Preprocessed::from_source(
+            "setup.csh",
+            "shared ivec2 values[1 +\n2];\nvoid main() {\n    atomicAdd(values[0 +\n1].x, 1);\n    int after = 0;\n}",
+        );
+        let out = rewrite(&pp).unwrap().expect("rewritten");
+        let after = out
+            .code()
+            .lines()
+            .position(|line| line.contains("int after"))
+            .unwrap();
+        assert_eq!(out.locate(after), "setup.csh:6");
     }
 
     #[test]

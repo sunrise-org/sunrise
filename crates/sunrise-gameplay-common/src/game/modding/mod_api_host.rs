@@ -924,7 +924,8 @@ impl mod_api::HitHost for super::native_hooks::HitLevel<'_> {
         let Some((id, at, _)) = hit.entity(entity) else {
             return false;
         };
-        super::native_hooks::sound_id(sound) && hit.play(sound, at, source, volume, pitch, Some(id))
+        super::native_hooks::sound_id(sound)
+            && hit.play(sound, at, source, volume, pitch, Some(id as i32))
     }
     #[inline]
     fn lend_entity_random(&mut self, entity: mod_api::EntityRef, draw: mod_api::RandomDraw<'_>) {
@@ -1309,6 +1310,36 @@ impl<
     fn schedule_fluid_tick(&mut self, pos: [i32; 3], fluid: &str, delay: i32) -> bool {
         self.level
             .native_schedule_fluid_tick(&mut self.ticks, pos, fluid, delay)
+    }
+    fn schedule_block_tick_with_priority(
+        &mut self,
+        pos: [i32; 3],
+        block: mod_api::BlockKey,
+        delay: i32,
+        priority: mod_api::TickPriority,
+    ) -> bool {
+        self.level.native_schedule_block_tick_with_priority(
+            &mut self.ticks,
+            pos,
+            block,
+            delay,
+            priority,
+        )
+    }
+    fn schedule_fluid_tick_with_priority(
+        &mut self,
+        pos: [i32; 3],
+        fluid: &str,
+        delay: i32,
+        priority: mod_api::TickPriority,
+    ) -> bool {
+        self.level.native_schedule_fluid_tick_with_priority(
+            &mut self.ticks,
+            pos,
+            fluid,
+            delay,
+            priority,
+        )
     }
 }
 

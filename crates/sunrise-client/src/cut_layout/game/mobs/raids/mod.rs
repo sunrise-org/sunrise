@@ -36,7 +36,7 @@ pub(crate) mod entity_ticking_tests {
                 .insert((6, 0), Arc::new(Chunk::empty(6, 0)));
             // A player in chunk (0, 0) with a simulation distance of 5: chunk
             // (6, 0) is loaded but its entities do not tick.
-            game.server.tickets.0.update(Some(Sources {
+            game.server.chunk_ticking.tickets.update(Some(Sources {
                 players: vec![(0, 0)],
                 view_distance: 10,
                 simulation_distance: 5,

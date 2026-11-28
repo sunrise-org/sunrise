@@ -226,6 +226,16 @@ the full list.
     `iris.features.required`. A flag matches in any case, and the macro takes the name as `FEATURES` writes it
     (`ssbo` listed gives `IRIS_FEATURE_SSBO`, not `IRIS_FEATURE_ssbo`). A flag Sunrise lacks, and a flag the pack
     doesn't list, stay undefined. A required flag Sunrise lacks keeps its note, and the pack still loads, as before.
+  - *Added 2026-11-28 ([#6921](https://github.com/sunrise-org/sunrise/issues/6921)):* `PER_BUFFER_BLENDING` is
+    supported only on a device that draws colour targets differing in blend (wgpu's
+    `DownlevelFlags::INDEPENDENT_BLEND`; `Macros::set_per_buffer_blending`). There it is answered as the flags of
+    `FEATURES` are: listed in either list, in any case, it gets `IRIS_FEATURE_PER_BUFFER_BLENDING`, in the same two
+    reads below. On a device without it, and in a read made without the renderer's answer, the macro stays undefined
+    and a required `PER_BUFFER_BLENDING` keeps its note. Before, the macro was never defined. A macro set told its
+    device lacks it drops the answer at once, and each definition of the answers drops the ones the set held before.
+    The Shader Options page, on the title screen as in game, reads with the renderer's macros where a renderer
+    exists, and with the standard set alone before one is made. Once a renderer on another device is installed (a
+    device recovery, any newly opened device), a pack refused before is tried again.
   - A supported flag Sunrise can't keep on every draw it may take loads without a note but gets no macro:
     `BLOCK_EMISSION_ATTRIBUTE` (`UNANSWERED` in `macros.rs`). Terrain drawn from its vertex attributes alone (when
     neither the arena's pages nor the normal stream fit the pack's vertex stage) has no source block, so

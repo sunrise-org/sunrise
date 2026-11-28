@@ -345,13 +345,35 @@ pub fn classify_tickers(registry: &sunrise_world::registry::BlockRegistry) -> Ve
         .collect()
 }
 
-/// Server-ticked block-entity state for a level, by position.
+/// Per-level server-ticked block-entity state, by position.
 #[derive(Clone, Debug, Default)]
-pub struct BlockEntityTicks {
+pub struct BlockEntityLevelTicks {
     pub shulkers: FxHashMap<[i32; 3], Shulker>,
     pub bells: FxHashMap<[i32; 3], Bell>,
     pub gateway_servers: FxHashMap<[i32; 3], EndGateway>,
     pub conduit_servers: FxHashMap<[i32; 3], ConduitServer>,
+}
+
+impl BlockEntityLevelTicks {
+    /// Drops the state of positions whose block entity is gone.
+    pub fn remove_position(&mut self, pos: [i32; 3]) {
+        self.shulkers.remove(&pos);
+        self.bells.remove(&pos);
+        self.gateway_servers.remove(&pos);
+        self.conduit_servers.remove(&pos);
+    }
+    pub fn retain(&mut self, keep: impl Fn([i32; 3]) -> bool) {
+        self.shulkers.retain(|p, _| keep(*p));
+        self.bells.retain(|p, _| keep(*p));
+        self.gateway_servers.retain(|p, _| keep(*p));
+        self.conduit_servers.retain(|p, _| keep(*p));
+    }
+}
+
+/// Server-ticked block-entity state for a level, by position.
+#[derive(Clone, Debug, Default)]
+pub struct BlockEntityTicks {
+    pub level: BlockEntityLevelTicks,
     pub kinds: Vec<Option<Ticker>>,
 }
 
@@ -366,22 +388,137 @@ impl BlockEntityTicks {
     }
     /// Drops the state of positions whose block entity is gone.
     pub fn remove_position(&mut self, pos: [i32; 3]) {
-        self.shulkers.remove(&pos);
-        self.bells.remove(&pos);
-        self.gateway_servers.remove(&pos);
-        self.conduit_servers.remove(&pos);
+        self.level.remove_position(pos);
     }
     pub fn retain(&mut self, keep: impl Fn([i32; 3]) -> bool) {
-        self.shulkers.retain(|p, _| keep(*p));
-        self.bells.retain(|p, _| keep(*p));
-        self.gateway_servers.retain(|p, _| keep(*p));
-        self.conduit_servers.retain(|p, _| keep(*p));
+        self.level.retain(keep);
     }
     /// Swaps only the per-level position maps, keeping the registry-wide `kinds` table intact.
-    pub fn swap_level(&mut self, other: &mut Self) {
-        std::mem::swap(&mut self.shulkers, &mut other.shulkers);
-        std::mem::swap(&mut self.bells, &mut other.bells);
-        std::mem::swap(&mut self.gateway_servers, &mut other.gateway_servers);
-        std::mem::swap(&mut self.conduit_servers, &mut other.conduit_servers);
+    pub fn swap_level(&mut self, other: &mut BlockEntityLevelTicks) {
+        std::mem::swap(&mut self.level, other);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shulker_box::ShulkerStatus;
+
+    #[test]
+    fn swap_level_exchanges_per_level_fields_only() {
+        let shulker_a = Shulker {
+            open_count: 2,
+            status: ShulkerStatus::Opening,
+            progress: 0.5,
+            progress_old: 0.25,
+        };
+        let bell_a = Bell {
+            ticks: 9,
+            shaking: true,
+            click_direction: Some(3),
+            last_ring_timestamp: 100,
+            nearby: Some(vec![11, 12]),
+            resonating: true,
+            resonation_ticks: 4,
+        };
+        let gateway_a = EndGateway {
+            age: 240,
+            teleport_cooldown: 40,
+        };
+        let shulker_b = Shulker {
+            open_count: 1,
+            status: ShulkerStatus::Opened,
+            progress: 1.0,
+            progress_old: 1.0,
+        };
+        let bell_b = Bell {
+            ticks: 2,
+            shaking: false,
+            click_direction: None,
+            last_ring_timestamp: 200,
+            nearby: None,
+            resonating: false,
+            resonation_ticks: 0,
+        };
+        let gateway_b = EndGateway {
+            age: 12,
+            teleport_cooldown: 5,
+        };
+
+        let mut ticks = BlockEntityTicks {
+            level: BlockEntityLevelTicks {
+                shulkers: [([1, 2, 3], shulker_a.clone())].into_iter().collect(),
+                bells: [([4, 5, 6], bell_a.clone())].into_iter().collect(),
+                gateway_servers: [([7, 8, 9], gateway_a)].into_iter().collect(),
+                conduit_servers: [(
+                    [10, 11, 12],
+                    ConduitServer {
+                        is_active: true,
+                        effect_blocks: vec![[10, 10, 12]],
+                        target: Some(99),
+                        next_ambient_sound: 500,
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            },
+            kinds: vec![None, Some(Ticker::Bell), Some(Ticker::Conduit)],
+        };
+        let mut parked = BlockEntityLevelTicks {
+            shulkers: [([-1, -2, -3], shulker_b.clone())].into_iter().collect(),
+            bells: [([-4, -5, -6], bell_b.clone())].into_iter().collect(),
+            gateway_servers: [([-7, -8, -9], gateway_b)].into_iter().collect(),
+            conduit_servers: [(
+                [-10, -11, -12],
+                ConduitServer {
+                    is_active: false,
+                    effect_blocks: vec![[-10, -9, -12]],
+                    target: None,
+                    next_ambient_sound: 800,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+
+        let expected_kinds = vec![None, Some(Ticker::Bell), Some(Ticker::Conduit)];
+        let assert_a = |level: &BlockEntityLevelTicks| {
+            assert_eq!(level.shulkers.len(), 1);
+            assert_eq!(level.shulkers[&[1, 2, 3]], shulker_a);
+            assert_eq!(level.bells.len(), 1);
+            assert_eq!(level.bells[&[4, 5, 6]], bell_a);
+            assert_eq!(level.gateway_servers.len(), 1);
+            assert_eq!(level.gateway_servers[&[7, 8, 9]], gateway_a);
+            assert_eq!(level.conduit_servers.len(), 1);
+            let c = &level.conduit_servers[&[10, 11, 12]];
+            assert!(c.is_active);
+            assert_eq!(c.effect_blocks, vec![[10, 10, 12]]);
+            assert_eq!(c.target, Some(99));
+            assert_eq!(c.next_ambient_sound, 500);
+        };
+        let assert_b = |level: &BlockEntityLevelTicks| {
+            assert_eq!(level.shulkers.len(), 1);
+            assert_eq!(level.shulkers[&[-1, -2, -3]], shulker_b);
+            assert_eq!(level.bells.len(), 1);
+            assert_eq!(level.bells[&[-4, -5, -6]], bell_b);
+            assert_eq!(level.gateway_servers.len(), 1);
+            assert_eq!(level.gateway_servers[&[-7, -8, -9]], gateway_b);
+            assert_eq!(level.conduit_servers.len(), 1);
+            let c = &level.conduit_servers[&[-10, -11, -12]];
+            assert!(!c.is_active);
+            assert_eq!(c.effect_blocks, vec![[-10, -9, -12]]);
+            assert_eq!(c.target, None);
+            assert_eq!(c.next_ambient_sound, 800);
+        };
+
+        ticks.swap_level(&mut parked);
+        assert_eq!(ticks.kinds, expected_kinds);
+        assert_b(&ticks.level);
+        assert_a(&parked);
+
+        ticks.swap_level(&mut parked);
+        assert_eq!(ticks.kinds, expected_kinds);
+        assert_a(&ticks.level);
+        assert_b(&parked);
     }
 }

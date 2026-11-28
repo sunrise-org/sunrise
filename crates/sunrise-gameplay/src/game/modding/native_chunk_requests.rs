@@ -563,7 +563,7 @@ mod tests {
             };
             assert!(game.server.streaming.has_async_requests());
             game.rebuild_chunk_tickets(false);
-            let levels = game.server.tickets.0.levels();
+            let levels = game.server.chunk_ticking.tickets.levels();
             assert!(levels.loaded_full(12, -8), "level-33 FULL ticket active");
             assert!(!levels.entity_ticking(12, -8));
             assert!(!levels.block_ticking(12, -8));
@@ -824,8 +824,8 @@ mod tests {
             assert!(
                 !game
                     .server
+                    .chunk_ticking
                     .tickets
-                    .0
                     .levels()
                     .loaded_full(nether_target[0], nether_target[1]),
                 "parked dimension cleared released level-33 ticket"

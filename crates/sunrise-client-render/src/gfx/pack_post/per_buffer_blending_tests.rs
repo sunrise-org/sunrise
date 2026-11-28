@@ -1,8 +1,8 @@
 //! A pack's `PER_BUFFER_BLENDING` (spec 3.2) is answered by the device it runs on (#343): a
 //! device that draws colour targets differing in blend (wgpu's `INDEPENDENT_BLEND`) supports
 //! it, so a pack that requires it loads without a note, and its `blend.<program>.<buffer>`
-//! draws that buffer alone with its own state; the real `Renderer` gives that answer from the
-//! adapter it opened. Original fixtures (`water_blend_tests`, and a pack written here), no pack
+//! draws that buffer alone with its own state, and it sees `IRIS_FEATURE_PER_BUFFER_BLENDING`
+//! (#6921); the real `Renderer` gives that answer from the adapter it opened. Original fixtures (`water_blend_tests`, and a pack written here), no pack
 //! files.
 use super::depth_test::Gpu;
 use super::water_blend_tests::{halves, picture_with};
@@ -72,7 +72,8 @@ const RENDERER_CHILD: &str = "SUNRISE_PER_BUFFER_BLENDING_RENDERER_CHILD";
 /// The real `Renderer`'s answer (#343): the macros `Renderer::define_pack_macros` gives a pack
 /// decide whether `read_properties` notes a required `PER_BUFFER_BLENDING`, by the downlevel
 /// flags of the adapter that renderer opened, whichever backend and adapter its device search
-/// picked. With the answer yes, the pack's `gbuffers_water`, whose two buffers differ in blend,
+/// picked, and whether the pack's `shaders.properties` sees `IRIS_FEATURE_PER_BUFFER_BLENDING`
+/// (#6921). With the answer yes, the pack's `gbuffers_water`, whose two buffers differ in blend,
 /// is installed with it. A child process of this test binary with throwaway homes holds the
 /// window's event loop; on Wayland, unset `WAYLAND_DISPLAY` (the child's `XDG_RUNTIME_DIR` has
 /// no socket), or run under `python3 tools/ci/with_xvfb.py`.
@@ -141,7 +142,8 @@ fn blending_pack(folder: &std::path::Path) -> sunrise_shaders::Pack {
         (
             "shaders.properties",
             "iris.features.required = PER_BUFFER_BLENDING\n\
-             blend.gbuffers_water.colortex2=off\n",
+             blend.gbuffers_water.colortex2=off\n\
+             #ifdef IRIS_FEATURE_PER_BUFFER_BLENDING\nseen_per_buffer_blending = 1\n#endif\n",
         ),
         (
             "gbuffers_water.vsh",
@@ -214,9 +216,14 @@ fn renderer_fixture(window: std::sync::Arc<winit::window::Window>) {
     let mut macros = sunrise_shaders::Macros::standard();
     renderer.define_pack_macros(&mut macros);
     let (properties, notes) = sunrise_shaders::read_properties(&pack, &mut macros);
-    let note = "the pack requires `PER_BUFFER_BLENDING`, which is not supported yet";
-    let expected: &[&str] = if able { &[] } else { &[note] };
-    assert_eq!(notes, expected, "INDEPENDENT_BLEND {able}");
+    // Which flags are noted, not the English of the note.
+    let noted: Vec<&str> = notes.iter().filter_map(|n| n.split('`').nth(1)).collect();
+    let expected: &[&str] = if able { &[] } else { &["PER_BUFFER_BLENDING"] };
+    assert_eq!(noted, expected, "INDEPENDENT_BLEND {able}");
+    // The answer is the macro too, there alone: the properties' second read sees it.
+    let answer = able.then_some("1");
+    assert_eq!(macros.get("IRIS_FEATURE_PER_BUFFER_BLENDING"), answer);
+    assert_eq!(properties.get("seen_per_buffer_blending"), answer);
     eprintln!("PER_BUFFER_BLENDING_FIXTURE answer {able}, notes {notes:?}");
     if able {
         let post =

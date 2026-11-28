@@ -414,7 +414,7 @@ impl crate::game::ServerGame<'_> {
                 orb.air = new.air;
                 // Entity.load reads portalCooldown and leaves the portal
                 // process as it is.
-                if let Some(portal) = self.server.portals.entities.get_mut(&id) {
+                if let Some(portal) = self.server.portals.level.entities.get_mut(&id) {
                     portal.cooldown = match tag.get("PortalCooldown") {
                         Some(Tag::Int(cooldown)) => *cooldown,
                         _ => 0,

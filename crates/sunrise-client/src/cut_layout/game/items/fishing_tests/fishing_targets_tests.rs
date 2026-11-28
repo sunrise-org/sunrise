@@ -149,8 +149,8 @@ pub(crate) fn clear_entities(game: &mut sunrise_gameplay::game::ServerGame<'_>) 
     game.crystals.clear();
     game.discard_resident_dragon();
     game.server.others.0.clear();
-    game.server.knot_ids.clear();
-    game.server.broken_knots.clear();
+    game.server.knot_state.knot_ids.clear();
+    game.server.knot_state.broken_knots.clear();
     game.resident_entities.knots.clear();
     game.reset_entity_residency();
     game.bind_local_player_residency();
@@ -266,6 +266,7 @@ pub(crate) fn summon_target(
             game.tick_server(false).unwrap();
             let id = *game
                 .server
+                .knot_state
                 .knot_ids
                 .get(&[3, 64, 4])
                 .expect("natural leash knot created on fence");

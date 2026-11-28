@@ -128,6 +128,7 @@ sunrise-game-data = { path = "../sunrise-game-data", features = ["test-effect-re
 sunrise-mod-package = { path = "../sunrise-mod-package", default-features = false, features = ["folder"] }
 naga = { version = "30.0.1", features = ["wgsl-in", "hlsl-out", "glsl-out", "msl-out", "spv-out"] }
 sunrise-level = { path = "../sunrise-level", features = ["test-support"] }
+sunrise-world = { path = "../sunrise-world", features = ["test-support"] }
 
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]

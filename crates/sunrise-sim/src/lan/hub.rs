@@ -2348,7 +2348,7 @@ impl Hub {
                 Some(ParticleData::GeyserBase(water_blocks, burst_impulse_base))
             }
             T::Vibration => {
-                use mod_api::client::particles::PositionSource;
+                use mod_api::PositionSource;
                 use sunrise_protocol::entity_data::PositionSource as NetworkPositionSource;
                 let (source, _, ticks) = options.vibration.as_ref()?;
                 let source = match source {
@@ -2453,7 +2453,7 @@ impl Hub {
             ) => Some(ParticleData::GeyserBase(*water_blocks, *burst_impulse_base)),
             (T::GeyserBase | T::GeyserPoof, _) => return None,
             (T::Vibration, D::Vibration { source, ticks }) => {
-                use mod_api::client::particles::PositionSource;
+                use mod_api::PositionSource;
                 use sunrise_protocol::entity_data::PositionSource as NetworkPositionSource;
                 let source = match source {
                     PositionSource::Block(pos) => NetworkPositionSource::Block(*pos),

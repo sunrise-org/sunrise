@@ -1361,7 +1361,7 @@ impl Goal for CatTempt {
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
         // Cat.tick: a wild cat being tempted begs every 100 ticks.
         if m.age.is_multiple_of(100)
-            && let Some(sound) = super::ai::cat_sound(m, cx.w.side.variant_tables(), "beg_for_food")
+            && let Some(sound) = super::ai::cat_sound(m, cx.w.variant_tables(), "beg_for_food")
         {
             cx.events
                 .push(MobEvent::SoundId(sound.to_owned(), m.center(), 1.0, 1.0));
@@ -1791,7 +1791,7 @@ pub fn cat_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     cat_amounts(m);
     if (m.extra.flag || m.extra.relax_one) && m.age.is_multiple_of(5) {
         let volume = 0.6 + 0.4 * (m.random.next_float() - m.random.next_float());
-        if let Some(sound) = super::ai::cat_sound(m, w.side.variant_tables(), "purr") {
+        if let Some(sound) = super::ai::cat_sound(m, w.variant_tables(), "purr") {
             events.push(MobEvent::SoundId(sound.to_owned(), m.center(), volume, 1.0));
         }
     }
@@ -2054,6 +2054,7 @@ mod tests {
             with_test_world(&seen, |w, _| {
                 let indexed = MobWorld {
                     side: crate::motion::dry_side(),
+                    variant_tables: None,
                     others_grid: Some(&grid),
                     ..w.clone()
                 };
@@ -2542,6 +2543,7 @@ mod tests {
                 let seen = [attacker.seen(None, &crate::items::Items::empty())];
                 let world = crate::mobs::MobWorld {
                     side: crate::motion::dry_side(),
+                    variant_tables: None,
                     others: &seen,
                     ..world
                 };
@@ -2549,6 +2551,7 @@ mod tests {
                 p.hurt_by = Some((Who::Mob(2), 5));
                 let world = crate::mobs::MobWorld {
                     side: crate::motion::dry_side(),
+                    variant_tables: None,
                     player: Some(p),
                     ..world
                 };
@@ -2669,6 +2672,7 @@ mod tests {
                 }
                 let world = crate::mobs::MobWorld {
                     side: crate::motion::dry_side(),
+                    variant_tables: None,
                     player: Some(view),
                     player_identity: Some((uuid, seen)),
                     player_selection: Some(&selection),
@@ -2768,6 +2772,7 @@ mod tests {
                 }
                 let world = crate::mobs::MobWorld {
                     side: crate::motion::dry_side(),
+                    variant_tables: None,
                     player: Some(view),
                     player_identity: Some((uuid, seen)),
                     player_selection: Some(&selection),

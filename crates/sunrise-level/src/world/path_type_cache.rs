@@ -1,56 +1,60 @@
 //! One direct-mapped static path cache per logical server level, shared by its workers.
 use super::World;
 use mod_api::PathType;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use sunrise_core::position::BlockPos;
 
 const SLOTS: usize = 4096;
-#[derive(Default)]
-struct Entry {
-    packed: u64,
-    kind: Option<PathType>,
-}
+const SLOT_MASK: u64 = (SLOTS as u64) - 1;
+const TAG_MASK: u64 = !SLOT_MASK;
+const _: () = assert!(SLOTS.is_power_of_two() && PathType::COUNT < SLOTS);
+
+/// Each slot packs the top 52 bits of `mix(packed)` with a 1-based `PathType` discriminant in
+/// the low 12 bits (0 = empty). Because `mix` is a bijection on `u64` and the low 12 bits are
+/// the slot index, `(slot, tag)` uniquely identifies `packed` with no false hits, fitting a
+/// lock-free entry in one `AtomicU64` (32 KiB total vs 96 KiB for mutex-guarded entries).
 pub(super) struct PathTypeCache {
-    slots: Box<[Mutex<Entry>]>,
+    slots: Box<[AtomicU64]>,
 }
-fn slot(packed: u64) -> usize {
+#[inline]
+fn mix(packed: u64) -> u64 {
     let mut mixed = packed.wrapping_mul(0x9E37_79B9_7F4A_7C15);
     mixed ^= mixed >> 32;
     mixed ^= mixed >> 16;
-    mixed as usize & (SLOTS - 1)
+    mixed
+}
+#[inline]
+fn slot_and_tag(packed: u64) -> (usize, u64) {
+    let mixed = mix(packed);
+    ((mixed & SLOT_MASK) as usize, mixed & TAG_MASK)
 }
 impl PathTypeCache {
     fn new() -> Self {
         Self {
-            slots: (0..SLOTS).map(|_| Mutex::new(Entry::default())).collect(),
+            slots: (0..SLOTS).map(|_| AtomicU64::new(0)).collect(),
         }
     }
+    #[inline]
     fn get_or_compute(&self, pos: BlockPos, compute: impl FnOnce() -> PathType) -> PathType {
-        let packed = pos.pack() as u64;
-        let cell = &self.slots[slot(packed)];
-        {
-            let entry = cell.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            if entry.packed == packed
-                && let Some(kind) = entry.kind
-            {
-                return kind;
-            }
+        let (slot, tag) = slot_and_tag(pos.pack() as u64);
+        let cell = &self.slots[slot];
+        let word = cell.load(Ordering::Relaxed);
+        let raw = (word & SLOT_MASK) as usize;
+        if raw != 0 && (word & TAG_MASK) == tag {
+            return PathType::ALL[raw - 1];
         }
-        // In particular, never hold a slot lock while a mod runs, even on a miss.
+        // Compute outside any synchronization, then publish atomically.
         let kind = compute();
-        *cell.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Entry {
-            packed,
-            kind: Some(kind),
-        };
+        cell.store(tag | (kind as u64 + 1), Ordering::Relaxed);
         kind
     }
+    #[inline]
     fn invalidate(&self, pos: BlockPos) {
-        let packed = pos.pack() as u64;
-        let mut entry = self.slots[slot(packed)]
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if entry.packed == packed {
-            entry.kind = None;
+        let (slot, tag) = slot_and_tag(pos.pack() as u64);
+        let cell = &self.slots[slot];
+        let word = cell.load(Ordering::Relaxed);
+        if (word & SLOT_MASK) != 0 && (word & TAG_MASK) == tag {
+            let _ = cell.compare_exchange(word, 0, Ordering::Relaxed, Ordering::Relaxed);
         }
     }
 }
@@ -61,8 +65,9 @@ impl World {
         self.path_type_cache.get_or_init(PathTypeCache::new);
     }
     /// Cache the final static classification, including Open for void air.
-    /// A hit takes one slot lock, a miss two; callbacks run outside both guards.
-    /// World writes cannot overlap its safe shared worker borrows.
+    /// Lock-free single-word load on a hit and atomic store on a miss; callbacks
+    /// run with no locks held. World writes cannot overlap its safe shared worker borrows.
+    #[inline]
     pub fn cached_path_type(&self, pos: BlockPos, compute: impl FnOnce() -> PathType) -> PathType {
         match self.path_type_cache.get() {
             Some(cache) => cache.get_or_compute(pos, compute),
@@ -94,7 +99,10 @@ mod tests {
             ((100, 70, 200), 1753),
             ((-30_000_000, -64, 29_999_999), 69),
         ] {
-            assert_eq!(slot(BlockPos::new(x, y, z).pack() as u64), expected);
+            assert_eq!(
+                slot_and_tag(BlockPos::new(x, y, z).pack() as u64).0,
+                expected
+            );
         }
     }
     #[test]
@@ -105,7 +113,7 @@ mod tests {
         let (a, b) = (0..=SLOTS)
             .find_map(|x| {
                 let pos = BlockPos::new(x as i32, 64, 0);
-                let index = slot(pos.pack() as u64);
+                let (index, _) = slot_and_tag(pos.pack() as u64);
                 let old = previous[index].replace(pos);
                 old.map(|old| (old, pos))
             })

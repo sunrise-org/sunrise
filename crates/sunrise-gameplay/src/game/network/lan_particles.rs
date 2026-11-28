@@ -664,7 +664,7 @@ pub mod tests {
     #[cfg(test)]
     use super::*;
     #[cfg(test)]
-    use mod_api::client::particles::PositionSource;
+    use mod_api::PositionSource;
     #[cfg(test)]
     use sunrise_core::random::LegacyRandom;
     #[cfg(test)]

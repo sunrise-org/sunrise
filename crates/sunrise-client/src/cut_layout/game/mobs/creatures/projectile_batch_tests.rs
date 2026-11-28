@@ -369,7 +369,7 @@ pub(crate) fn terminal_egg(action: Action, abort: bool) {
         }
         assert_eq!(observed.lands.load(Ordering::Relaxed), 0);
         assert_eq!(observed.deaths.load(Ordering::Relaxed), 0);
-        assert!(game.server.lan_entity_events.is_empty());
+        assert!(game.server.lan_queues.entity_events.is_empty());
         assert!(game.server.pending_sounds.is_empty());
         game.stop_audio_capture();
         assert_eq!(game.world.random.state(), random);

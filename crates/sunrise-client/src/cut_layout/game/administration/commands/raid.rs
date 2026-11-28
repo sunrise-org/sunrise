@@ -24,13 +24,14 @@ pub(crate) mod tests {
             // RaidCommand needs the owner's permission level (3).
             game.ui.registries.permission = 4;
             game.server.chat_capture = Some(Vec::new());
-            let (id, _) = game
-                .server
-                .raiding
-                .0
-                .raids
-                .create_or_extend([0, 64, 0], 2, None, 3);
-            assert!(!game.server.raiding.0.raids.get(id).unwrap().started);
+            let (id, _) =
+                game.server
+                    .raiding
+                    .0
+                    .level
+                    .raids
+                    .create_or_extend([0, 64, 0], 2, None, 3);
+            assert!(!game.server.raiding.0.level.raids.get(id).unwrap().started);
 
             assert_eq!(run_dev(game, "raid check"), 1);
             let lines: Vec<String> = game

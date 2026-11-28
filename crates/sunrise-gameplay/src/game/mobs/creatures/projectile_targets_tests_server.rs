@@ -28,8 +28,8 @@ pub fn clear_entities(game: &mut crate::game::ServerGame<'_>) {
     game.common.paintings.clear();
     game.common.cushions.clear();
     game.server.others.0.clear();
-    game.server.knot_ids.clear();
-    game.server.broken_knots.clear();
+    game.server.knot_state.knot_ids.clear();
+    game.server.knot_state.broken_knots.clear();
     game.common.resident_entities.knots.clear();
     game.reset_entity_residency();
     game.bind_local_player_residency();
@@ -111,6 +111,7 @@ pub fn summon_target(game: &mut crate::game::ServerGame<'_>, target: &str) -> Tr
             game.tick_server(false).unwrap();
             let id = *game
                 .server
+                .knot_state
                 .knot_ids
                 .get(&[3, 64, 4])
                 .expect("natural leash knot created on fence");

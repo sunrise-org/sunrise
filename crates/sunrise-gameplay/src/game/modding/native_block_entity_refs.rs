@@ -654,7 +654,7 @@ impl ServerGame<'_> {
             self.sculk_unregister_listener(effects.pos);
         }
         if effects.gateway {
-            self.server.be_anims.gateway_servers.remove(&[
+            self.server.be_anims.level.gateway_servers.remove(&[
                 effects.pos.0,
                 effects.pos.1,
                 effects.pos.2,

@@ -268,12 +268,16 @@ impl ClientGame<'_> {
         self.client.mod_gpu.as_ref()
     }
 
+    /// Installs `renderer`. On another device than the last renderer's (`Renderer::device_id`: a
+    /// device recovery, any newly opened device), a pack refused before is tried again
+    /// (`native_shaders::follow_device`).
     pub fn set_renderer(&mut self, mut renderer: Box<Renderer>) {
         // The old renderer's pack builds still running: the new one waits for them, so the swap
         // doesn't.
         if let Some(old) = &mut self.client.renderer.0 {
             renderer.adopt_pack_builds(old.take_pack_builds());
         }
+        client_side::native_shaders::follow_device(renderer.device_id());
         let gpu = renderer.mod_gpu();
         if let Some(previous) = &self.client.mod_gpu {
             gpu.continue_ids_from(previous);

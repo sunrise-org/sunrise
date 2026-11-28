@@ -1691,7 +1691,8 @@ mod tests {
             game.world = World::new(registry.default_state("minecraft:air").unwrap(), 0);
             game.world.chunks.insert((0, 0), Arc::new(chunk));
             game.server.save.0 = Arc::new(save);
-            game.server.levels.0.reset_active_closed_for_test();
+            let active = game.dim;
+            game.server.levels.0.reset_active_closed_for_test(active);
             game.native_lifecycle
                 .begin_open(Some(mod_api::Authority::IntegratedServer));
             let reopened = game.level(game.dim.id()).unwrap();

@@ -13,6 +13,7 @@ sunrise-border = { path = "../sunrise-border" }
 sunrise-game-data = { path = "../sunrise-game-data" }
 sunrise-command = { path = "../sunrise-command" }
 sunrise-core = { path = "../sunrise-core" }
+sunrise-entity-data = { path = "../sunrise-entity-data" }
 sunrise-items = { path = "../sunrise-items" }
 sunrise-java-properties = { path = "../sunrise-java-properties" }
 sunrise-level = { path = "../sunrise-level" }

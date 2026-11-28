@@ -1170,6 +1170,14 @@ pub enum Pause {
     },
     /// The mob's `InsideEffects` collector is ready to flush against the live level.
     InsideEffects(InsidePause),
+    /// `LivingEntity.updatingUsingItem` raised this tick's spear stabs. `LivingEntity.stabAttack`
+    /// hurts and pushes each target and slows the attacker (`causeExtraKnockback`) before
+    /// `aiStep` moves it, so the owner settles them before resuming. They are the last `events`
+    /// of the tick's events; the ones before them (the base tick's sounds, a leash break) keep
+    /// their usual delivery.
+    Stab {
+        events: usize,
+    },
 }
 
 /// Where a mob tick paused for staged `register_behaviors`.
@@ -1346,7 +1354,8 @@ impl AirPause {
 }
 
 /// Run a whole mob tick when no owning-host pause is needed by the caller: the
-/// mods are not asked about its air, and a fox consumes without a host.
+/// mods are not asked about its air, and a fox consumes without a host. Stabs are
+/// left in `events` for the caller, after the tick.
 pub fn tick(
     m: &mut Mob,
     w: &MobWorld,
@@ -1357,42 +1366,95 @@ pub fn tick(
     loop {
         progress = match progress {
             TickProgress::Complete(kept) => return kept,
-            TickProgress::Paused(Pause::Consumption { decision }) => {
-                super::fox::apply_consumption(&decision, w, m, events);
-                resume_after_consumption(m, w, level, events, None)
-            }
-            TickProgress::Paused(Pause::Breathing { air, known_speed }) => {
-                let breath = Some(air.step.vanilla);
-                resume_after_breathing(m, w, level, events, air, known_speed, breath, None)
-            }
-            TickProgress::Paused(Pause::Drink { stack, resume }) => {
-                // The hostless probe runs the same drink's built-in behaviour.
-                if stack.potion().unwrap_or(&stack.item) == "minecraft:healing" {
-                    m.heal(w.loop_context, &|| w.side.hit_reads(), 4.0);
-                }
-                if let Some(effect) = drink_potion_effect(&stack) {
-                    m.add_effect_instance(crate::brewing::namespaced(effect.id), effect);
-                }
-                if &*stack.item == "minecraft:milk_bucket" {
-                    m.apply_consume_effect(&crate::items::ConsumeEffect::ClearAllEffects);
-                }
-                m.extra.set_main_hand_stack(None);
-                resume_after_drink(m, w, level, events, resume, None)
-            }
-            TickProgress::Paused(Pause::AfterDamage(resume)) => {
-                resume_after_damage(m, w, level, events, resume, None)
-            }
-            TickProgress::Paused(
-                Pause::Equipment { .. }
-                | Pause::Trample(_)
-                | Pause::FallToPassengers(_)
-                | Pause::RegisterBehaviors { .. }
-                | Pause::Breeding { .. },
-            ) => unreachable!("a hostless tick cannot reach this pause"),
-            TickProgress::Paused(Pause::InsideEffects(_)) => {
-                unreachable!("hostless inside-block flush cannot pause")
-            }
+            TickProgress::Paused(pause) => settle_hostless(m, w, level, events, pause),
         };
+    }
+}
+
+/// How far [`tick_until_stab`] ran.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UntilStab {
+    /// The whole tick ran: whether the mob stays.
+    Complete(bool),
+    /// It stopped after `LivingEntity.updatingUsingItem` raised stabs: they are the last
+    /// `events` of the events, and [`resume_hostless_after_stab`] finishes the tick.
+    Stabbed { events: usize },
+}
+
+/// [`tick`], stopping at [`Pause::Stab`] so the caller settles the stabs in `events` before
+/// the mob moves.
+pub fn tick_until_stab(
+    m: &mut Mob,
+    w: &MobWorld,
+    level: &mut DamageLevel<'_>,
+    events: &mut Vec<MobEvent>,
+) -> UntilStab {
+    let mut progress = tick_until_pause(m, w, level, events, None);
+    loop {
+        progress = match progress {
+            TickProgress::Complete(kept) => return UntilStab::Complete(kept),
+            TickProgress::Paused(Pause::Stab { events }) => return UntilStab::Stabbed { events },
+            TickProgress::Paused(pause) => settle_hostless(m, w, level, events, pause),
+        };
+    }
+}
+
+/// Finish a hostless tick that [`tick_until_stab`] stopped at its stabs: none of it runs if
+/// settling them removed the mob.
+pub fn resume_hostless_after_stab(
+    m: &mut Mob,
+    w: &MobWorld,
+    level: &mut DamageLevel<'_>,
+    events: &mut Vec<MobEvent>,
+) -> bool {
+    let mut progress = resume_after_stab(m, w, level, events, None);
+    loop {
+        progress = match progress {
+            TickProgress::Complete(kept) => return kept,
+            TickProgress::Paused(pause) => settle_hostless(m, w, level, events, pause),
+        };
+    }
+}
+
+/// Settle one pause a hostless tick can reach, without an owning host, and run on to the next.
+fn settle_hostless(
+    m: &mut Mob,
+    w: &MobWorld,
+    level: &mut DamageLevel<'_>,
+    events: &mut Vec<MobEvent>,
+    pause: Pause,
+) -> TickProgress {
+    match pause {
+        Pause::Stab { .. } => resume_after_stab(m, w, level, events, None),
+        Pause::Consumption { decision } => {
+            super::fox::apply_consumption(&decision, w, m, events);
+            resume_after_consumption(m, w, level, events, None)
+        }
+        Pause::Breathing { air, known_speed } => {
+            let breath = Some(air.step.vanilla);
+            resume_after_breathing(m, w, level, events, air, known_speed, breath, None)
+        }
+        Pause::Drink { stack, resume } => {
+            // The hostless probe runs the same drink's built-in behaviour.
+            if stack.potion().unwrap_or(&stack.item) == "minecraft:healing" {
+                m.heal(w.loop_context, &|| w.side.hit_reads(), 4.0);
+            }
+            if let Some(effect) = drink_potion_effect(&stack) {
+                m.add_effect_instance(crate::brewing::namespaced(effect.id), effect);
+            }
+            if &*stack.item == "minecraft:milk_bucket" {
+                m.apply_consume_effect(&crate::items::ConsumeEffect::ClearAllEffects);
+            }
+            m.extra.set_main_hand_stack(None);
+            resume_after_drink(m, w, level, events, resume, None)
+        }
+        Pause::AfterDamage(resume) => resume_after_damage(m, w, level, events, resume, None),
+        Pause::Equipment { .. }
+        | Pause::Trample(_)
+        | Pause::FallToPassengers(_)
+        | Pause::RegisterBehaviors { .. }
+        | Pause::Breeding { .. } => unreachable!("a hostless tick cannot reach this pause"),
+        Pause::InsideEffects(_) => unreachable!("hostless inside-block flush cannot pause"),
     }
 }
 
@@ -1573,8 +1635,41 @@ fn after_base_tick(
     }
     // LivingEntity.tick: updatingUsingItem, the stab of a spear in use.
     if m.alive() {
+        let from = events.len();
         super::spear_use::update_using_item(m, w, known_speed, events);
+        if events.len() > from {
+            return TickProgress::Paused(Pause::Stab {
+                events: events.len() - from,
+            });
+        }
     }
+    after_stab(m, w, level, events, movement)
+}
+
+/// Continue `LivingEntity.tick` after `updatingUsingItem`, once its stabs are settled. A
+/// callback while settling them (an `EntityMount` of a dismounted target) may have discarded
+/// the attacker: then the tick ends there.
+pub(super) fn resume_after_stab(
+    m: &mut Mob,
+    w: &MobWorld,
+    level: &mut DamageLevel<'_>,
+    events: &mut Vec<MobEvent>,
+    movement: Option<&mut Option<MobMovement>>,
+) -> TickProgress {
+    if m.removed {
+        return TickProgress::Complete(false);
+    }
+    after_stab(m, w, level, events, movement)
+}
+
+/// `LivingEntity.tick` after `updatingUsingItem`: a wandering trader's drink, then the rest.
+fn after_stab(
+    m: &mut Mob,
+    w: &MobWorld,
+    level: &mut DamageLevel<'_>,
+    events: &mut Vec<MobEvent>,
+    movement: Option<&mut Option<MobMovement>>,
+) -> TickProgress {
     if m.alive()
         && m.species() == Species::WanderingTrader
         && let Some(stack) = super::trader::tick_drink(m, events)
@@ -3500,17 +3595,17 @@ pub(super) fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>
         Species::Enderman if m.ai.target.is_some() => "entity.enderman.scream",
         // Wolf.isAngry reads the persistent anger timer, not the current target.
         Species::Wolf => {
-            play_wolf_ambient(m, w.side.variant_tables(), events);
+            play_wolf_ambient(m, w.variant_tables(), events);
             return;
         }
         Species::Pig | Species::Cow | Species::Chicken => {
-            play_farm_ambient(m, w.side.variant_tables(), events);
+            play_farm_ambient(m, w.variant_tables(), events);
             return;
         }
         Species::Parrot => super::parrot::ambient(m, w),
         // Cat.getAmbientSound: purr in love, purreow one time in four, else ambient (stray_ambient when wild).
         Species::Cat => {
-            play_cat_ambient(m, w.side.variant_tables(), events);
+            play_cat_ambient(m, w.variant_tables(), events);
             return;
         }
         // Fox.getAmbientSound: a sleeping fox makes its sleep sound.
@@ -6516,6 +6611,7 @@ mod despawn_tests {
         crate::mobs::world::with_test_world(&[], |w, types| {
             let far = MobWorld {
                 side: crate::motion::dry_side(),
+                variant_tables: None,
                 // 200 blocks from the player: past the 128 a monster loses.
                 nearest_player: Some(Vec3::new(200.0, 64.0, 0.0)),
                 ..w.clone()
@@ -11013,6 +11109,7 @@ mod trader_llama_no_ai_tests {
                 assert_eq!(seen[0].delay, 13);
                 let view = MobWorld {
                     side: crate::motion::dry_side(),
+                    variant_tables: None,
                     others: &seen,
                     ..w.clone()
                 };

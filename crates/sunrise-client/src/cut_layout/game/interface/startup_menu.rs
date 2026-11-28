@@ -52,7 +52,7 @@ pub(crate) mod tests {
     use sunrise_client_gameplay::game::packs;
     use sunrise_gameplay_common::game::mods;
 
-    fn loading(receiver: Receiver<LoaderMsg>) -> Loading {
+    pub(crate) fn loading(receiver: Receiver<LoaderMsg>) -> Loading {
         Loading {
             serve_integrated: sunrise_gameplay::game::server_side::integrated::serve,
             run_component_harness:

@@ -82,7 +82,9 @@ pub(crate) mod guest_hit_tests {
                         attacker: Some(Who::Mob(5)),
                         from: Some(from),
                         direct: None,
-                        attacker_species: Some(Species::Bee),
+                        attacker_species: Some(sunrise_sim::mobs::species::vanilla_id(
+                            Species::Bee,
+                        )),
                     },
                 },
             ];

@@ -1,0 +1,203 @@
+//! Owned particle requests, with provider identities resolved once when content loads.
+use crate::ParticleKey;
+
+/// The listener of a vibration signal (`VibrationParticleOption`), independent
+/// of its resolved rendering destination and of the network protocol.
+#[derive(sunrise_mod_api_macros::Wire, Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum PositionSource {
+    /// A block listener, addressed by its block coordinates (not its centre).
+    Block([i32; 3]),
+    /// An entity listener, addressed by its network id and an offset above its feet.
+    Entity {
+        /// The entity's network id, preserved as the protocol's signed value.
+        id: i32,
+        /// The vertical offset from the entity's feet, in blocks.
+        y_offset: f32,
+    },
+}
+
+/// An owned particle request: built-in options, an asset-only type, or the
+/// value paired with a registered [`crate::ParticleType`].
+// no wire: process-local type slots and erased native values; each type owns its stream codec.
+#[derive(Clone, Debug, PartialEq)]
+// exhaustive: construction is through the methods, which pair typed values and keys.
+pub struct ParticleOptions {
+    ty: ParticleKey,
+    typed: Option<super::particle_types::TypedParticleOptions>,
+    /// `BlockParticleOption`: the block's particle sprite and terrain tint.
+    pub block: Option<(String, u32)>,
+    /// RGB(A) for dust, spells, entity effects and tinted leaves. The item crumbs (`item` and
+    /// its `item_*` variants) multiply their red, green and blue by it when spawned and ignore
+    /// its alpha; white, the default, leaves them as they are.
+    pub color: [f32; 4],
+    /// `DustParticleOptions.scale`, `PowerParticleOption.power`, `SpellParticleOption.power`,
+    /// `SculkChargeParticleOptions.roll`, `ShriekParticleOption.delay`.
+    pub scale: f32,
+    /// `DustColorTransitionOptions.toColor` (`color` is the from colour).
+    pub to_color: [f32; 3],
+    /// `TrailParticleOption`: the point it flies to and how many ticks it takes.
+    pub trail: Option<([f64; 3], i32)>,
+    /// `ItemParticleOption`: the particle sprite of each layer of the item's
+    /// model as resolved for the ground.
+    pub item: Option<Vec<String>>,
+    /// Stack sent by `ServerLevel.sendParticles`; clients resolve its ground model at seed 0.
+    /// Invalid, unknown or oversized stacks cause the send to return false.
+    pub item_stack: Option<crate::ItemStack>,
+    /// `GeyserParticleOptions.waterBlocks` and `GeyserBaseParticleOptions`'
+    /// `waterBlocks` and `burstImpulseBase` (0 where the type has none).
+    pub geyser: Option<(i32, f32)>,
+    /// `VibrationParticleOption`: the listener's position source, the resolved
+    /// point the signal flies to and its arrival time in ticks. The source is
+    /// sent to clients; the resolved point is used for local rendering
+    /// (`ParticleEngine::vibration` is the same particle).
+    pub vibration: Option<(PositionSource, [f64; 3], i32)>,
+}
+impl ParticleOptions {
+    /// The option's registered particle key.
+    pub fn key(&self) -> ParticleKey {
+        self.ty
+    }
+
+    // hidden: the game wraps a value decoded by the registered codec.
+    #[doc(hidden)]
+    pub fn from_typed(value: super::particle_types::TypedParticleOptions) -> Self {
+        let key = value.key();
+        Self {
+            typed: Some(value),
+            ..Self::simple(key)
+        }
+    }
+
+    // hidden: the game's spawn and send paths inspect the erased value.
+    #[doc(hidden)]
+    pub fn typed(&self) -> Option<&super::particle_types::TypedParticleOptions> {
+        self.typed.as_ref()
+    }
+
+    /// Construct a value for a vanilla or asset-only sprite-provider key.
+    /// Code-defined types require [`crate::ParticleType::options`].
+    pub fn simple(ty: ParticleKey) -> Self {
+        Self {
+            ty,
+            typed: None,
+            block: None,
+            color: [1.0; 4],
+            scale: 1.0,
+            to_color: [1.0, 0.0, 0.0],
+            trail: None,
+            item: None,
+            item_stack: None,
+            geyser: None,
+            vibration: None,
+        }
+    }
+    /// `GeyserParticleOptions(type, waterBlocks)`.
+    pub fn geyser(ty: ParticleKey, water_blocks: i32) -> Self {
+        Self {
+            geyser: Some((water_blocks, 0.0)),
+            ..Self::simple(ty)
+        }
+    }
+    /// `GeyserBaseParticleOptions(type, waterBlocks, burstImpulseBase)`.
+    pub fn geyser_base(ty: ParticleKey, water_blocks: i32, burst_impulse_base: f32) -> Self {
+        Self {
+            geyser: Some((water_blocks, burst_impulse_base)),
+            ..Self::simple(ty)
+        }
+    }
+    /// `VibrationParticleOption(destination, arrivalInTicks)`: the listener's
+    /// position source and the resolved point this engine flies the signal to.
+    pub fn vibration(ty: ParticleKey, source: PositionSource, dest: [f64; 3], ticks: i32) -> Self {
+        Self {
+            vibration: Some((source, dest, ticks)),
+            ..Self::simple(ty)
+        }
+    }
+    /// `ItemParticleOption`: the stack's layer particle sprites (`BreakingItemParticle`).
+    pub fn item(ty: ParticleKey, layers: Vec<String>) -> Self {
+        Self {
+            item: Some(layers),
+            ..Self::simple(ty)
+        }
+    }
+    /// `DustColorTransitionOptions`.
+    pub fn dust_transition(ty: ParticleKey, from: [f32; 3], to: [f32; 3], scale: f32) -> Self {
+        Self {
+            color: [from[0], from[1], from[2], 1.0],
+            to_color: to,
+            scale: scale.clamp(0.01, 4.0),
+            ..Self::simple(ty)
+        }
+    }
+    /// `DustColorTransitionOptions.SCULK_TO_REDSTONE`.
+    pub fn sculk_to_redstone(ty: ParticleKey) -> Self {
+        let rgb = |c: u32| {
+            [
+                ((c >> 16) & 255) as f32 / 255.0,
+                ((c >> 8) & 255) as f32 / 255.0,
+                (c & 255) as f32 / 255.0,
+            ]
+        };
+        Self::dust_transition(ty, rgb(3_790_560), rgb(16_711_680), 1.0)
+    }
+    /// `SculkChargeParticleOptions(roll)`.
+    pub fn sculk_charge(ty: ParticleKey, roll: f32) -> Self {
+        Self {
+            scale: roll,
+            ..Self::simple(ty)
+        }
+    }
+    /// `ShriekParticleOption(delay)`.
+    pub fn shriek(ty: ParticleKey, delay: i32) -> Self {
+        Self {
+            scale: delay as f32,
+            ..Self::simple(ty)
+        }
+    }
+    /// `TrailParticleOption(target, color, duration)`.
+    pub fn trail(ty: ParticleKey, target: [f64; 3], rgb: u32, duration: i32) -> Self {
+        Self {
+            color: [
+                ((rgb >> 16) & 255) as f32 / 255.0,
+                ((rgb >> 8) & 255) as f32 / 255.0,
+                (rgb & 255) as f32 / 255.0,
+                1.0,
+            ],
+            trail: Some((target, duration)),
+            ..Self::simple(ty)
+        }
+    }
+    /// Block particle options (`BlockParticleOption`) carrying a block-atlas sprite name and RGB tint.
+    pub fn block(ty: ParticleKey, sprite: String, tint: u32) -> Self {
+        Self {
+            block: Some((sprite, tint)),
+            ..Self::simple(ty)
+        }
+    }
+    /// `DustParticleOptions(color, scale)`.
+    pub fn dust(ty: ParticleKey, rgb: [f32; 3], scale: f32) -> Self {
+        Self {
+            color: [rgb[0], rgb[1], rgb[2], 1.0],
+            scale: scale.clamp(0.01, 4.0),
+            ..Self::simple(ty)
+        }
+    }
+    /// Color-tinted particle options (`ColorParticleOption` / `SpellParticleOption`) with RGBA components.
+    pub fn colored(ty: ParticleKey, rgba: [f32; 4]) -> Self {
+        Self {
+            color: rgba,
+            ..Self::simple(ty)
+        }
+    }
+    /// These options with `color` set to `rgba` ([`ParticleOptions::color`]): the way to tint an
+    /// item crumb, as `ParticleOptions::item(key, vec![sprite]).with_color([r, g, b, 1.0])`. An
+    /// item crumb's colour must be finite and each component in `0.0..=1.0`; `add_particle`
+    /// refuses anything else, and nothing is clamped.
+    pub fn with_color(self, rgba: [f32; 4]) -> Self {
+        Self {
+            color: rgba,
+            ..self
+        }
+    }
+}

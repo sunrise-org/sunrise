@@ -438,6 +438,10 @@ pub(in crate::game) mod pack_layers;
 #[cfg(feature = "client")]
 #[path = "mobs/part_shearing_client.rs"]
 pub(in crate::game) mod part_shearing_client;
+#[cfg(feature = "client")]
+#[cfg(test)]
+#[path = "interface/shader_options_device_tests.rs"]
+mod shader_options_device_tests;
 #[path = "entities/stock_layer_mask.rs"]
 pub(in crate::game) mod stock_layer_mask;
 #[cfg(feature = "client")]

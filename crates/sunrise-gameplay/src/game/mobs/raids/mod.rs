@@ -27,18 +27,12 @@ use sunrise_sim::{
     raid::{self, Action, BarName, RaidLevel, RaidPlayer, RaiderInfo, RaiderType, Raids, Spawn},
 };
 
-/// Patrol and raid state owned by the game.
+/// Per-level raid state exchanged on level swap (`ServerLevel.getRaids`).
 #[derive(Default)]
-pub struct Raiding {
-    pub(in crate::game) patrol: PatrolSpawner,
-    pub siege: VillageSiege,
+pub struct RaidLevelState {
     /// The raids of the dimension the player is in, and that dimension.
     pub raids: Raids,
     pub(in crate::game) loaded: Option<Dim>,
-    /// `ServerPlayer.raidOmenPosition` (`raid_omen_position`), read from the
-    /// player data on first use.
-    pub(in crate::game) omen_position: Option<[i32; 3]>,
-    pub(in crate::game) omen_loaded: bool,
     /// Raids read before their first raid tick, whose randoms that tick seeds
     /// (their ids and positions in the file).
     pub(in crate::game) unseeded: Option<Vec<(i32, usize)>>,
@@ -47,6 +41,30 @@ pub struct Raiding {
     /// Beds near each raid's centre, rescanned now and then (`HOME` points
     /// of interest for `RaiderMoveThroughVillageGoal`).
     pub(in crate::game) homes: HashMap<i32, (i64, std::sync::Arc<Vec<[i32; 3]>>)>,
+}
+
+impl RaidLevelState {
+    pub fn raids(&self, dimension: &str) -> Option<&Raids> {
+        self.loaded
+            .filter(|dim| dim.id() == dimension)
+            .map(|_| &self.raids)
+    }
+    pub fn raids_mut(&mut self, dimension: &str) -> Option<&mut Raids> {
+        self.loaded
+            .filter(|dim| dim.id() == dimension)
+            .map(|_| &mut self.raids)
+    }
+}
+
+/// Patrol and raid state owned by the game.
+#[derive(Default)]
+pub struct Raiding {
+    pub(in crate::game) patrol: PatrolSpawner,
+    pub siege: VillageSiege,
+    pub level: RaidLevelState,
+    /// `ServerPlayer.raidOmenPosition`, loaded on first use.
+    pub(in crate::game) omen_position: Option<[i32; 3]>,
+    pub(in crate::game) omen_loaded: bool,
 }
 
 /// A level's living raid members, in mob-list order.
@@ -58,23 +76,15 @@ pub(in crate::game::server_side) fn members(mobs: &[Mob], id: i32) -> impl Itera
 
 impl Raiding {
     pub fn raids(&self, dimension: &str) -> Option<&Raids> {
-        self.loaded
-            .filter(|dim| dim.id() == dimension)
-            .map(|_| &self.raids)
+        self.level.raids(dimension)
     }
     pub fn raids_mut(&mut self, dimension: &str) -> Option<&mut Raids> {
-        self.loaded
-            .filter(|dim| dim.id() == dimension)
-            .map(|_| &mut self.raids)
+        self.level.raids_mut(dimension)
     }
     /// Exchange the level-held parts (`ServerLevel.getRaids`) with another
     /// level's (game/world/levels.rs).
-    pub(in crate::game::server_side) fn swap_level(&mut self, other: &mut Self) {
-        std::mem::swap(&mut self.raids, &mut other.raids);
-        std::mem::swap(&mut self.loaded, &mut other.loaded);
-        std::mem::swap(&mut self.unseeded, &mut other.unseeded);
-        std::mem::swap(&mut self.bar_hurts, &mut other.bar_hurts);
-        std::mem::swap(&mut self.homes, &mut other.homes);
+    pub(in crate::game::server_side) fn swap_level(&mut self, other: &mut RaidLevelState) {
+        std::mem::swap(&mut self.level, other);
     }
 }
 
@@ -111,8 +121,8 @@ impl RaidLevel for Lvl<'_, '_> {
             && self
                 .game
                 .server
+                .chunk_ticking
                 .tickets
-                .0
                 .levels()
                 .entity_ticking_at(p[0], p[2])
     }
@@ -328,9 +338,9 @@ impl crate::game::ServerGame<'_> {
     /// saved first).
     pub(in crate::game::server_side) fn load_raids(&mut self) {
         self.read_raids();
-        if let Some(order) = self.server.raiding.0.unseeded.take() {
+        if let Some(order) = self.server.raiding.0.level.unseeded.take() {
             let seed = random_source::unique_seed();
-            self.server.raiding.0.raids.seed_loaded(seed, &order);
+            self.server.raiding.0.level.raids.seed_loaded(seed, &order);
         }
     }
     /// Reads the raids of the player's dimension from its file (the previous
@@ -338,41 +348,41 @@ impl crate::game::ServerGame<'_> {
     /// constructor). Their own randoms are seeded by `load_raids` on the first
     /// raid tick without drawing from the level's stream.
     pub fn read_raids(&mut self) {
-        if self.server.raiding.0.loaded == Some(self.common.dim) {
+        if self.server.raiding.0.level.loaded == Some(self.common.dim) {
             return;
         }
-        if self.server.raiding.0.loaded.is_some() {
+        if self.server.raiding.0.level.loaded.is_some() {
             self.save_raids();
         }
-        self.server.raiding.0.loaded = Some(self.common.dim);
-        self.server.raiding.0.bar_hurts.clear();
-        self.server.raiding.0.homes.clear();
+        self.server.raiding.0.level.loaded = Some(self.common.dim);
+        self.server.raiding.0.level.bar_hurts.clear();
+        self.server.raiding.0.level.homes.clear();
         let (raids, order) = match sunrise_sim::save::read_dat(&self.raids_path(self.common.dim))
             .and_then(|tag| tag.get("data").cloned())
         {
             Some(data) => Raids::from_nbt_unseeded(&data),
             None => (Raids::default(), Vec::new()),
         };
-        self.server.raiding.0.raids = raids;
-        self.server.raiding.0.unseeded = Some(order);
+        self.server.raiding.0.level.raids = raids;
+        self.server.raiding.0.level.unseeded = Some(order);
     }
     /// `Raids` as its dimension's `raids.dat`, when it changed.
     pub fn save_raids(&mut self) {
-        let Some(dim) = self.server.raiding.0.loaded else {
+        let Some(dim) = self.server.raiding.0.level.loaded else {
             return;
         };
-        if !self.server.raiding.0.raids.dirty || !self.common.is_logical_server() {
+        if !self.server.raiding.0.level.raids.dirty || !self.common.is_logical_server() {
             return;
         }
         let tag = sunrise_core::nbt::Tag::compound([
-            ("data", self.server.raiding.0.raids.to_nbt()),
+            ("data", self.server.raiding.0.level.raids.to_nbt()),
             (
                 "DataVersion",
                 sunrise_core::nbt::Tag::Int(sunrise_world::DATA_VERSION),
             ),
         ]);
         if sunrise_sim::save::write_dat(&self.raids_path(dim), tag).is_ok() {
-            self.server.raiding.0.raids.dirty = false;
+            self.server.raiding.0.level.raids.dirty = false;
         }
         self.save_raid_omen_position();
     }
@@ -478,6 +488,7 @@ impl crate::game::ServerGame<'_> {
                         .server
                         .raiding
                         .0
+                        .level
                         .raids
                         .nearby(pos)
                         .is_none_or(|(_, r)| r.omen_level < raid::MAX_OMEN_LEVEL)
@@ -520,6 +531,7 @@ impl crate::game::ServerGame<'_> {
             .server
             .raiding
             .0
+            .level
             .raids
             .create_or_extend(center, difficulty, amplifier, seed);
         if triggered {
@@ -541,7 +553,13 @@ impl crate::game::ServerGame<'_> {
     }
     /// `ServerLevel.getRaidAt`.
     pub(in crate::game::server_side) fn raiding_nearby(&self, at: [i32; 3]) -> Option<i32> {
-        self.server.raiding.0.raids.nearby(at).map(|(id, _)| id)
+        self.server
+            .raiding
+            .0
+            .level
+            .raids
+            .nearby(at)
+            .map(|(id, _)| id)
     }
     /// `/raid start`: a raid in the local village at the given omen level.
     pub fn raid_command_create(&mut self, at: [i32; 3], omen_level: i32) -> bool {
@@ -549,14 +567,14 @@ impl crate::game::ServerGame<'_> {
         let Some(id) = self.create_or_extend_raid(at, None) else {
             return false;
         };
-        if let Some(r) = self.server.raiding.0.raids.get_mut(id) {
+        if let Some(r) = self.server.raiding.0.level.raids.get_mut(id) {
             r.omen_level = omen_level;
         }
-        self.server.raiding.0.raids.dirty = true;
+        self.server.raiding.0.level.raids.dirty = true;
         true
     }
     pub fn raid_command_stop(&mut self, id: i32) {
-        if let Some(center) = self.server.raiding.0.raids.stop(id)
+        if let Some(center) = self.server.raiding.0.level.raids.stop(id)
             && let Some(level) = self.level(self.common.dim.id())
         {
             self.native_raid_state_change(mod_api::RaidRef::new(level, id), center, "stopped");
@@ -566,6 +584,7 @@ impl crate::game::ServerGame<'_> {
         self.server
             .raiding
             .0
+            .level
             .raids
             .set_omen_level(id, level)
             .unwrap_or(0)
@@ -588,7 +607,7 @@ impl crate::game::ServerGame<'_> {
     }
     /// The `/raid check` summary line.
     pub(in crate::game::server_side) fn raid_status_text(&self, id: i32) -> String {
-        let Some(r) = self.server.raiding.0.raids.get(id) else {
+        let Some(r) = self.server.raiding.0.level.raids.get(id) else {
             return String::new();
         };
         let members: Vec<&Mob> = self.raid_members(id).collect();
@@ -624,6 +643,7 @@ impl crate::game::ServerGame<'_> {
             .server
             .raiding
             .0
+            .level
             .bar_hurts
             .get(&id)
             .copied()
@@ -637,10 +657,10 @@ impl crate::game::ServerGame<'_> {
             return;
         };
         let living = self.remaining_raider_health(id, Some(mob)) + before;
-        if let Some(r) = self.server.raiding.0.raids.get_mut(id) {
+        if let Some(r) = self.server.raiding.0.level.raids.get_mut(id) {
             r.update_bossbar(living);
         }
-        self.server.raiding.0.bar_hurts.insert(id, seq);
+        self.server.raiding.0.level.bar_hurts.insert(id, seq);
     }
 
     /// The members of every raid, for `Raids.tick`.
@@ -686,13 +706,13 @@ impl crate::game::ServerGame<'_> {
             .collect();
         for (mob, id, wave, health, leader) in pending {
             let living = self.remaining_raider_health(id, None);
-            let known = match self.server.raiding.0.raids.get_mut(id) {
+            let known = match self.server.raiding.0.level.raids.get_mut(id) {
                 Some(r) => {
                     r.add_wave_mob(health, false, living);
                     if leader {
                         r.set_leader(wave, mob);
                     }
-                    self.server.raiding.0.raids.dirty = true;
+                    self.server.raiding.0.level.raids.dirty = true;
                     true
                 }
                 None => false,
@@ -713,7 +733,7 @@ impl crate::game::ServerGame<'_> {
         }
         self.load_raids();
         self.register_loaded_raiders();
-        for id in self.server.raiding.0.raids.ids() {
+        for id in self.server.raiding.0.level.raids.ids() {
             self.flush_raid_bar(id);
         }
         let centers = self.village_centers();
@@ -722,6 +742,7 @@ impl crate::game::ServerGame<'_> {
             .server
             .raiding
             .0
+            .level
             .raids
             .ids()
             .into_iter()
@@ -729,12 +750,13 @@ impl crate::game::ServerGame<'_> {
                 self.server
                     .raiding
                     .0
+                    .level
                     .raids
                     .get(id)
                     .map(|r| (id, (r.status, r.center)))
             })
             .collect();
-        let mut raids = std::mem::take(&mut self.server.raiding.0.raids);
+        let mut raids = std::mem::take(&mut self.server.raiding.0.level.raids);
         let actions = {
             let lvl = Lvl {
                 game: self,
@@ -751,9 +773,9 @@ impl crate::game::ServerGame<'_> {
                 &members,
             )
         };
-        self.server.raiding.0.raids = raids;
+        self.server.raiding.0.level.raids = raids;
         for (id, (old, _)) in old_states {
-            if let Some(r) = self.server.raiding.0.raids.get(id)
+            if let Some(r) = self.server.raiding.0.level.raids.get(id)
                 && r.status != old
                 && let Some(level) = self.level(self.common.dim.id())
             {
@@ -845,6 +867,7 @@ impl crate::game::ServerGame<'_> {
             .server
             .raiding
             .0
+            .level
             .raids
             .get(id)
             .is_some_and(|r| r.bar.player);
@@ -894,6 +917,7 @@ impl crate::game::ServerGame<'_> {
             .server
             .raiding
             .0
+            .level
             .raids
             .get(raid_id)
             .map_or(0.0, raid::Raid::enchant_odds);
@@ -902,7 +926,7 @@ impl crate::game::ServerGame<'_> {
                 continue;
             };
             if sp.leader
-                && let Some(r) = self.server.raiding.0.raids.get_mut(raid_id)
+                && let Some(r) = self.server.raiding.0.level.raids.get_mut(raid_id)
             {
                 r.set_leader(wave, id);
             }
@@ -1047,7 +1071,7 @@ impl crate::game::ServerGame<'_> {
                 matches!(m.ai.target, Some(sunrise_sim::mobs::Who::Mob(t)) if golems.contains(&t));
             let target_player = m.ai.target == Some(sunrise_sim::mobs::Who::Player);
             let (health, range) = (m.health, m.attrs.follow_range);
-            let raids = &mut self.server.raiding.0.raids;
+            let raids = &mut self.server.raiding.0.level.raids;
             let wears_banner = m.extra.head_id() == Some(raider::BANNER);
             let s = m.extra.raider.get_or_insert_with(Box::default);
             s.rider = has_rider;
@@ -1160,7 +1184,7 @@ impl crate::game::ServerGame<'_> {
             self.remove_dropped(i);
         }
         for (id, wave, mob) in new_leaders {
-            if let Some(r) = self.server.raiding.0.raids.get_mut(id) {
+            if let Some(r) = self.server.raiding.0.level.raids.get_mut(id) {
                 r.set_leader(wave, mob);
             }
         }
@@ -1192,6 +1216,7 @@ impl crate::game::ServerGame<'_> {
             .server
             .raiding
             .0
+            .level
             .raids
             .get(id)
             .map(|r| r.groups_spawned)
@@ -1211,10 +1236,10 @@ impl crate::game::ServerGame<'_> {
         s.ticks_outside_raid = 0;
         s.registered = true;
         let living = self.remaining_raider_health(id, None);
-        if let Some(r) = self.server.raiding.0.raids.get_mut(id) {
+        if let Some(r) = self.server.raiding.0.level.raids.get_mut(id) {
             r.add_wave_mob(health, true, living);
         }
-        self.server.raiding.0.raids.dirty = true;
+        self.server.raiding.0.level.raids.dirty = true;
     }
     /// Beds within 64 blocks of each raid's centre (the `HOME` points of
     /// interest), rescanned every five seconds.
@@ -1226,6 +1251,7 @@ impl crate::game::ServerGame<'_> {
             .server
             .raiding
             .0
+            .level
             .raids
             .map
             .iter()
@@ -1235,6 +1261,7 @@ impl crate::game::ServerGame<'_> {
         self.server
             .raiding
             .0
+            .level
             .homes
             .retain(|id, _| ids.iter().any(|(i, _)| i == id));
         for (id, c) in ids {
@@ -1242,6 +1269,7 @@ impl crate::game::ServerGame<'_> {
                 .server
                 .raiding
                 .0
+                .level
                 .homes
                 .get(&id)
                 .is_some_and(|(at, _)| now - at < 100)
@@ -1276,12 +1304,14 @@ impl crate::game::ServerGame<'_> {
             self.server
                 .raiding
                 .0
+                .level
                 .homes
                 .insert(id, (now, std::sync::Arc::new(beds)));
         }
         self.server
             .raiding
             .0
+            .level
             .homes
             .iter()
             .map(|(id, (_, v))| (*id, v.clone()))
@@ -1306,7 +1336,7 @@ impl crate::game::ServerGame<'_> {
         self.flush_raid_bar(id);
         let living = self.remaining_raider_health(id, Some(m.id));
         let uuid = self.player_uuid_of(killer);
-        if let Some(r) = self.server.raiding.0.raids.get_mut(id) {
+        if let Some(r) = self.server.raiding.0.level.raids.get_mut(id) {
             if leader {
                 r.remove_leader(wave);
             }
@@ -1314,7 +1344,7 @@ impl crate::game::ServerGame<'_> {
                 r.add_hero(uuid);
             }
             r.remove_from_raid(m.health, false, living);
-            self.server.raiding.0.raids.dirty = true;
+            self.server.raiding.0.level.raids.dirty = true;
         }
         if let Some(dead) = self.common.mobs.iter_mut().find(|x| x.id == m.id) {
             raider::state_mut(dead).raid_id = None;
@@ -1328,7 +1358,7 @@ impl crate::game::ServerGame<'_> {
         &mut self,
         infos: &HashMap<i32, Vec<RaiderInfo>>,
     ) {
-        let raids = &self.server.raiding.0.raids;
+        let raids = &self.server.raiding.0.level.raids;
         let mut ongoing = Vec::new();
         for m in &mut self.common.mobs {
             if m.species() != Species::Villager {
@@ -1406,10 +1436,19 @@ impl crate::game::ServerGame<'_> {
         self.server
             .raiding
             .0
+            .level
             .raids
             .ids()
             .into_iter()
-            .filter_map(|id| self.server.raiding.0.raids.get(id).map(|raid| (id, raid)))
+            .filter_map(|id| {
+                self.server
+                    .raiding
+                    .0
+                    .level
+                    .raids
+                    .get(id)
+                    .map(|raid| (id, raid))
+            })
             .filter(|(_, raid)| {
                 raid.bar.players.contains(&uuid) && raid.bar.visible && !raid.is_stopped()
             })
@@ -1658,8 +1697,9 @@ impl crate::game::ServerGame<'_> {
     ) -> sunrise_game_data::Result<serde_json::Value> {
         use serde_json::json;
         let id = op["id"].as_i64().ok_or("raid observation: missing id")? as i32;
-        let mut state = json!({"id":id,"present":self.server.raiding.0.raids.get(id).is_some()});
-        if let Some(r) = self.server.raiding.0.raids.get(id) {
+        let mut state =
+            json!({"id":id,"present":self.server.raiding.0.level.raids.get(id).is_some()});
+        if let Some(r) = self.server.raiding.0.level.raids.get(id) {
             state["status"] = json!(r.status.name());
             state["started"] = json!(r.started);
             state["active"] = json!(r.active);
@@ -1734,7 +1774,7 @@ impl crate::game::ServerGame<'_> {
             "raid input raw: {}",
             json!({"label":op["label"],"id":id,"loaded":loaded,
             "live_poi":live_poi,"claimed_pois":self.village_pois(),
-            "raid_nbt":sunrise_game_data::snbt::to_snbt(&self.server.raiding.0.raids.to_nbt()),
+            "raid_nbt":sunrise_game_data::snbt::to_snbt(&self.server.raiding.0.level.raids.to_nbt()),
             "actors":actors,"villagers":villagers})
         );
         Ok(state)
@@ -1750,3 +1790,123 @@ use sunrise_gameplay_common::game::commands_common::CommandsCommonGameExt2 as _;
 use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _;
 
 use sunrise_gameplay_common::game::native_level_refs_common::NativeLevelRefsCommonGameExt1 as _;
+
+#[cfg(test)]
+mod swap_level_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn swap_level_exchanges_per_level_fields_only() {
+        let mut raids_a = Raids::default();
+        let (id_a1, _) = raids_a.create_or_extend([10, 64, 20], 2, Some(1), 11);
+        let (id_a2, _) = raids_a.create_or_extend([400, 64, 20], 2, Some(2), 12);
+        raids_a.tick = 100;
+        raids_a.next_id = 17;
+        raids_a.dirty = false;
+        let nbt_a = raids_a.to_nbt();
+
+        let mut raids_b = Raids::default();
+        raids_b.next_id = 5;
+        let (id_b, _) = raids_b.create_or_extend([-30, 70, 40], 3, Some(2), 22);
+        raids_b.tick = 200;
+        raids_b.dirty = true;
+        let nbt_b = raids_b.to_nbt();
+        assert_ne!(id_a1, id_b);
+
+        let mut raiding = Raiding {
+            patrol: PatrolSpawner { next_tick: 777 },
+            siege: VillageSiege {
+                tonight: true,
+                set_up: true,
+                zombies_to_spawn: 9,
+                next_spawn_time: 123,
+                spot: [1, 64, 2],
+            },
+            level: RaidLevelState {
+                raids: raids_a,
+                loaded: Some(Dim::Overworld),
+                unseeded: Some(vec![(id_a1, 0), (id_a2, 1)]),
+                bar_hurts: [(id_a1, 55)].into_iter().collect(),
+                homes: [(id_a1, (100, Arc::new(vec![[10, 64, 20]])))]
+                    .into_iter()
+                    .collect(),
+            },
+            omen_position: Some([5, 65, 6]),
+            omen_loaded: true,
+        };
+        let mut parked = RaidLevelState {
+            raids: raids_b,
+            loaded: Some(Dim::Nether),
+            unseeded: Some(vec![(id_b, 3)]),
+            bar_hurts: [(id_b, 88)].into_iter().collect(),
+            homes: [(id_b, (200, Arc::new(vec![[-30, 70, 40]])))]
+                .into_iter()
+                .collect(),
+        };
+
+        let check_non_level = |r: &Raiding| {
+            assert_eq!(r.patrol.next_tick, 777);
+            assert!(r.siege.tonight);
+            assert!(r.siege.set_up);
+            assert_eq!(r.siege.zombies_to_spawn, 9);
+            assert_eq!(r.siege.next_spawn_time, 123);
+            assert_eq!(r.siege.spot, [1, 64, 2]);
+            assert_eq!(r.omen_position, Some([5, 65, 6]));
+            assert!(r.omen_loaded);
+        };
+        let assert_a = |level: &RaidLevelState| {
+            assert_eq!(level.raids.tick, 100);
+            assert_eq!(level.raids.next_id, 17);
+            assert!(!level.raids.dirty);
+            assert_eq!(level.raids.map.len(), 2);
+            assert_eq!(level.raids.ids(), vec![id_a1, id_a2]);
+            assert_eq!(level.raids.to_nbt(), nbt_a);
+            assert_eq!(level.loaded, Some(Dim::Overworld));
+            assert_eq!(
+                level.unseeded.as_deref(),
+                Some(&[(id_a1, 0), (id_a2, 1)][..])
+            );
+            assert_eq!(level.bar_hurts.len(), 1);
+            assert_eq!(level.bar_hurts.get(&id_a1), Some(&55));
+            assert_eq!(level.homes.len(), 1);
+            assert_eq!(
+                level
+                    .homes
+                    .get(&id_a1)
+                    .map(|(t, beds)| (*t, beds.as_slice())),
+                Some((100, &[[10, 64, 20]][..]))
+            );
+        };
+        let assert_b = |level: &RaidLevelState| {
+            assert_eq!(level.raids.tick, 200);
+            assert_eq!(level.raids.next_id, 6);
+            assert!(level.raids.dirty);
+            assert_eq!(level.raids.map.len(), 1);
+            assert_eq!(level.raids.ids(), vec![id_b]);
+            assert_eq!(level.raids.to_nbt(), nbt_b);
+            assert_eq!(level.loaded, Some(Dim::Nether));
+            assert_eq!(level.unseeded.as_deref(), Some(&[(id_b, 3)][..]));
+            assert_eq!(level.bar_hurts.len(), 1);
+            assert_eq!(level.bar_hurts.get(&id_b), Some(&88));
+            assert_eq!(level.homes.len(), 1);
+            assert_eq!(
+                level
+                    .homes
+                    .get(&id_b)
+                    .map(|(t, beds)| (*t, beds.as_slice())),
+                Some((200, &[[-30, 70, 40]][..]))
+            );
+        };
+
+        raiding.swap_level(&mut parked);
+        check_non_level(&raiding);
+        assert_b(&raiding.level);
+        assert_a(&parked);
+
+        raiding.swap_level(&mut parked);
+        check_non_level(&raiding);
+        assert_a(&raiding.level);
+        assert_b(&parked);
+    }
+}

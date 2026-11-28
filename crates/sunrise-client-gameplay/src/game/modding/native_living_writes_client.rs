@@ -70,7 +70,7 @@ impl crate::game::ClientGame<'_> {
     pub(in crate::game) fn client_living_used_item_hand(
         &self,
         living: LivingRef,
-    ) -> Option<mod_api::client::first_person::Hand> {
+    ) -> Option<mod_api::Hand> {
         let Target::Player = self.client_living_read_target(living)? else {
             return None;
         };

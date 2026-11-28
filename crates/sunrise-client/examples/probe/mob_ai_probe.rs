@@ -26,8 +26,9 @@ use sunrise_client::{
         creaking_heart::{self, HeartEvent, HeartHost},
     },
     mobs::{
-        Mob, MobData, MobEvent, MobTypes, MobWorld, PlayerView, Seen, Species, Who,
-        control::Operation, seen_grid::SeenGrid, spawning::LocalDifficulty,
+        Mob, MobData, MobEvent, MobTypes, MobWorld, PlayerView, Seen, Species, WeaponAttack,
+        WeaponHit, Who, ai::UntilStab, control::Operation, seen_grid::SeenGrid,
+        spawning::LocalDifficulty,
     },
     world::World,
 };
@@ -446,6 +447,110 @@ fn villager_events(
 /// The player's UUID (the oracle's `PLAYER_UUID`).
 const PLAYER_UUID: [i32; 4] = [0, 0x1234, 0, 0x5678];
 
+/// A probe mob's UUID: its id in the last int.
+fn mob_uuid(id: u32) -> [i32; 4] {
+    [0, 0, 0, id as i32]
+}
+
+/// The attack of a hit on another mob, as the game builds it (its attack_of_who): the
+/// causing mob and the UUID that `Villager.setLastHurtByMob` gossips about.
+fn mob_attack(source: &Damage) -> sunrise_client::health::Attack {
+    match source.attacker {
+        Some(Who::Mob(id)) => sunrise_client::health::Attack {
+            attacker: id as i32,
+            attacker_uuid: Some(mob_uuid(id)),
+            ..Default::default()
+        },
+        _ => Default::default(),
+    }
+}
+
+/// The events a hit on a mob raised: its outbox, then the hurt sounds a villager
+/// holds until the game settles its hurt (`playHurtSound`, then
+/// `playSecondaryHurtSound`).
+fn take_hurt_events(m: &mut Mob) -> Vec<MobEvent> {
+    let mut raised = std::mem::take(&mut m.outbox);
+    if let Some(e) = m.extra.villager.as_mut() {
+        e.pending_hurt_player = None;
+        e.pending_hurt_damage = None;
+        for sunrise_client::mobs::villager::HurtSound(name, at, volume, pitch) in
+            std::mem::take(&mut e.pending_hurt_sounds)
+                .into_iter()
+                .flatten()
+        {
+            raised.push(MobEvent::Sound(name, at, volume, pitch));
+        }
+    }
+    raised
+}
+
+/// `LivingEntity.stabAttack` of a spear, for the stabs in `events[from..]`: on another mob
+/// the hurt, then `causeExtraKnockback` with 0.4 and with the weapon's knockback, each push
+/// slowing the attacker. The scenario's player is hurt where the events are printed
+/// ([`player_hurt`]); its pushes slow the attacker the same. Enchantments are left out.
+fn settle_stabs(
+    mobs: &mut JoinList<Mob>,
+    test_level: &mut sunrise_client::health::TestLevel,
+    events: &mut Vec<MobEvent>,
+    from: usize,
+) {
+    let mut k = from;
+    while k < events.len() {
+        let MobEvent::WeaponAttack(WeaponHit {
+            target,
+            amount,
+            source,
+            knockback,
+            direction: [x, z],
+            attack:
+                WeaponAttack::Stab {
+                    deals_damage,
+                    deals_knockback,
+                    ..
+                },
+            ..
+        }) = events[k]
+        else {
+            k += 1;
+            continue;
+        };
+        let powers = [0.4, knockback / 2.0].map(|power| deals_knockback && power > 0.0);
+        let mut raised = Vec::new();
+        let landed = match target {
+            Who::Player => true,
+            Who::Mob(target) => match mobs.iter_mut().find(|m| m.id == target) {
+                Some(t) => {
+                    if deals_damage {
+                        let attack = mob_attack(&source);
+                        t.damage(&mut test_level.level().attacked_by(&attack), amount, source);
+                    }
+                    for (power, pushes) in [0.4, knockback / 2.0].into_iter().zip(powers) {
+                        if pushes {
+                            let level = &mut test_level.level();
+                            t.knockback(level, f64::from(power), x, z, &source, amount);
+                        }
+                    }
+                    raised = take_hurt_events(t);
+                    true
+                }
+                None => false,
+            },
+        };
+        if landed
+            && let Some(Who::Mob(id)) = source.attacker
+            && let Some(a) = mobs.iter_mut().find(|m| m.id == id)
+        {
+            for _ in powers.iter().filter(|&&pushes| pushes) {
+                a.velocity.x *= 0.6;
+                a.velocity.z *= 0.6;
+            }
+        }
+        let n = raised.len();
+        events.splice(k + 1..k + 1, raised);
+        k += n + 1;
+    }
+}
+
 fn seen(m: &Mob, items: &Items) -> Seen {
     m.seen(Some(PLAYER_UUID), items)
 }
@@ -478,7 +583,7 @@ impl HeartHost for Host<'_> {
             .map(|m| m.id)
     }
     fn uuid_for(&mut self, id: u32) -> [i32; 4] {
-        [0, 0, 0, id as i32]
+        mob_uuid(id)
     }
     fn creaking_type(&self) -> Option<Arc<MobType>> {
         self.types
@@ -620,6 +725,14 @@ fn player_damage(e: &MobEvent) -> f32 {
             target: Who::Player,
             ..
         } => 10.0,
+        MobEvent::WeaponAttack(WeaponHit {
+            target: Who::Player,
+            amount,
+            attack: WeaponAttack::Stab {
+                deals_damage: true, ..
+            },
+            ..
+        }) => *amount,
         _ => 0.0,
     }
 }
@@ -648,6 +761,14 @@ fn player_hurt(player: Option<&PlayerView>, e: &MobEvent) -> bool {
             target: Who::Player,
             ..
         } => true,
+        MobEvent::WeaponAttack(WeaponHit {
+            target: Who::Player,
+            amount,
+            attack: WeaponAttack::Stab {
+                deals_damage: true, ..
+            },
+            ..
+        }) => *amount > 0.0,
         // ServerExplosion.hurtEntities: within twice the radius every hit does damage.
         MobEvent::Explode(at, radius, _, _) => {
             let d = Vec3::new(at[0], at[1], at[2])
@@ -832,10 +953,12 @@ fn villager(m: &Mob) -> String {
     while slots.last().is_some_and(|s| s == "-") {
         slots.pop();
     }
-    // Villagers gossip about players only.
+    // The oracle's `uuidLabel`.
     let label = |t: [i32; 4]| {
         if t == PLAYER_UUID {
             "player".to_owned()
+        } else if t == mob_uuid(t[3] as u32) {
+            who(Some(Who::Mob(t[3] as u32)))
         } else {
             format!("{t:?}")
         }
@@ -905,10 +1028,11 @@ pub fn main() -> sunrise_client::Result<()> {
     let registry = assets.registry;
     let facts = BlockFacts::load(root, registry)?;
     let motion = sunrise_client::motion::MotionResources::load(root, &assets)?;
-    let data = MobData::load(
+    let mut data = MobData::load(
         &sunrise_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
         facts.states.len(),
     )?;
+    data.populate_adjacent_flags(&facts);
     let types = MobTypes::load(root)?;
     // The types a bee leaving its hive is loaded with (EntityType.loadEntityRecursive).
     let arc_types: HashMap<String, Arc<MobType>> = types
@@ -1205,6 +1329,7 @@ pub fn main() -> sunrise_client::Result<()> {
             ($snapshot:expr, $grid:expr) => {
                 MobWorld {
                     side: sunrise_client::motion::dry_side(),
+                    variant_tables: None,
                     mob_maps: sunrise_client::neoforge_mob_maps::NeoForgeMobMaps::vanilla(),
                     goal_host: None,
                     teams: Default::default(),
@@ -1415,7 +1540,25 @@ pub fn main() -> sunrise_client::Result<()> {
                 let from = events.len();
                 #[cfg(feature = "rng-trace")]
                 sunrise_core::random::trace::set(true);
-                let alive = m.tick(&w, &mut test_level.level(), &mut events);
+                // The stabs land inside the attacker's tick, before its `aiStep`.
+                let alive = match m.tick_until_stab(&w, &mut test_level.level(), &mut events) {
+                    UntilStab::Complete(alive) => alive,
+                    UntilStab::Stabbed { events: raised } => {
+                        let stabs = events.len() - raised;
+                        settle_stabs(&mut mobs, &mut test_level, &mut events, stabs);
+                        // The game reads every mob again after a pause.
+                        for m in mobs.iter() {
+                            if let Some(k) = snapshot.iter().position(|e| e.id == m.id) {
+                                snapshot[k] = seen(m, &items);
+                                snapshot[k].alive &= !m.removed;
+                                grid.update(k, snapshot[k].bounds);
+                            }
+                        }
+                        let w = mob_world!(&snapshot, Some(&grid));
+                        mobs[i].resume_after_stab(&w, &mut test_level.level(), &mut events)
+                    }
+                };
+                let w = mob_world!(&snapshot, Some(&grid));
                 #[cfg(feature = "rng-trace")]
                 {
                     sunrise_core::random::trace::set(false);
@@ -1425,7 +1568,7 @@ pub fn main() -> sunrise_client::Result<()> {
                 }
                 sunrise_client::mobs::take_mob_pushes(&mut events, from, &mut pushes);
                 if !alive {
-                    m.removed = true;
+                    mobs[i].removed = true;
                 }
                 // Apply the same detach/drop event as Game::break_leash.
                 for event in &events[from..] {
@@ -1483,13 +1626,17 @@ pub fn main() -> sunrise_client::Result<()> {
                     };
                     if let Some((target, amount, source)) = hit
                         && let Some(t) = mobs.iter_mut().find(|m| m.id == target)
-                        && t.damage(&mut test_level.level(), amount, source)
+                        && t.damage(
+                            &mut test_level.level().attacked_by(&mob_attack(&source)),
+                            amount,
+                            source,
+                        )
                     {
                         if toss {
                             t.velocity.y +=
                                 f64::from(0.4f32) * (1.0 - t.knockback_resistance()).max(0.0);
                         }
-                        let raised = std::mem::take(&mut t.outbox);
+                        let raised = take_hurt_events(t);
                         let n = raised.len();
                         events.splice(k + 1..k + 1, raised);
                         k += n;

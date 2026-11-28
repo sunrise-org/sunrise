@@ -321,7 +321,7 @@ fn every_walk_family_of_the_entity_lists_fires_its_case() {
             let _ = game.tick_armor_stands();
             let _ = game.tick_projectiles();
             game.tick_tridents();
-            game.server.tickets.0.update(None);
+            game.server.chunk_ticking.tickets.update(None);
             // Existing residents whose spawn packets were already announced
             // (as the ordered tick's own test sets it): the round's TNT and
             // falling blocks go in the first pass.

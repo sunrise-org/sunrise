@@ -31,7 +31,6 @@ pub(super) fn voice_and_experience(
     // A baby-spawn listener defers both voice and XP until approval.
     let wolf_voice = if m.species() == Species::Wolf && !world.asks_baby_spawn {
         world
-            .side
             .variant_tables()
             .and_then(|v| v.wolf_sound.random(&mut m.random))
     } else {

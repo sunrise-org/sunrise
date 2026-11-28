@@ -1,5 +1,6 @@
 use super::{Attack, DirectEntity, HurtSource, names_its_projectile};
-use crate::mobs::{Damage, DamageKind, Who};
+use sunrise_entity_data::damage::{Damage, DamageKind};
+use sunrise_game_data::who::Who;
 
 impl Attack {
     /// `Enchantment.damageContext`: type predicates see the entities named by
@@ -138,59 +139,8 @@ impl Attack {
         }
     }
 }
-/// The damage type id of a Sunrise damage kind. `caused`: the source has a
-/// causing entity (only a blast asks).
-pub fn damage_type(kind: DamageKind, caused: bool) -> &'static str {
-    use crate::mobs::DamageKind as K;
-    match kind {
-        K::Named(named) => named.name,
-        K::PlayerAttack => "minecraft:player_attack",
-        K::MaceSmash => "minecraft:mace_smash",
-        K::Spear => "minecraft:spear",
-        K::MobAttack => "minecraft:mob_attack",
-        K::MobAttackNoAggro => "minecraft:mob_attack_no_aggro",
-        K::Arrow => "minecraft:arrow",
-        K::Thrown => "minecraft:thrown",
-        K::Fireball => "minecraft:fireball",
-        K::Explosion if caused => "minecraft:player_explosion",
-        K::Explosion => "minecraft:explosion",
-        K::Fall => "minecraft:fall",
-        K::FlyIntoWall => "minecraft:fly_into_wall",
-        K::FallingBlock => "minecraft:falling_block",
-        K::FallingStalactite => "minecraft:falling_stalactite",
-        K::OnFire => "minecraft:on_fire",
-        K::InFire => "minecraft:in_fire",
-        K::Campfire => "minecraft:campfire",
-        K::Lava => "minecraft:lava",
-        K::Drown => "minecraft:drown",
-        K::DryOut => "minecraft:dry_out",
-        K::Magic => "minecraft:magic",
-        K::IndirectMagic => "minecraft:indirect_magic",
-        K::Sting => "minecraft:sting",
-        K::Cactus => "minecraft:cactus",
-        K::SweetBerryBush => "minecraft:sweet_berry_bush",
-        K::Generic => "minecraft:generic",
-        K::InWall => "minecraft:in_wall",
-        K::Thorns => "minecraft:thorns",
-        K::SonicBoom => "minecraft:sonic_boom",
-        K::Freeze => "minecraft:freeze",
-        K::OutOfWorld => "minecraft:out_of_world",
-        K::Cramming => "minecraft:cramming",
-        K::FallingAnvil => "minecraft:falling_anvil",
-        K::Fireworks => "minecraft:fireworks",
-        K::GenericKill => "minecraft:generic_kill",
-        K::LightningBolt => "minecraft:lightning_bolt",
-        K::OutsideBorder => "minecraft:outside_border",
-        K::Spit => "minecraft:spit",
-        K::Stalagmite => "minecraft:stalagmite",
-        K::Starve => "minecraft:starve",
-        K::HotFloor => "minecraft:hot_floor",
-        K::SulfurCubeHot => "minecraft:sulfur_cube_hot",
-        K::WindCharge => "minecraft:wind_charge",
-        K::Wither => "minecraft:wither",
-        K::WitherSkull => "minecraft:wither_skull",
-    }
-}
+/// The damage type id of a Sunrise damage kind, defined with the types it names.
+pub use sunrise_entity_data::damage::damage_type;
 /// The damage type id of a mob's damage source (`DamageSources.explosion`: a
 /// blast with a causing entity is `player_explosion` whoever it is, an
 /// exploding creeper too).

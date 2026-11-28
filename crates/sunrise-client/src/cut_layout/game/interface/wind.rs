@@ -42,7 +42,7 @@ pub(crate) mod tests {
                 .add_empty_chunk(ChunkPos::new(0, 0))
                 .unwrap();
             assert!(game.run_command("forceload add 0 0"));
-            game.server.tickets.0.update(None);
+            game.server.chunk_ticking.tickets.update(None);
 
             game.server.ordered.announced = JoinSeq::upcoming();
             assert!(

@@ -10,7 +10,7 @@
 use super::commands::{Target, items::Owner};
 use super::living_attributes::AttributeWrite;
 use crate::game::ServerGame;
-use mod_api::client::first_person::Hand;
+use mod_api::Hand;
 use mod_api::{
     AttributeModifier, AttributeOperation, Direction, EntityRef, EquipmentSlot, Identifier,
     LivingRef, ModifierLifetime,

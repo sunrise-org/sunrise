@@ -111,7 +111,7 @@ pub(crate) mod birth_tests {
         game.mobs[0].extra.age = 6000;
         game.native_joins_skip();
         game.start_audio_capture();
-        game.server.lan_entity_events.clear();
+        game.server.lan_queues.entity_events.clear();
         (parent, partner)
     }
 
@@ -171,7 +171,7 @@ pub(crate) mod birth_tests {
                 assert_eq!(joins.load(Ordering::SeqCst), 1);
                 assert_eq!(game.mobs.len(), 2);
                 assert!(bed_owners(game).is_empty());
-                assert!(game.server.lan_entity_events.is_empty());
+                assert!(game.server.lan_queues.entity_events.is_empty());
             });
         });
     }
@@ -187,7 +187,10 @@ pub(crate) mod birth_tests {
         assert_eq!(baby.extra.variant, 2);
         assert_eq!(baby.extra.bed, Some(BED));
         assert_eq!(bed_owners(game), vec![baby.id]);
-        assert_eq!(game.server.lan_entity_events, vec![(baby.id as i32, 12)]);
+        assert_eq!(
+            game.server.lan_queues.entity_events,
+            vec![(baby.id as i32, 12)]
+        );
     }
 
     #[test]

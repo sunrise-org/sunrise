@@ -163,6 +163,7 @@ impl Renderer {
         // A renderer on the same device takes the previous one's shader
         // modules, layouts and pipelines where they come out the same.
         let reuse = previous.map_or_else(Default::default, |r| r.reuse.clone());
+        let device_id = previous.map_or_else(next_device_id, |r| r.device_id);
         let generation = reuse.begin();
         let kept = reuse.on(&device);
         let pipelines_step = crate::spans::startup::step("renderer.pipelines_textures");
@@ -2320,6 +2321,7 @@ impl Renderer {
             queue: submit::Queue::new(queue, submit::wanted()),
             deferred: None,
             device_lost,
+            device_id,
             config,
             solid,
             solid_opaque,
@@ -2615,4 +2617,11 @@ impl Renderer {
             capture_result: None,
         })
     }
+}
+
+/// The number of a newly opened device: each `RendererDevice::New` or `Opened` (the start, a
+/// device recovery) takes one, never given twice in the process.
+fn next_device_id() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }

@@ -567,6 +567,7 @@ mod owner_save_tests {
                 ];
                 let world = crate::mobs::MobWorld {
                     side: crate::motion::dry_side(),
+                    variant_tables: None,
                     others: &seen,
                     ..w.clone()
                 };

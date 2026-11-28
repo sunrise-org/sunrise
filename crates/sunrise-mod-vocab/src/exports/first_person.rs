@@ -1,1 +1,1 @@
-pub use crate::client::first_person::{Hand, HandDrawContext};
+pub use crate::client::first_person::HandDrawContext;

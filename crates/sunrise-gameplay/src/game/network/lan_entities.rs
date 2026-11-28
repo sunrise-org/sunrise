@@ -520,7 +520,13 @@ impl ServerGame<'_> {
                     .push((10, serializer::INT, Value::Int(i32::from(f.rotation))));
             }
         }
-        for (p, &id) in self.server.knot_ids.iter().filter(|&(_, &id)| id > after) {
+        for (p, &id) in self
+            .server
+            .knot_state
+            .knot_ids
+            .iter()
+            .filter(|&(_, &id)| id > after)
+        {
             // LeashFenceKnotEntity.getAddEntityPacket: the fence's block.
             add_state(
                 out,

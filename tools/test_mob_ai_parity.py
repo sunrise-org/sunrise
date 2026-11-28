@@ -548,6 +548,13 @@ def scenarios():
             'player 6.5 -60 0.5',
             f'mob minecraft:{species} 0.5 -60 0.5 0 1 persistent noai',
         ], 'difficulty=0 time=18000')
+    # KineticWeapon.damageEntities: a mob's spear charge deals getAttributeBaseValue(ATTACK_DAMAGE) plus the
+    # speed bonus, without Strength's +6; LivingEntity.stabAttack hurts and pushes the villager and slows the
+    # zombie before its aiStep, and the fourth stab kills it. On Easy, so Zombie.killedEntity doesn't turn it
+    # into a zombie villager, which the probe leaves out. (Last, so the scenarios above keep their origins.)
+    add('zombie_spear_strength_villager', 200, [
+        'mob minecraft:zombie 0.5 -60 0.5 0 365 persistent hand=iron_spear*1 effect=strength:1',
+        'mob minecraft:villager 6.5 -60 0.5 90 366 persistent noai'], 'difficulty=1 time=18000')
 
     return s
 

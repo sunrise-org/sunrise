@@ -157,7 +157,7 @@ impl Goal for GuardianAttack {
                         attacker: Some(Who::Mob(m.id)),
                         from: Some(from),
                         direct: None,
-                        attacker_species: Some(m.species()),
+                        attacker_species: Some(crate::mobs::species::vanilla_id(m.species())),
                     },
                 }),
             }
@@ -350,7 +350,7 @@ pub fn hurt_server(m: &mut Mob, d: &Damage) {
                 attacker: Some(Who::Mob(m.id)),
                 from: Some(from),
                 direct: None,
-                attacker_species: Some(m.species()),
+                attacker_species: Some(crate::mobs::species::vanilla_id(m.species())),
             },
         }),
         None => {}

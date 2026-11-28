@@ -234,7 +234,8 @@ the stack's components choose the particle sprites. The explicit sprite list in
 `ParticleOptions::item` is for local rendering, not server sends.
 
 Block, block-marker, falling-dust, dust-pillar and block-crumble requests need a valid
-block state argument. Server sends refuse trail and vibration requests.
+block state argument. Server sends refuse trail and vibration requests. For local vibration
+requests, import `mod_api::PositionSource` and pass it to `ParticleOptions::vibration`.
 
 To send the same effect around several positions, pass a slice to
 `level.send_particles_batch(host, &options, state, &positions, spread, speed, count)`. The whole

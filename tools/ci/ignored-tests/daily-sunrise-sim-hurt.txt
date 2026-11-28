@@ -1,0 +1,8 @@
+sunrise-sim motion::hurt_tests::a_bypassing_hit_leaves_the_armor_instances_dirty lib daily resources
+sunrise-sim motion::hurt_tests::a_hit_in_the_hurt_cooldown_knocks_nobody_back lib daily resources
+sunrise-sim motion::hurt_tests::a_shield_fully_blocks_a_hit_scaled_down_by_easy lib daily resources
+sunrise-sim motion::hurt_tests::an_arrow_kills_a_player_at_one_health lib daily resources
+sunrise-sim motion::hurt_tests::hard_scales_a_mob_hit_by_one_and_a_half lib daily resources
+sunrise-sim motion::hurt_tests::player_post_records_fresh_hit_decision lib daily resources
+sunrise-sim motion::hurt_tests::the_native_damage_hook_changes_or_cancels_a_players_hit lib daily resources
+sunrise-sim motion::hurt_tests::the_void_spares_a_player_whose_client_has_not_loaded lib daily resources

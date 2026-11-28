@@ -1689,7 +1689,7 @@ macro_rules! player_victim_causer {
                 .mobs
                 .get_mut(index)
                 .filter(|m| m.id as i32 == causing)
-                .and_then(sunrise_sim::health::HitLend::mob),
+                .and_then(|mob| sunrise_sim::health::HitLend::mob(mob)),
             None => parked.and_then(|conn| {
                 sunrise_sim::health::HitLend::parked_guest(
                     $game.server.lan.as_ref().map(|lan| &lan.hub),

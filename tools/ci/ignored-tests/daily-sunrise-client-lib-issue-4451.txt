@@ -24,13 +24,13 @@ sunrise-sim entities::fire_environment_tests::ordinary_items_burn_but_native_net
 sunrise-sim falling_block::tests::impact_hurts_only_living_intersecting_noninvulnerable_mobs lib daily resources
 sunrise-sim health::datapack_tests::datapack_damage_initial_snapshot_uses_the_prepared_worlds_features lib daily resources
 sunrise-sim health::datapack_tests::datapack_damage_new_world_drops_a_removed_resource_root_definition lib daily resources
-sunrise-sim health::datapack_tests::datapack_damage_uses_custom_identity_armor_fire_and_reloaded_tags lib daily resources
+sunrise-sim motion::hurt_tests::datapack_damage_uses_custom_identity_armor_fire_and_reloaded_tags lib daily resources
 sunrise-sim item_damage::tests::effective_damage_resistance_queries_allocate_nothing lib daily resources
 sunrise-client-lib item_render::glint_tests::prepared_item_atlas_matches_pinned_vanilla lib daily resources
 sunrise-client-lib item_render::tests::archive_item_models_use_real_prepared_tables_without_unpacking lib daily resources
 sunrise-client-lib item_tooltip::tests::equipment_attributes_with_prepared_items_and_language lib daily resources
 sunrise-sim lan::data::tests::datapack_damage_registry_reload_keeps_wire_ids_and_reloads_tags_before_future_join lib daily resources
-sunrise-sim landing::tests::datapack_damage_landing_uses_world_armor_tags_and_exhaustion lib daily resources
+sunrise-sim motion::tests::datapack_damage_landing_uses_world_armor_tags_and_exhaustion lib daily resources
 sunrise-sim menu::tests::dfa::a_clients_crafting_grid_works_out_no_result lib daily resources
 sunrise-sim menu::tests::dfa::a_clients_smithing_table_works_out_no_result lib daily resources
 sunrise-sim menu::tests::dfa::a_clients_stonecutter_crafts_what_the_server_shows_once lib daily resources

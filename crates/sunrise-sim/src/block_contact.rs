@@ -1,5 +1,6 @@
 //! Synchronous mod-block contacts from the server's simulation code.
 use crate::health::DamageLevel;
+use crate::world::World;
 use std::{
     cell::{Cell, RefCell},
     sync::OnceLock,
@@ -8,7 +9,112 @@ use sunrise_core::{
     geometry::{Aabb, Axis, Direction, SweepCursor, Vec3},
     position::BlockPos,
 };
-use sunrise_world::{level::LandingWrite, registry::BlockStateId};
+use sunrise_world::{
+    level::LandingWrite,
+    native_load_context::LoopContext,
+    registry::{BlockRegistry, BlockStateId},
+};
+
+/// The side-local level data beyond the world's blocks that a read-only level view needs,
+/// which the game lends to each motion, mob and entity tick: weather needs the biome and
+/// block-behaviour tables, a block entity's handle needs the level it is in.
+pub trait SideLevel {
+    /// `Level.isRainingAt` in `world`, which this side's level owns.
+    fn is_raining_at(&self, world: &World, pos: BlockPos) -> bool;
+    /// `LevelReader.enabledFeatures` as this side knows it.
+    fn enabled_features(&self) -> &std::sync::Arc<[String]>;
+    /// The merged tag tables: the server's, a client's from the join, none before they exist.
+    fn tag_items(&self) -> Option<&crate::items::Items>;
+    /// Borrow the equipment of the player whose movement this side is driving.
+    fn player_equipment(&self) -> crate::health::PlayerEquipment<'_> {
+        [None; 8]
+    }
+    /// Whether a living target not lent to the mob tick still has a live body.
+    fn living_target_alive(&self, _id: u32) -> bool {
+        false
+    }
+    /// What a hit on that player needs to name and read the living entities it lends, and what
+    /// the view a heal or movement hook lends of an entity this side ticks needs; none where
+    /// this side has no open world. Only a hit's level and such a hook's listeners ask.
+    fn hit_reads(&self) -> Option<crate::health::HitReads<'_>> {
+        None
+    }
+    /// The damage-type registry of this side's current level.
+    fn damage_types(&self) -> &sunrise_world::damage_source::Catalog;
+    /// The resident block entity at `pos` of `world`, as a handle of this side's level.
+    fn block_entity(&self, world: &World, pos: BlockPos) -> Option<mod_api::BlockEntityRef>;
+    /// Saved data for a resident handle of this side's level; never loads chunks or loot.
+    fn block_entity_data(
+        &self,
+        world: &World,
+        registry: &BlockRegistry,
+        entity: mod_api::BlockEntityRef,
+    ) -> Option<mod_api::Compound>;
+    /// The world open that owns motion entities on this side.
+    fn world_epoch(&self) -> Option<mod_api::WorldEpoch> {
+        None
+    }
+    /// The read-only block-state and fluid fact tables of this side. Only dry test/probe sides
+    /// have no tables.
+    fn block_states(&self) -> Option<mod_api::BlockStates<'_>> {
+        None
+    }
+}
+
+/// Level data for tests and probes that do not have a live game.
+#[cfg(any(test, feature = "test-dry-side"))]
+pub(crate) struct DrySide<'a>(pub &'a sunrise_world::damage_source::Catalog);
+
+#[cfg(any(test, feature = "test-dry-side"))]
+impl SideLevel for DrySide<'_> {
+    fn is_raining_at(&self, _: &World, _: BlockPos) -> bool {
+        false
+    }
+    fn enabled_features(&self) -> &std::sync::Arc<[String]> {
+        static FEATURES: std::sync::LazyLock<std::sync::Arc<[String]>> =
+            std::sync::LazyLock::new(std::sync::Arc::default);
+        &FEATURES
+    }
+    fn tag_items(&self) -> Option<&crate::items::Items> {
+        None
+    }
+    fn damage_types(&self) -> &sunrise_world::damage_source::Catalog {
+        self.0
+    }
+    fn block_entity(&self, _: &World, _: BlockPos) -> Option<mod_api::BlockEntityRef> {
+        None
+    }
+    fn block_entity_data(
+        &self,
+        _: &World,
+        _: &BlockRegistry,
+        _: mod_api::BlockEntityRef,
+    ) -> Option<mod_api::Compound> {
+        None
+    }
+}
+
+/// A side without any live level data, for tests and probes that never read it.
+#[cfg(any(test, feature = "test-dry-side"))]
+pub fn dry_side() -> &'static dyn SideLevel {
+    static CATALOG: std::sync::LazyLock<sunrise_world::damage_source::Catalog> =
+        std::sync::LazyLock::new(sunrise_world::damage_source::Catalog::default);
+    static SIDE: std::sync::LazyLock<DrySide<'static>> =
+        std::sync::LazyLock::new(|| DrySide(&CATALOG));
+    &*SIDE
+}
+
+/// The read-only level a subscribed block part reads: friction, bounce restitution, sound type
+/// and a client's step-on. Borrows the actual world, this side's level data and the caller's
+/// friction coefficient table; it carries no write access or entity snapshot.
+#[derive(Clone, Copy)]
+pub struct FrictionLevel<'a> {
+    pub world: &'a World,
+    pub registry: &'a BlockRegistry,
+    pub context: &'a LoopContext,
+    pub side: &'a dyn SideLevel,
+    pub coefficient: &'a dyn Fn(BlockStateId) -> Option<f32>,
+}
 
 /// `getEntityInsideCollisionShape` as the shared walk sees it: the whole block, boxes
 /// to sweep the move against, or nothing. This is the one point #1011 adds the Part's
@@ -602,7 +708,7 @@ pub struct StepContact<'a> {
 
 pub enum StepLevel<'a, 'world> {
     Server(&'a mut DamageLevel<'world>),
-    Client(crate::motion::FrictionLevel<'a>),
+    Client(FrictionLevel<'a>),
 }
 
 /// Where the contacts are answered: the game binds these to the hooks of the block
@@ -657,7 +763,7 @@ pub fn state_to_engine(state: mod_api::BlockState) -> Option<BlockStateId> {
 pub struct RestitutionHooks {
     pub listens: fn(BlockStateId) -> bool,
     /// Change `factor`, the restitution of `Contact`'s block, for the entity landing on it.
-    pub restitution: fn(crate::motion::FrictionLevel<'_>, Contact<'_>, &mut f32),
+    pub restitution: fn(FrictionLevel<'_>, Contact<'_>, &mut f32),
 }
 
 pub static RESTITUTION_HOOKS: OnceLock<RestitutionHooks> = OnceLock::new();
@@ -840,11 +946,7 @@ pub fn bounce(
 /// `contact`'s block, whose own restitution is `own`, after any part of that block changed it
 /// (`IBlockExtension.getBounceRestitution`) in `level`, on either side. A non-finite answer is
 /// ignored: it would make the entity's velocity not a number.
-pub fn bounce_restitution(
-    level: crate::motion::FrictionLevel<'_>,
-    contact: Contact<'_>,
-    own: f32,
-) -> f32 {
+pub fn bounce_restitution(level: FrictionLevel<'_>, contact: Contact<'_>, own: f32) -> f32 {
     let Some(hooks) = RESTITUTION_HOOKS.get() else {
         return own;
     };

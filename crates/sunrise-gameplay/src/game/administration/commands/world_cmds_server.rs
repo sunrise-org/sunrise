@@ -849,7 +849,7 @@ impl crate::game::ServerGame<'_> {
                         .mobs
                         .iter()
                         .find(|m| m.id == i)
-                        .map(|m| m.species()),
+                        .map(|m| sunrise_sim::mobs::species::vanilla_id(m.species())),
                     _ => None,
                 };
                 let damage = Damage {

@@ -62,10 +62,6 @@ impl SideLevel for ServerGame<'_> {
     fn block_states(&self) -> Option<mod_api::BlockStates<'_>> {
         Some(mod_api::BlockStates::of(self))
     }
-
-    fn variant_tables(&self) -> Option<&sunrise_sim::mobs::variants::VariantTables> {
-        Some(self.world_variants())
-    }
 }
 
 impl crate::game::ServerGame<'_> {
@@ -75,6 +71,7 @@ impl crate::game::ServerGame<'_> {
             others,
             MobWorldSideParams {
                 side: self,
+                variant_tables: Some(self.world_variants()),
                 trading_players: Some(self),
                 player: self.player_view(),
                 player_identity: self.player_identity(),

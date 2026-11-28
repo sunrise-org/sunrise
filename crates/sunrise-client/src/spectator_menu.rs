@@ -13,15 +13,12 @@ use std::borrow::Cow;
 const FADE_OUT_DELAY: i64 = 5000;
 const FADE_OUT_TIME: f32 = 2000.0;
 
-/// A player of the menu (`PlayerMenuItem`).
+/// A player of the menu (`PlayerMenuItem`): the page keeps the roster, and its
+/// `PlayerInfo` values are read each time the item is used.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Member {
     pub uuid: u128,
     pub name: String,
-    /// Skin texture path, as the tab list draws it.
-    pub skin: String,
-    /// `PlayerInfo.getGameMode() != GameType.SPECTATOR`.
-    pub enabled: bool,
 }
 
 /// A team with players to go to (`TeamSelectionItem`).
@@ -31,8 +28,28 @@ pub struct Team {
     /// The team colour's RGB.
     pub color: Option<u32>,
     pub players: Vec<Member>,
-    /// The skin of the face drawn on the icon.
-    pub icon: String,
+    /// The member whose face is the icon, picked when the page is built
+    /// (`iconSkin`); the skin itself is read when the icon is drawn.
+    pub icon: u128,
+}
+
+/// The player list's live values for a menu member: `PlayerInfo.getSkin()`
+/// and `getGameMode() != GameType.SPECTATOR`, read each time the menu uses it.
+pub trait PlayerInfo {
+    fn skin(&self, uuid: u128) -> String;
+    fn enabled(&self, uuid: u128) -> bool;
+}
+
+impl PlayerInfo for std::collections::HashMap<u128, (String, bool)> {
+    fn skin(&self, uuid: u128) -> String {
+        self.get(&uuid).map_or_else(
+            || crate::tab_list::default_skin(uuid).to_owned(),
+            |p| p.0.clone(),
+        )
+    }
+    fn enabled(&self, uuid: u128) -> bool {
+        self.get(&uuid).is_some_and(|p| p.1)
+    }
 }
 
 /// A `SpectatorMenuItem`.
@@ -47,14 +64,14 @@ pub enum Item {
     Team(Team),
 }
 impl Item {
-    pub fn enabled(&self) -> bool {
+    pub fn enabled(&self, info: &dyn PlayerInfo) -> bool {
         match self {
             Item::Empty => false,
             Item::Close | Item::Team(_) => true,
             Item::Scroll { enabled, .. }
             | Item::TeleportToPlayer { enabled }
             | Item::TeleportToTeam { enabled } => *enabled,
-            Item::Player(m) => m.enabled,
+            Item::Player(m) => info.enabled(m.uuid),
         }
     }
     /// `SpectatorMenuItem.getName`.
@@ -91,8 +108,8 @@ enum Category {
 
 /// `TeleportToPlayerMenuCategory`: players that are not spectators, ordered
 /// by `UUID.compareTo` (signed halves).
-pub fn players_page(mut players: Vec<Member>) -> Vec<Member> {
-    players.retain(|m| m.enabled);
+pub fn players_page(mut players: Vec<Member>, info: &dyn PlayerInfo) -> Vec<Member> {
+    players.retain(|m| info.enabled(m.uuid));
     players.sort_by_key(|m| ((m.uuid >> 64) as i64, m.uuid as i64));
     players
 }
@@ -108,9 +125,9 @@ pub struct SpectatorMenu {
 impl SpectatorMenu {
     /// `new SpectatorMenu`: the root page, whose categories take the players
     /// and teams as they are now.
-    pub fn new(players: Vec<Member>, teams: Vec<Team>) -> Self {
+    pub fn new(players: Vec<Member>, teams: Vec<Team>, info: &dyn PlayerInfo) -> Self {
         Self {
-            players: players_page(players),
+            players: players_page(players, info),
             teams,
             category: Category::Root,
             selected: -1,
@@ -170,12 +187,12 @@ impl SpectatorMenu {
         self.selected
     }
     /// `SpectatorMenu.selectSlot`: a first press selects, a second uses it.
-    pub fn select_slot(&mut self, slot: i32) -> Outcome {
+    pub fn select_slot(&mut self, slot: i32, info: &dyn PlayerInfo) -> Outcome {
         let item = self.item(slot);
         if item == Item::Empty {
             return Outcome::None;
         }
-        if self.selected != slot || !item.enabled() {
+        if self.selected != slot || !item.enabled(info) {
             self.selected = slot;
             return Outcome::None;
         }
@@ -184,7 +201,9 @@ impl SpectatorMenu {
             Item::Scroll { left, .. } => self.page += if left { -1 } else { 1 },
             Item::TeleportToPlayer { .. } => self.select_category(Category::Players),
             Item::TeleportToTeam { .. } => self.select_category(Category::Teams),
-            Item::Team(t) => self.select_category(Category::TeamPlayers(players_page(t.players))),
+            Item::Team(t) => {
+                self.select_category(Category::TeamPlayers(players_page(t.players, info)))
+            }
             Item::Player(m) => return Outcome::Teleport(m.uuid),
             Item::Empty => {}
         }
@@ -223,11 +242,12 @@ impl SpectatorGui {
         slot: i32,
         now: i64,
         fresh: Option<SpectatorMenu>,
+        info: &dyn PlayerInfo,
     ) -> Outcome {
         self.last_selection = now;
         match &mut self.menu {
             Some(menu) => {
-                let outcome = menu.select_slot(slot);
+                let outcome = menu.select_slot(slot, info);
                 self.apply(outcome)
             }
             None => {
@@ -238,7 +258,12 @@ impl SpectatorGui {
     }
     /// `SpectatorGui.onHotbarActionKeyPressed`: the key that opens the menu
     /// and uses the selected item.
-    pub fn on_action_key(&mut self, now: i64, fresh: Option<SpectatorMenu>) -> Outcome {
+    pub fn on_action_key(
+        &mut self,
+        now: i64,
+        fresh: Option<SpectatorMenu>,
+        info: &dyn PlayerInfo,
+    ) -> Outcome {
         self.last_selection = now;
         match &mut self.menu {
             Some(menu) => {
@@ -246,7 +271,7 @@ impl SpectatorGui {
                 if slot == -1 {
                     return Outcome::None;
                 }
-                let outcome = menu.select_slot(slot);
+                let outcome = menu.select_slot(slot, info);
                 self.apply(outcome)
             }
             None => {
@@ -256,20 +281,20 @@ impl SpectatorGui {
         }
     }
     /// `SpectatorGui.onMouseScrolled`: the next usable slot that way.
-    pub fn on_mouse_scrolled(&mut self, wheel: i32, now: i64) {
+    pub fn on_mouse_scrolled(&mut self, wheel: i32, now: i64, info: &dyn PlayerInfo) {
         let Some(menu) = &mut self.menu else {
             return;
         };
         let usable = |menu: &SpectatorMenu, slot: i32| {
             let item = menu.item(slot);
-            item != Item::Empty && item.enabled()
+            item != Item::Empty && item.enabled(info)
         };
         let mut slot = menu.selected_slot() + wheel;
         while (0..=8).contains(&slot) && !usable(menu, slot) {
             slot += wheel;
         }
         if (0..=8).contains(&slot) {
-            menu.select_slot(slot);
+            menu.select_slot(slot, info);
             self.last_selection = now;
         }
     }
@@ -287,6 +312,7 @@ impl SpectatorGui {
         now: i64,
         key_label: &dyn Fn(usize) -> Text,
         font: &Font,
+        info: &dyn PlayerInfo,
     ) -> Vec<GuiDraw> {
         let mut out = Vec::new();
         let alpha = self.alpha(now);
@@ -316,9 +342,10 @@ impl SpectatorGui {
                 continue;
             }
             let x = center - 90 + slot * 20 + 2;
-            let brightness = if item.enabled() { 1.0 } else { 0.25 };
-            icon(&mut out, &item, x, y + 3, brightness, alpha);
-            if item.enabled() {
+            let enabled = item.enabled(info);
+            let brightness = if enabled { 1.0 } else { 0.25 };
+            icon(&mut out, &item, x, y + 3, brightness, alpha, info);
+            if enabled {
                 let label = key_label(slot as usize);
                 let lw = width(font, &label);
                 out.push(GuiDraw::Text {
@@ -377,7 +404,15 @@ fn sprite(name: &'static str, x: i32, y: i32, w: i32, h: i32, color: u32) -> Gui
 }
 
 /// `SpectatorMenuItem.extractIcon` at the slot's corner.
-fn icon(out: &mut Vec<GuiDraw>, item: &Item, x: i32, y: i32, brightness: f32, alpha: f32) {
+fn icon(
+    out: &mut Vec<GuiDraw>,
+    item: &Item,
+    x: i32,
+    y: i32,
+    brightness: f32,
+    alpha: f32,
+    info: &dyn PlayerInfo,
+) {
     let tint = color_from_float(alpha, brightness, brightness, brightness);
     match item {
         Item::Empty => {}
@@ -400,7 +435,19 @@ fn icon(out: &mut Vec<GuiDraw>, item: &Item, x: i32, y: i32, brightness: f32, al
         Item::TeleportToTeam { .. } => {
             out.push(sprite("spectator/teleport_to_team", x, y, 16, 16, tint));
         }
-        Item::Player(m) => crate::tab_list::face(out, &m.skin, x + 2, y + 2, 12, true, false, tint),
+        Item::Player(m) => {
+            // `PlayerMenuItem.extractIcon`: `ARGB.white(alpha)`, brightness ignored.
+            crate::tab_list::face(
+                out,
+                &info.skin(m.uuid),
+                x + 2,
+                y + 2,
+                12,
+                true,
+                false,
+                white(alpha),
+            );
+        }
         Item::Team(t) => {
             if let Some(rgb) = t.color {
                 // ARGB.scaleRGB.
@@ -413,7 +460,7 @@ fn icon(out: &mut Vec<GuiDraw>, item: &Item, x: i32, y: i32, brightness: f32, al
                     argb(255, c(16), c(8), c(0)),
                 ));
             }
-            crate::tab_list::face(out, &t.icon, x + 2, y + 2, 12, true, false, tint);
+            crate::tab_list::face(out, &info.skin(t.icon), x + 2, y + 2, 12, true, false, tint);
         }
     }
 }

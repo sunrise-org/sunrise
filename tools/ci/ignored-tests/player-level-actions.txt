@@ -1,0 +1,2 @@
+sunrise-gameplay game::state_seam::tests::placement_packet_restores_actor_and_source_and_corrects_prediction lib daily resources
+sunrise-gameplay game::state_seam::tests::spectator_use_packet_opens_and_lands_in_the_end lib daily resources

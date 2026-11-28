@@ -418,13 +418,12 @@ impl DamageLevel<'_> {
         canceled
     }
 }
-/// Map an explicit damage type id to an engine [`crate::mobs::DamageKind`] only when
+/// Map an explicit damage type id to an engine [`DamageKind`] only when
 /// the kind always resolves back to that id. In particular, the engine's explosion
 /// factory chooses the type based on the attacker; an explicit registry type must not.
 /// Other registered types in `catalog` keep their id and tags as
-/// [`crate::mobs::DamageKind::Named`]; unknown or unregistered types return `None`.
-pub fn resolve_damage_kind(catalog: Option<&Catalog>, ty: &str) -> Option<crate::mobs::DamageKind> {
-    use crate::mobs::{DamageKind, NamedDamage};
+/// [`DamageKind::Named`]; unknown or unregistered types return `None`.
+pub fn resolve_damage_kind(catalog: Option<&Catalog>, ty: &str) -> Option<DamageKind> {
     Some(match ty.strip_prefix("minecraft:").unwrap_or(ty) {
         "player_attack" => DamageKind::PlayerAttack,
         "mace_smash" => DamageKind::MaceSmash,

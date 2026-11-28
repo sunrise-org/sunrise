@@ -443,6 +443,7 @@ fn ram_tick(m: &mut Mob, cx: &mut Cx) {
                 remember_target: false,
                 // The same `noAggroMobAttack`: a ram angers no mob.
                 source: Damage {
+                    direct: None,
                     kind: DamageKind::MobAttackNoAggro,
                     ..Damage::mob(m.id, from)
                 },

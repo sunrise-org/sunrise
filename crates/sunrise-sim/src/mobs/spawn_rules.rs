@@ -992,6 +992,7 @@ mod light_draw_tests {
                     ] {
                         let level = MobWorld {
                             side: crate::motion::dry_side(),
+                            variant_tables: None,
                             dimension_type: DimensionFacts::vanilla(type_id).unwrap(),
                             ..w.clone()
                         };

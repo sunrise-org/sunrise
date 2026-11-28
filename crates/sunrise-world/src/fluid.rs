@@ -145,6 +145,12 @@ pub fn mod_fluid_of_bucket(bucket: &str) -> Option<ModFluid> {
 }
 
 impl ModFluid {
+    /// Constructs a [`ModFluid`] handle for unit tests that supply their own
+    /// local fluid table without mutating the process-wide fluid registry.
+    #[cfg(any(test, feature = "test-support"))]
+    pub const fn for_test(index: u16) -> Self {
+        Self(index)
+    }
     /// Its place in [`mod_fluids`], for a table built from that list.
     pub const fn index(self) -> usize {
         self.0 as usize

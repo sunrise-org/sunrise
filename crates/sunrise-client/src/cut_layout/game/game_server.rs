@@ -31,7 +31,7 @@ pub(crate) mod nested_orb_spawn_tests {
             );
             assert_eq!(game.orbs[2].age, 0);
             game.server.ordered.announced = sunrise_sim::join_seq::JoinSeq::MAX;
-            game.server.tickets.0.update(None);
+            game.server.chunk_ticking.tickets.update(None);
             game.begin_ordered_ticks();
             game.run_ordered_ticks(sunrise_sim::join_seq::JoinSeq::MAX, false)
                 .unwrap();

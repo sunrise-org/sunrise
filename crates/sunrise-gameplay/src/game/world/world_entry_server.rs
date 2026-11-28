@@ -377,7 +377,7 @@ impl crate::game::ServerGame<'_> {
     }
     #[inline(always)]
     pub(in crate::game) fn server_clear_random_tick_sections(&mut self) {
-        self.server.random_tick_sections.0.clear();
+        self.server.chunk_ticking.random_tick_sections.clear();
     }
     pub(in crate::game) fn server_resolve_block_paths(&self) {
         use mod_api::{HookId, PathComputationType};

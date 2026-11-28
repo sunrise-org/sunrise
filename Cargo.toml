@@ -24,6 +24,7 @@ members = [
     "crates/sunrise-world",
     "crates/sunrise-sim",
     "crates/sunrise-level",
+    "crates/sunrise-entity-data",
     "crates/sunrise-client",
     "crates/sunrise-parity-fixtures",
     "crates/sunrise-internals",

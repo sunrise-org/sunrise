@@ -459,7 +459,7 @@ impl crate::game::ServerGame<'_> {
         self.server.bound_sounds.clear();
         self.server.lan_events.clear();
         self.server.lan_songs.clear();
-        self.server.lan_critical_hits.clear();
+        self.server.lan_queues.critical_hits.clear();
         self.server.lan_cushion_breaks.clear();
         self.server.streaming.extra.clear();
         if announce {
@@ -983,7 +983,7 @@ impl crate::game::ServerGame<'_> {
         }
         // ChunkMap.tick sends the changes of an entity outside the
         // entity-ticking range only when it changed section or needs sync.
-        let levels = self.server.tickets.0.levels();
+        let levels = self.server.chunk_ticking.tickets.levels();
         let idle_at = |p: sunrise_core::geometry::Vec3| {
             !levels.in_entity_ticking_range((p.x.floor() as i32) >> 4, (p.z.floor() as i32) >> 4)
         };
@@ -1014,7 +1014,7 @@ impl crate::game::ServerGame<'_> {
                     None => player_entity(),
                 },
                 Holder::Mob(id) | Holder::Boat(id) => Some(id as i32),
-                Holder::Knot(p) => self.server.knot_ids.get(&p).map(|&id| id as i32),
+                Holder::Knot(p) => self.server.knot_state.knot_ids.get(&p).map(|&id| id as i32),
             });
             let idle = idle_at(m.position);
             let place = super::lan_idle::Place {
@@ -2316,7 +2316,7 @@ impl crate::game::ServerGame<'_> {
             // before them (`lan_broadcast_changes`): the guest re-runs a
             // piston's `triggerEvent` on the blocks as they were before the
             // move, a base the last tick restored included.
-            for (pos, b0, b1, state) in std::mem::take(&mut self.server.lan_block_events) {
+            for (pos, b0, b1, state) in std::mem::take(&mut self.server.lan_queues.block_events) {
                 host.hub.block_event(pos, b0, b1, state);
             }
             let entities = states.as_slice();
@@ -2328,10 +2328,10 @@ impl crate::game::ServerGame<'_> {
             // that hit) is dropped by the tracker below: its event goes out
             // first, as `Level.broadcastEntityEvent` precedes the discard.
             let (gone, later) = partition_lan_entity_events(
-                std::mem::take(&mut self.server.lan_entity_events),
+                std::mem::take(&mut self.server.lan_queues.entity_events),
                 entities.iter().map(|entity| entity.id),
             );
-            self.server.lan_entity_events = later;
+            self.server.lan_queues.entity_events = later;
             for (id, event) in gone {
                 host.hub.entity_event(id, event);
             }
@@ -2559,7 +2559,7 @@ impl crate::game::ServerGame<'_> {
                 log::error!("could not open {}: {e}", level.id());
                 return;
             }
-            self.server.tickets.0.add_spawn(
+            self.server.chunk_ticking.tickets.add_spawn(
                 prepared.chunk(),
                 sunrise_sim::ticket_levels::SpawnTicketKind::Player,
             );
@@ -2753,9 +2753,12 @@ impl crate::game::ServerGame<'_> {
                 // what animates the move there. `state` is the block the
                 // event named, read before it ran (the packet's `block`).
                 sunrise_world::level::LevelEvent::BlockEntityEvent { pos, state, a, b } => {
-                    self.server
-                        .lan_block_events
-                        .push(([pos.x, pos.y, pos.z], *a, *b, state.0));
+                    self.server.lan_queues.block_events.push((
+                        [pos.x, pos.y, pos.z],
+                        *a,
+                        *b,
+                        state.0,
+                    ));
                 }
                 _ => {}
             }
@@ -2766,17 +2769,20 @@ impl crate::game::ServerGame<'_> {
     pub(in crate::game) fn lan_block_event(&mut self, pos: [i32; 3], b0: i32, b1: i32) {
         if self.server.audio_capture_active {
             let state = self.common.world.block(pos[0], pos[1], pos[2]).0;
-            self.server.lan_block_events.push((pos, b0, b1, state));
+            self.server
+                .lan_queues
+                .block_events
+                .push((pos, b0, b1, state));
         }
     }
     /// `Level.broadcastEntityEvent` for the guests.
     pub(in crate::game) fn lan_entity_event(&mut self, id: i32, event: i8, _at: [f64; 3]) {
         if self.server.audio_capture_active {
-            self.server.lan_entity_events.push((id, event));
+            self.server.lan_queues.entity_events.push((id, event));
         }
     }
     /// Deliver one committed entity event immediately to tracking guests and the entity itself,
-    /// without touching unrelated entries in `self.lan_entity_events`.
+    /// without touching unrelated entries in `server.lan_queues.entity_events`.
     pub(in crate::game::server_side) fn deliver_entity_event(
         &mut self,
         id: i32,
@@ -2786,7 +2792,7 @@ impl crate::game::ServerGame<'_> {
         if let Some(host) = self.server.lan.as_ref() {
             host.hub.entity_event(id, event);
         } else if self.server.audio_capture_active {
-            self.server.lan_entity_events.push((id, event));
+            self.server.lan_queues.entity_events.push((id, event));
         }
     }
     /// `ServerPlayer.onEquippedItemBroken` for the acting player (the guest whose turn it
@@ -2829,7 +2835,10 @@ impl crate::game::ServerGame<'_> {
         magic: bool,
     ) {
         if self.server.audio_capture_active {
-            self.server.lan_critical_hits.push((attacker, id, magic));
+            self.server
+                .lan_queues
+                .critical_hits
+                .push((attacker, id, magic));
         }
     }
 
@@ -2838,7 +2847,7 @@ impl crate::game::ServerGame<'_> {
         let Some(host) = self.server.lan.as_mut() else {
             return;
         };
-        let critical_hits = std::mem::take(&mut self.server.lan_critical_hits);
+        let critical_hits = std::mem::take(&mut self.server.lan_queues.critical_hits);
         let kinetic_hits = std::mem::take(&mut self.server.lan_kinetic_hits);
         for (state, at) in std::mem::take(&mut self.server.lan_cushion_breaks) {
             if let Some(id) = host
@@ -2897,10 +2906,10 @@ impl crate::game::ServerGame<'_> {
                 None => host.hub.level_event(1011, pos, 0, None),
             }
         }
-        for (pos, b0, b1, state) in std::mem::take(&mut self.server.lan_block_events) {
+        for (pos, b0, b1, state) in std::mem::take(&mut self.server.lan_queues.block_events) {
             host.hub.block_event(pos, b0, b1, state);
         }
-        for (id, event) in std::mem::take(&mut self.server.lan_entity_events) {
+        for (id, event) in std::mem::take(&mut self.server.lan_queues.entity_events) {
             host.hub.entity_event(id, event);
         }
         for (level, kind, pos, data) in std::mem::take(&mut self.server.lan_global_events) {

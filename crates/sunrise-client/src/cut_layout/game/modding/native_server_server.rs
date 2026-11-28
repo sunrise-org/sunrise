@@ -1140,6 +1140,7 @@ pub(crate) mod fake_action_tests {
             let count = |game: &sunrise_gameplay::game::ServerGame<'_>| {
                 game.server
                     .be_anims
+                    .level
                     .shulkers
                     .get(&shulker)
                     .map(|s| s.open_count)

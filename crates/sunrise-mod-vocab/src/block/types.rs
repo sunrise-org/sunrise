@@ -445,3 +445,148 @@ impl EntityInsideEvent<'_> {
         self.effects.run_after(effect, callback);
     }
 }
+
+/// Context for a player tuning a note block.
+#[derive(Clone, Copy, Debug)]
+// exhaustive: the game builds it with a literal; mods only read it
+// no wire: local hook context for note block tuning.
+pub struct NoteBlockChange {
+    /// The level the note block is in.
+    pub dimension: LevelDimension,
+    /// The note block's position.
+    pub pos: BlockPos,
+    /// The block's instrument before tuning.
+    pub instrument: NoteInstrument,
+    /// The note before tuning, in the range 0 through 24.
+    pub old_note: i32,
+}
+
+/// A note block's instrument (`NoteBlockInstrument`), for `note_block_play`,
+/// in the `instrument` property's order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+#[derive(sunrise_mod_api_macros::Wire)]
+pub enum NoteInstrument {
+    /// The harp, over most blocks.
+    Harp,
+    /// The bass drum, over stone.
+    Basedrum,
+    /// The snare drum, over sand and gravel.
+    Snare,
+    /// The clicks, over glass.
+    Hat,
+    /// The double bass, over wood.
+    Bass,
+    /// The flute, over clay.
+    Flute,
+    /// The bell, over a gold block.
+    Bell,
+    /// The guitar, over wool.
+    Guitar,
+    /// The chime, over packed ice.
+    Chime,
+    /// The xylophone, over a bone block.
+    Xylophone,
+    /// The iron xylophone, over an iron block.
+    IronXylophone,
+    /// The cow bell, over soul sand.
+    CowBell,
+    /// The didgeridoo, over a pumpkin.
+    Didgeridoo,
+    /// The bit, over an emerald block.
+    Bit,
+    /// The banjo, over hay.
+    Banjo,
+    /// The pling, over glowstone.
+    Pling,
+    /// The trumpet, over a copper block.
+    Trumpet,
+    /// The trumpet, over an exposed copper block.
+    TrumpetExposed,
+    /// The trumpet, over an oxidized copper block.
+    TrumpetOxidized,
+    /// The trumpet, over a weathered copper block.
+    TrumpetWeathered,
+    /// A zombie's sound, over a zombie head.
+    Zombie,
+    /// A skeleton's sound, over a skeleton skull.
+    Skeleton,
+    /// A creeper's sound, over a creeper head.
+    Creeper,
+    /// The ender dragon's sound, over a dragon head.
+    Dragon,
+    /// A wither skeleton's sound, over its skull.
+    WitherSkeleton,
+    /// A piglin's sound, over a piglin head.
+    Piglin,
+    /// The sound set by a player head's own note block sound.
+    CustomHead,
+}
+
+impl NoteInstrument {
+    /// Every instrument, in the `instrument` property's order.
+    pub const ALL: [Self; 27] = {
+        use NoteInstrument::*;
+        [
+            Harp,
+            Basedrum,
+            Snare,
+            Hat,
+            Bass,
+            Flute,
+            Bell,
+            Guitar,
+            Chime,
+            Xylophone,
+            IronXylophone,
+            CowBell,
+            Didgeridoo,
+            Bit,
+            Banjo,
+            Pling,
+            Trumpet,
+            TrumpetExposed,
+            TrumpetOxidized,
+            TrumpetWeathered,
+            Zombie,
+            Skeleton,
+            Creeper,
+            Dragon,
+            WitherSkeleton,
+            Piglin,
+            CustomHead,
+        ]
+    };
+    /// The `instrument` property's value (`harp`, `cow_bell`).
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Harp => "harp",
+            Self::Basedrum => "basedrum",
+            Self::Snare => "snare",
+            Self::Hat => "hat",
+            Self::Bass => "bass",
+            Self::Flute => "flute",
+            Self::Bell => "bell",
+            Self::Guitar => "guitar",
+            Self::Chime => "chime",
+            Self::Xylophone => "xylophone",
+            Self::IronXylophone => "iron_xylophone",
+            Self::CowBell => "cow_bell",
+            Self::Didgeridoo => "didgeridoo",
+            Self::Bit => "bit",
+            Self::Banjo => "banjo",
+            Self::Pling => "pling",
+            Self::Trumpet => "trumpet",
+            Self::TrumpetExposed => "trumpet_exposed",
+            Self::TrumpetOxidized => "trumpet_oxidized",
+            Self::TrumpetWeathered => "trumpet_weathered",
+            Self::Zombie => "zombie",
+            Self::Skeleton => "skeleton",
+            Self::Creeper => "creeper",
+            Self::Dragon => "dragon",
+            Self::WitherSkeleton => "wither_skeleton",
+            Self::Piglin => "piglin",
+            Self::CustomHead => "custom_head",
+        }
+    }
+}

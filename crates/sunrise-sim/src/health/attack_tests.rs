@@ -1,4 +1,5 @@
 use super::*;
+use sunrise_entity_data::damage::NamedDamage;
 
 #[test]
 fn arrow_family_belongs_to_the_actual_direct_entity_not_the_type() {
@@ -52,10 +53,7 @@ fn arrow_family_belongs_to_the_actual_direct_entity_not_the_type() {
 
 #[test]
 fn trident_source_identity_does_not_imply_an_abstract_arrow() {
-    let trident = Damage::of(DamageKind::Named(crate::mobs::NamedDamage::new(
-        "minecraft:trident",
-        0,
-    )));
+    let trident = Damage::of(DamageKind::Named(NamedDamage::new("minecraft:trident", 0)));
     let attack = Attack {
         projectile: Some(12),
         projectile_kind: DirectEntity::Arrow,
@@ -80,9 +78,9 @@ fn trident_source_identity_does_not_imply_an_abstract_arrow() {
 #[test]
 fn is_direct_compares_causing_and_direct_entities_not_damage_type() {
     let mob_projectile = Damage {
-        kind: DamageKind::Named(crate::mobs::NamedDamage::new(
+        kind: DamageKind::Named(NamedDamage::new(
             "minecraft:mob_projectile",
-            crate::mobs::NamedDamage::IS_PROJECTILE,
+            NamedDamage::IS_PROJECTILE,
         )),
         attacker: Some(Who::Mob(5)),
         from: None,

@@ -162,7 +162,7 @@ impl BodyMotion<'_> {
         }
         let contact = self.legacy_contact(feet, ground);
         if self.facts.get(contact.state).name.as_ref() == "minecraft:slime_block"
-            && let Some(scale) = crate::entities::slime_step_on_scale(velocity.y)
+            && let Some(scale) = crate::motion::slime_step_on_scale(velocity.y)
         {
             velocity.x *= scale;
             velocity.z *= scale;

@@ -2471,13 +2471,13 @@ mod summoned_knot_tests {
             assert!(game.use_knot([14, 200, 2], false));
             assert_eq!(game.mobs[pig].extra.leash, Some(Holder::Knot([14, 200, 2])));
             game.lan_assign_ids();
-            let natural = game.server.knot_ids[&[14, 200, 2]];
+            let natural = game.server.knot_state.knot_ids[&[14, 200, 2]];
             let ids = summon_knots(game);
             for _ in 0..101 {
                 game.tick().unwrap();
             }
             game.lan_assign_ids();
-            assert_eq!(game.server.knot_ids[&[14, 200, 2]], natural);
+            assert_eq!(game.server.knot_state.knot_ids[&[14, 200, 2]], natural);
             let pig = game
                 .mobs
                 .iter()
