@@ -109,6 +109,7 @@ pub(in crate::game) fn build_renderer(
     // waiting for `Game::apply_settings` after the handoff.
     renderer.set_present_mode(vsync, settings.present_mode);
     renderer.pack_hdr = shader_pack.hdr;
+    renderer.pack_hdr_pick = shader_pack.pick;
     renderer.hud.sprite_animations = atlas.renderer_animations();
     let gui_text = renderer.hud.set_text_shader(&renderer.device, {
         let text = &atlas.text_shaders;

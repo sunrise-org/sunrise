@@ -10,14 +10,13 @@ white, and a pass written for SDR alone breaks it, mostly without any test faili
 
 | | Frame | Holds |
 | --- | --- | --- |
-| `SUNRISE_HDR_FRAME=float` under a 0.2 pack, or with HDR on and no pack where the device can keep the HUD on a layer of its own (the only HDR frame once HDR is on by default) | `Rgba16Float` | light: 1.0 is paper white, more is brighter |
+| `SUNRISE_HDR_FRAME=float` with HDR output on where the device can keep the HUD on a layer of its own, when no pack is picked, the pick is refused, or the running pack's `shaders.properties` asks for Sunrise's HDR (`sunrise.hdr`) | `Rgba16Float` | light: 1.0 is paper white, more is brighter |
 | HDR off, otherwise | the swapchain's 8-bit format | vanilla's picture, clipped at 1 |
 | HDR on, otherwise | `Rgba16Unorm`, or 8-bit | the picture clipped at 1, with HDR's marks in alpha |
 
-On the float frame Sunrise's own light reaches several times paper white, the sun the most, and a shader pack of
-API 0.2 may write any value half float holds. It's stored in vanilla's gamma (the 2.2 power), as the other frames are.
-A 0.2 pack's `[frame] blend = "linear"` is to store linear light instead (it passes the check, but isn't served yet),
-so a pass doesn't hard-code the gamma.
+On the float frame Sunrise's own light reaches several times paper white, the sun the most, and a served pack may
+write any value half float holds. It's stored in vanilla's gamma (the 2.2 power), as the other frames are: the
+translated fragment's first output is encoded after its main, so a pass doesn't hard-code the gamma.
 
 ## Where a pass goes
 
@@ -33,8 +32,9 @@ Each frame without a shader pack (`Renderer::render` in `gfx.rs`), in order:
    swapchain's 10 bits get dither there, noise of one code fixed to the pixel, so slow gradients such as a clear sky
    don't band; a capture's HDR10 copy (the `-hdr.png`) keeps the exact codes.
 
-Under a shader pack its post passes take step 2's place. A 0.2 pack's `[tonemap]` runs at their end and takes step
-4's, so the post effects after it get a tone-mapped picture.
+Under a shader pack its post passes take step 2's place. The tone curve follows the pack that drew the frame: a pack
+served Sunrise's HDR that owns the curve (`SUNRISE_HDR_TONEMAP_PACK` defined) takes step 4's, and the post effects
+after it get a tone-mapped picture; otherwise step 4 applies.
 
 A pass on the world's light belongs in steps 2 and 3, before the tone curve, and never sees the HUD. After the tone
 curve the frame is what the display will show, so no pass there treats it as light. Frame generation interpolates

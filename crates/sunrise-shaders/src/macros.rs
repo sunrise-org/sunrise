@@ -238,6 +238,18 @@ impl Macros {
         }
     }
 
+    /// Sunrise's HDR extension, served to a pack that asked for it (`sunrise.hdr`,
+    /// [`crate::Properties::sunrise_hdr`]) and got a frame made for it: `SUNRISE_HDR` at the
+    /// extension's version, 1 (its `final` writes linear light), and `SUNRISE_HDR_TONEMAP_PACK`
+    /// when the pack owns the tone curve (`tonemap`). Sunrise's own names, which no other loader
+    /// defines: there the pack takes its other path. Never part of [`Self::standard`].
+    pub fn define_sunrise_hdr(&mut self, tonemap: crate::Tonemap) {
+        self.define("SUNRISE_HDR", "1");
+        if tonemap == crate::Tonemap::Pack {
+            self.define("SUNRISE_HDR_TONEMAP_PACK", "");
+        }
+    }
+
     /// Whether the device the pack's programs run on draws a `blend.<program>.<buffer>` that
     /// differs from the program's other buffers ([`PER_BUFFER_BLENDING`]): the renderer's
     /// answer, from its device. Defines no macro.
@@ -347,6 +359,30 @@ mod tests {
         m.define_renderer(4);
         let iris: Vec<_> = m.names().filter(|name| name.contains("IRIS")).collect();
         assert!(iris.is_empty(), "{iris:?}");
+    }
+
+    /// Sunrise's HDR macros are absent from the standard set and the renderer's; served, the
+    /// version is 1, and the tone curve's macro follows its owner.
+    #[test]
+    fn sunrise_hdr_macros_appear_only_when_served() {
+        const NAMES: [&str; 2] = ["SUNRISE_HDR", "SUNRISE_HDR_TONEMAP_PACK"];
+        let mut m = Macros::standard();
+        m.define_renderer(4);
+        m.define_subgroups();
+        assert!(NAMES.iter().all(|n| !m.is_defined(n)));
+        let mut pack = m.clone();
+        pack.define_sunrise_hdr(crate::Tonemap::Pack);
+        assert_eq!(pack.get("SUNRISE_HDR"), Some("1"));
+        assert_eq!(pack.get("SUNRISE_HDR_TONEMAP_PACK"), Some(""));
+        let mut sunrise = m.clone();
+        sunrise.define_sunrise_hdr(crate::Tonemap::Sunrise);
+        assert_eq!(sunrise.get("SUNRISE_HDR"), Some("1"));
+        assert!(!sunrise.is_defined("SUNRISE_HDR_TONEMAP_PACK"));
+        // A program's `#ifdef SUNRISE_HDR` path is taken only when served.
+        let fsh = "#version 330\nout vec4 c;\n#ifdef SUNRISE_HDR\nconst float v = 3.0;\n#endif\n\
+                   void main() { c = vec4(v); }\n";
+        assert!(translates(fsh, &m).is_err());
+        translates(fsh, &pack).unwrap();
     }
 
     /// A required `PER_BUFFER_BLENDING`, in any case, is supported where the device draws it

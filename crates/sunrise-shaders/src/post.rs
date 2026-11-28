@@ -654,6 +654,10 @@ pub struct Post {
     pub config: Config,
     /// Programs skipped and why, as `program: message` or `file:line: message`.
     pub notes: Vec<String>,
+    /// Sunrise's HDR extension as this pack was served it (`GameInputs::hdr`): its `final`,
+    /// or the colortex0 copy that stands for it, writes linear light, and who owns the tone
+    /// curve. `None`: not served, the picture is the pack's as on any loader.
+    pub hdr: Option<crate::Tonemap>,
 }
 
 impl Post {
@@ -859,6 +863,10 @@ pub struct GameInputs {
     /// `max_vertex_attributes`): a program whose varyings or vertex inputs take more is refused
     /// with a note, as the device could never build its pipeline. Default: wgpu's defaults.
     pub interface_limits: naga::front::glsl::InterfaceLimits,
+    /// Sunrise's HDR extension served to this pack (`Macros::define_sunrise_hdr`): `final`
+    /// writes linear light, translated as `Target::LinearWindow`, and the copy of colortex0
+    /// that stands for a missing `final` reads it so too (`Post::hdr`). `None`: not served.
+    pub hdr: Option<crate::Tonemap>,
 }
 
 /// Loads the post-processing programs of `folder` and, for the geometry `inputs` describes, the
@@ -948,6 +956,7 @@ pub fn load_post(
         },
         config: Config::default(),
         notes: Vec::new(),
+        hdr: inputs.hdr,
     };
     // One file's work for every size's options, as for the file itself.
     let options = crate::with_options(pack, macros).for_file();
@@ -1023,6 +1032,7 @@ pub fn load_post(
                 .collect()
         };
         let target = match group {
+            Group::Final if inputs.hdr.is_some() => Target::LinearWindow,
             Group::Final => Target::Window,
             _ => Target::Buffers,
         };
@@ -3947,6 +3957,7 @@ blend.composite1.colortex3 = ONE ONE ONE ONE
             entity_geometry: None,
             mod_programs: Vec::new(),
             interface_limits: Default::default(),
+            hdr: None,
         };
         let post = load_post(&pack, "", &Properties::default(), &macros, &inputs);
         let (terrain, water) = (post.terrain.unwrap(), post.water.unwrap());

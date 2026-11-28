@@ -427,6 +427,12 @@ pub struct Renderer {
     pub(crate) keep_timed_frames: bool,
     /// Times Sunrise's own passes on the GPU, as `pass_timing` does (`own_pass_times`).
     pub(crate) own_timing: Option<pack_timing::PassTiming>,
+    /// Tests: whether the last real frame ran Sunrise's tone curve (`sunrise_tone_curve`).
+    #[cfg(feature = "test-support")]
+    pub(crate) tone_curve_ran: bool,
+    /// Tests: how many shader pack builds `load_shader_pack` started.
+    #[cfg(feature = "test-support")]
+    pub(crate) pack_loads: u64,
     /// The entity vertices Sunrise draws itself while a shader pack draws the others.
     pub(crate) pack_entity_rest: Vec<Vertex>,
     /// Set 1 of the cloud pipeline, for a shader pack's `gbuffers_clouds`.
@@ -521,6 +527,11 @@ pub struct Renderer {
     /// The shader pack's `sunrise.hdr` request this renderer's frame was made for (the game's
     /// pick, before any program was read): a later read of the pack is checked against it.
     pub pack_hdr: Option<sunrise_shaders::Tonemap>,
+    /// The pick (`picked_pack`) `pack_hdr` was made for: the loader serves it to that pick only.
+    pub pack_hdr_pick: String,
+    /// Sunrise's HDR as the shader pack set (`pack_post`) was served it (`Post::hdr`): a pack
+    /// built for another answer is loaded again (`shader_pack_loaded_for`).
+    pub(crate) pack_served: Option<sunrise_shaders::Tonemap>,
     pub(crate) screenshot_readbacks: screenshot_readback::Readbacks,
     /// Screenshot Quality (Sunrise setting): a `scaled` screenshot's frame is this many
     /// times the game's resolution (1, 2, 4 or 8).

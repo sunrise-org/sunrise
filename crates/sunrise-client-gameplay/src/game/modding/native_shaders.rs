@@ -36,6 +36,9 @@ pub(in crate::game) struct NativeShaders {
     pub noted: String,
     /// The pick's `sunrise.hdr` request as last read (`ClientGame::picked_pack_shape`).
     pub pick_hdr: std::cell::RefCell<super::shader_packs::PickHdr>,
+    /// Tests: what the last load of the pick logged about its `shaders.properties`.
+    #[cfg(test)]
+    pub loaded_log: Vec<String>,
 }
 
 /// `SUNRISE_HDR_FRAME=float`: the frame is float where the renderer is made with no pack picked,

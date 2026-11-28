@@ -399,6 +399,9 @@ mod depth_test;
 mod destination_tests;
 
 #[cfg(test)]
+mod hdr_extension_tests;
+
+#[cfg(test)]
 #[path = "../pack_material_tests.rs"]
 mod material_tests;
 

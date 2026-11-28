@@ -601,8 +601,9 @@ impl ServerGame<'_> {
                 gs.menu.slot(0),
             )
         } else {
-            // EnchantmentLevelSetEvent for each row as getEnchantmentCost drew
-            // it; the offers are then made with the levels the mods left.
+            // EnchantmentLevelSetEvent for each row after slotsChanged cleared a
+            // cost below its row; the offers are then made with the levels the
+            // mods left.
             let mut drawn = [None; 3];
             sunrise_sim::stations::enchant_offers_leveled(
                 &self.stations().enchantments,

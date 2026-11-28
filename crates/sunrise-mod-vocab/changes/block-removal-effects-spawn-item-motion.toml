@@ -1,0 +1,3 @@
+ids = ["method:BlockRemovalEffects::spawn_item", "type:BlockRemovalEffectError.NonFiniteMotion"]
+why = "Positioned removal drops can use explicit velocity, as in vanilla's eight-argument ItemEntity constructor, without sampling random motion. The five-argument random-velocity path, pickup delay, and publication order stay unchanged."
+migrate = "Pass None as the third argument to spawn_item to keep the old random velocity, or Some([vx, vy, vz]) for explicit velocity. NonFiniteMotion refuses only a call with a non-finite supplied component. The pre_remove_side_effects hook stays at version 6."

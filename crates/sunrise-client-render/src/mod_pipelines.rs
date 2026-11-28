@@ -2165,6 +2165,24 @@ mod tests {
     use mod_api::__private::game::RegistrationContextNew;
     use mod_api::WorldDepth;
 
+    /// Every macro the game defines when it serves Sunrise's HDR to a pack is refused as a
+    /// mod's pack define, so only the serving decision sets it.
+    #[test]
+    fn a_mod_pack_define_cant_set_sunrise_hdrs_macros() {
+        let plain = sunrise_shaders::Macros::standard();
+        let mut served = plain.clone();
+        served.define_sunrise_hdr(sunrise_shaders::Tonemap::Pack);
+        let names: Vec<&str> = served
+            .names()
+            .filter(|name| !plain.is_defined(name))
+            .collect();
+        assert_eq!(names.len(), 2, "{names:?}");
+        for name in names {
+            let binding = mod_api::PackBinding::new().define(name);
+            assert!(binding.validate_syntax().is_err(), "{name}");
+        }
+    }
+
     const VSH: &str = "\
 #version 330
 #include <minecraft:dynamictransforms.glsl>

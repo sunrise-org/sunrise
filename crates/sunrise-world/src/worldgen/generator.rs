@@ -3014,13 +3014,13 @@ mod tests {
         let known = |id: &str| id != "minecraft:gone";
         let mut ov = WorldgenOverrides::default();
         ov.add_tag(
-            "biome_tags",
+            "block_tags",
             "minecraft:hill",
             "file/p",
             r#"{"values":["minecraft:b"]}"#.into(),
         );
         ov.add_tag(
-            "biome_tags",
+            "block_tags",
             "p:broken",
             "file/p",
             r#"{"values":["minecraft:gone"]}"#.into(),
@@ -3030,7 +3030,7 @@ mod tests {
             TagDefinitions::default(),
             &raw,
             &ov,
-            "biome_tags",
+            "block_tags",
             &mut dropped,
             known,
         )
@@ -3039,23 +3039,95 @@ mod tests {
         assert!(!tags.contains_key("p:broken"));
         assert_eq!(dropped.len(), 1, "{dropped:?}");
         assert!(dropped[0].contains("p:broken"));
-        // Without packs the prepared tags must all resolve.
-        let broken = BTreeMap::from([(
-            "p:broken".to_owned(),
-            r#"{"values":["minecraft:gone"]}"#.to_owned(),
-        )]);
-        let none = WorldgenOverrides::default();
-        assert!(
-            build_tags(
-                TagDefinitions::default(),
-                &broken,
-                &none,
-                "biome_tags",
-                &mut dropped,
-                known
-            )
-            .is_err()
-        );
+    }
+
+    #[test]
+    fn prepared_fluid_tags_with_missing_entries_still_fail() {
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path();
+        fs::write(
+            dir.join("fluid_tags.json"),
+            r#"{"test:broken":"{\"values\":[\"test:missing_fluid\"]}"}"#,
+        )
+        .unwrap();
+        let mut warnings = Vec::new();
+        let loaded = data::load_fluid_tags(dir, &WorldgenOverrides::default(), &mut warnings);
+        let error = loaded.expect_err("prepared fluid tags must still resolve");
+        assert!(error.to_string().contains("test:broken"), "{error}");
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    #[test]
+    fn prepared_worldgen_omits_unresolved_block_tags() {
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path().join("worldgen");
+        fs::create_dir(&dir).unwrap();
+        let (registry, flags) = BlockRegistry::from_facts_json_bytes(
+            br#"{"states":[
+                ["minecraft:air",true,false,"x","minecraft:air"],
+                ["minecraft:stone",false,false,"x","minecraft:stone"],
+                ["minecraft:grass_block",false,false,"x","minecraft:grass_block"],
+                ["minecraft:mycelium",false,false,"x","minecraft:mycelium"],
+                ["minecraft:dirt",false,false,"x","minecraft:dirt"]
+            ],"defaults":{"minecraft:air":0,"minecraft:stone":1,"minecraft:grass_block":2,
+                "minecraft:mycelium":3,"minecraft:dirt":4}}"#,
+        )
+        .unwrap();
+        let registry = Box::leak(Box::new(registry));
+        let stone = registry.default_state("minecraft:stone").unwrap();
+        fs::write(
+            dir.join("block_flags.json"),
+            serde_json::to_vec(&flags).unwrap(),
+        )
+        .unwrap();
+        for bundle in [
+            "biomes",
+            "biome_tags",
+            "conditions",
+            "noises",
+            "densities",
+            "rules",
+            "settings",
+            "world_presets",
+            "features",
+            "placed_features",
+        ] {
+            fs::write(dir.join(format!("{bundle}.json")), "{}").unwrap();
+        }
+        let healthy = "minecraft:blocks_motion_in_heightmap";
+        let broken = [
+            "minecraft:blocks_motion_in_heightmap_no_leaves",
+            "minecraft:uncarvable",
+        ];
+        let mut tags = BTreeMap::from([(healthy, r#"{"values":["minecraft:stone"]}"#)]);
+        for tag in broken {
+            tags.insert(
+                tag,
+                r#"{"values":["minecraft:stone","test:missing_block"]}"#,
+            );
+        }
+        fs::write(
+            dir.join("block_tags.json"),
+            serde_json::to_vec(&tags).unwrap(),
+        )
+        .unwrap();
+
+        let data = GeneratorData::load(&dir, registry)
+            .expect("a broken prepared block tag must not stop worldgen loading");
+        assert_eq!(data.block_tags[healthy], ["minecraft:stone"]);
+        for tag in broken {
+            assert!(!data.block_tags.contains_key(tag), "{tag} must be omitted");
+            assert!(
+                data.warnings()
+                    .iter()
+                    .any(|warning| warning.contains(tag) && warning.contains("test:missing_block")),
+                "missing diagnostic for {tag}: {:?}",
+                data.warnings()
+            );
+        }
+        let state = data.block_states().heightmap_state(stone);
+        assert!(state.blocks_motion_in_heightmap());
+        assert!(!state.blocks_motion_in_heightmap_no_leaves());
     }
 
     #[test]
@@ -3089,19 +3161,15 @@ mod tests {
 
     #[test]
     fn invalid_biome_identifier_refuses_worldgen_data() {
-        let dir = std::env::temp_dir().join(format!(
-            "sunrise-invalid-worldgen-biome-{}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&dir).unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path();
         fs::write(dir.join("biomes.json"), r#"{"test:Bad_Biome":"{}"}"#).unwrap();
         fs::write(dir.join("biome_tags.json"), "{}").unwrap();
         let (registry, _) = BlockRegistry::from_facts_json_bytes(
             br#"{"states":[["minecraft:air",true,false,"x","minecraft:air"]],"defaults":{"minecraft:air":0}}"#,
         )
         .unwrap();
-        let loaded = GeneratorData::load(&dir, Box::leak(Box::new(registry)));
-        fs::remove_dir_all(dir).unwrap();
+        let loaded = GeneratorData::load(dir, Box::leak(Box::new(registry)));
         assert!(matches!(
             loaded,
             Err(GeneratorError::Decode(DecodeError::InvalidIdentifier(id)))

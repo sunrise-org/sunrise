@@ -125,7 +125,8 @@ impl crate::game::ClientGame<'_> {
             return;
         };
         let follows = renderer.frame_follows(&self.client.settings.sunrise, request);
-        if !shader_packs::reconcile_pack_hdr(follows, &mut renderer.pack_hdr, shape.hdr) {
+        let installed = (&mut renderer.pack_hdr_pick, &mut renderer.pack_hdr);
+        if !shader_packs::reconcile_pack_hdr(follows, installed, (&shape.pick, shape.hdr)) {
             return;
         }
         if let Err(e) = self.rebuild_renderer() {
@@ -324,7 +325,7 @@ mod tests {
     fn a_new_hdr_request_alone_is_looked_at_again() {
         let mut attempts = FrameAttempt::default();
         let path = PathBuf::from("pack");
-        let mut installed = Some(Tonemap::Pack);
+        let (mut pick, mut installed) = ("pack".to_owned(), Some(Tonemap::Pack));
         let mut look =
             |hdr| look_again(&mut attempts, Some("8-bit"), path.clone(), Some(true), hdr);
         assert!(look(Some(Tonemap::Pack)));
@@ -332,8 +333,8 @@ mod tests {
         assert!(look(Some(Tonemap::Sunrise)));
         assert!(!reconcile_pack_hdr(
             true,
-            &mut installed,
-            Some(Tonemap::Sunrise)
+            (&mut pick, &mut installed),
+            ("pack", Some(Tonemap::Sunrise))
         ));
         assert_eq!(installed, Some(Tonemap::Sunrise));
         assert!(!look(Some(Tonemap::Sunrise)));

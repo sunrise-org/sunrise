@@ -5,8 +5,9 @@ pub trait Hooks {
     /// `state` is its outgoing state. Read the retiring block entity through
     /// `entity`; its attachments are still available through the level host.
     /// Use `effects` to suppress the base container scatter, scatter additional
-    /// slots, spawn positioned item entities or award experience. An invalid
-    /// contribution does not change any other contribution.
+    /// slots, spawn positioned item entities or award experience. For item spawns,
+    /// `motion: Option<[f64; 3]>` selects random (`None`) or explicit (`Some`) velocity.
+    /// A non-finite motion returns `NonFiniteMotion` without affecting other calls.
     ///
     /// The game scatters base contents first unless suppressed, then applies
     /// contributed slots, positioned items and experience in that order.
@@ -19,7 +20,9 @@ pub trait Hooks {
   and its attachments with `key.get_in(host, Holder::BlockEntity(pos), read)`. Submit effects with `event.effects`.
   Base contents scatter first unless suppressed; contributed slots, positioned items with default pickup delay,
   and experience follow in that order. Order within each group is preserved. `drop_slot(None)` draws an empty
-  slot's scatter position without spawning. An invalid stack or nonfinite position refuses only that call.
+  slot's scatter position without spawning. `spawn_item(stack, position, motion)` takes `None` for random velocity
+  or `Some([vx, vy, vz])` for explicit velocity. A non-finite motion returns `NonFiniteMotion` and, like an invalid
+  stack or position, refuses only that call.
   A Part that contributes nothing does not cause removal effects; contributions from a panicking Part are discarded.
   A ticking or menu-hook block entity can be removed through the Host; don't drop its contents separately in that callback."#]
     #[hook(

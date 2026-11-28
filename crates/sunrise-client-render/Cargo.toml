@@ -118,6 +118,7 @@ name = "standard_pack_gpu_entities"
 path = "examples/standard_pack_gpu_entities.rs"
 
 [dev-dependencies]
+sunrise-core = { path = "../sunrise-core", features = ["test-support"] }
 tempfile = "3"
 mod_platform = { package = "sunrise-mod-api", path = "../sunrise-mod-api", features = ["testing"] }
 sunrise-perf = { path = "../sunrise-perf" }

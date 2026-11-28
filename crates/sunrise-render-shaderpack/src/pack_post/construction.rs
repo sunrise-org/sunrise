@@ -2135,10 +2135,19 @@ pub struct PackPost {
     pub other_clears: Vec<usize>,
     /// Source views identify the world target, including replacements at the same size.
     pub blit_group: Option<([wgpu::TextureView; 2], wgpu::BindGroup)>,
-    /// Shows colortex0 when the pack has no `final` (OQ-5).
+    /// Shows colortex0 when the pack has no `final` (OQ-5); served Sunrise's HDR (`hdr`), it
+    /// encodes the linear light colortex0 holds as a served `final` does (`fs_copy_linear`),
+    /// loading texels only: its layout has no sampler and takes an unfilterable colortex0.
     pub copy: (wgpu::RenderPipeline, wgpu::BindGroupLayout),
+    /// Served Sunrise's HDR (`hdr`), the copy of colortex0 when it is the window's size: each
+    /// pixel its own texel (`fs_copy_linear_texel`), filtered by nothing.
+    pub copy_texel: Option<(wgpu::RenderPipeline, wgpu::BindGroupLayout)>,
+    /// Sunrise's HDR extension as the pack was served it (`Post::hdr`): what its picture on
+    /// the frame was encoded from, and who owns the tone curve.
+    pub hdr: Option<sunrise_shaders::Tonemap>,
     /// Copies the picture `final` drew at the world's size onto the window: no flip, it is
-    /// already in the screen's rows.
+    /// already in the screen's rows. Served Sunrise's HDR, alpha isn't filtered
+    /// (`fs_upscale_linear`).
     pub upscale: (wgpu::RenderPipeline, wgpu::BindGroupLayout),
     /// Copies the pack's GL-rows, GL-depth `targets.depth` back into Sunrise's screen-rows,
     /// reversed-Z `world_depth` so post-pack stages (`AfterLevel`, `world_drawn`) see valid
@@ -2283,6 +2292,7 @@ impl PackPost {
                 packed[i].map_or(c, |bits| packed::quantise(c, bits))
             })
         });
+        let hdr = post.hdr;
         let mut notes = post.notes;
         notes.extend(post.config.notes);
         let mut sizes = post.sizes;
@@ -3334,24 +3344,59 @@ impl PackPost {
                 }),
             )
         });
-        let copy = helper(
-            device,
-            "vs_uv",
-            "fs_copy",
-            &[
-                texture_entry(0, float),
-                entry(
-                    2,
-                    wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                ),
-            ],
-            &[target(screen)],
-            None,
-        );
+        // The colortex0 copy's bindings: served Sunrise's HDR it only loads texels, so colortex0
+        // needs no filtering (an `RGBA32F` one isn't filterable without `FLOAT32_FILTERABLE`);
+        // otherwise `fs_copy` samples it.
+        let unfiltered = [texture_entry(
+            0,
+            wgpu::TextureSampleType::Float { filterable: false },
+        )];
+        let sampled = [
+            texture_entry(0, float),
+            entry(
+                2,
+                wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+            ),
+        ];
+        let copy = match hdr {
+            // Served Sunrise's HDR, colortex0 holds the linear light `final` would write.
+            Some(_) => helper(
+                device,
+                "vs_uv",
+                "fs_copy_linear",
+                &unfiltered,
+                &[target(screen)],
+                None,
+            ),
+            None => helper(
+                device,
+                "vs_uv",
+                "fs_copy",
+                &sampled,
+                &[target(screen)],
+                None,
+            ),
+        };
+        // Served, a colortex0 copy without a render scale reads each pixel's own texel.
+        let copy_texel = hdr.is_some().then(|| {
+            helper(
+                device,
+                "vs_uv",
+                "fs_copy_linear_texel",
+                &unfiltered,
+                &[target(screen)],
+                None,
+            )
+        });
         let upscale = helper(
             device,
             "vs_screen",
-            "fs_copy",
+            // Served, the picture's alpha is the centre texel's, as for the copy.
+            if hdr.is_some() {
+                "fs_upscale_linear"
+            } else {
+                "fs_copy"
+            },
             &[
                 texture_entry(0, float),
                 entry(
@@ -3594,6 +3639,8 @@ impl PackPost {
             }),
             blit,
             copy,
+            copy_texel,
+            hdr,
             upscale,
             export_depth,
             export_depth_group: None,

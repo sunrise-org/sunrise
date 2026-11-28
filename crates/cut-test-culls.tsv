@@ -35,7 +35,6 @@ crates/sunrise-client-gameplay/src/game/modding/payload_transport/main_panic_tes
 crates/sunrise-gameplay/src/game/administration/commands/items.rs	scene	The re-export points upward to a shell fixture	Import the fixture at its shell owner
 crates/sunrise-gameplay/src/game/administration/commands/world_cmds.rs	run_a_datapack_explosion_type_removes_a_crystal_quietly_and_hurts_the_dragon	The re-export points upward to a shell fixture	Import the fixture at its shell owner
 crates/sunrise-gameplay/src/game/administration/functions.rs	world_open_loads_functions_before_first_tick	World opening helper is mounted on the feature-gated entry path	Shell world-open fixture
-crates/sunrise-gameplay/src/game/blocks/spill.rs	ominous_banner_survives_placement_save_and_drop	Checks a desktop tooltip on a server-produced item	Shell fixture with server drops and client tooltip rendering
 crates/sunrise-gameplay/src/game/network/lan/mod.rs	guest_climbable_glide	Server unit test builds a client render scene	Shell fixture with render assets and server LAN setup
 crates/sunrise-gameplay/src/game/network/lan_actions/shared.rs	menu_rules_match_guest_packets_and_prediction	Needs the shell client hook installer while driving server guest menus	Shell fixture with client hook installation and guest-turn support
 crates/sunrise-gameplay/src/game/network/lan_particles.rs	typed_particle_packet_is_shared_by_spawns_and_kept_from_vanilla_peers	Test decodes server particles in a client particle engine	Shell fixture with server packet output and client particle engine

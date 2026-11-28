@@ -4,7 +4,8 @@ use crate::*;
 // no wire: borrowed call-scoped view; transport uses owned snapshots rather than serializing references.
 /// One offer row as `EnchantmentLevelSetEvent` reports it: the server player
 /// whose table it is (UUID and entity id), the row (0 to 2), the power (the
-/// bookshelves counted), the item and the level `getEnchantmentCost` drew.
+/// bookshelves counted), the item and the level the row keeps: the level
+/// `getEnchantmentCost` drew, or 0 when that is below `row + 1`.
 #[derive(Clone, Debug, PartialEq)]
 // exhaustive: the game builds it with a literal; mods only read it
 pub struct EnchantmentRow<'a> {

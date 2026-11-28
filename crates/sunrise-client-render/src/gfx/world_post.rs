@@ -169,6 +169,9 @@ pub struct Post {
     taa_previous: Option<(DMat4, DVec3)>,
     taa_this_frame: TaaUniform,
     light_key: Option<(bool, [f32; 4], [f32; 4], [[f32; 4]; 2])>,
+    /// Tests: every scaled target fails as one out of video memory does (`prepare`'s fallback).
+    #[cfg(feature = "test-support")]
+    pub fail_targets: bool,
 }
 
 impl Post {
@@ -349,6 +352,8 @@ impl Post {
             taa_previous: None,
             taa_this_frame: bytemuck::Zeroable::zeroed(),
             light_key: None,
+            #[cfg(feature = "test-support")]
+            fail_targets: false,
         }
     }
 
@@ -450,6 +455,12 @@ impl Post {
         always: bool,
     ) -> Option<(wgpu::TextureView, wgpu::TextureView)> {
         if self.scale == 1.0 && !self.antialias && !self.taa_on && !always {
+            self.target = None;
+            return None;
+        }
+        // As the out-of-memory fallback below: the world draws at the window's size.
+        #[cfg(feature = "test-support")]
+        if self.fail_targets {
             self.target = None;
             return None;
         }

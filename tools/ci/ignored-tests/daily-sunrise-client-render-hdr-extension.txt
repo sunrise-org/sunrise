@@ -1,0 +1,8 @@
+# Sunrise's HDR extension served to a shaders/ pack: GPU frame checks (#5827 step 2).
+sunrise-client-render gfx::pack_post::hdr_extension_tests::a_pack_not_served_draws_its_own_picture lib daily gpu
+sunrise-client-render gfx::pack_post::hdr_extension_tests::a_render_scale_encodes_once_and_upscales_float lib daily gpu
+sunrise-client-render gfx::pack_post::hdr_extension_tests::a_served_final_on_an_sdr_frame_clips_at_white lib daily gpu
+sunrise-client-render gfx::pack_post::hdr_extension_tests::a_served_final_with_sunrises_curve_is_mapped_as_a_no_pack_frame lib daily gpu
+sunrise-client-render gfx::pack_post::hdr_extension_tests::a_served_final_writes_linear_light_in_the_frames_gamma lib daily gpu
+sunrise-client-render gfx::pack_post::hdr_extension_tests::an_unfilterable_colortex0_is_copied_served lib daily gpu
+sunrise-client-render gfx::pack_post::hdr_extension_tests::without_final_the_colortex0_copy_encodes_served_light lib daily gpu

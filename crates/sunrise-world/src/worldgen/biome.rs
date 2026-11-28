@@ -518,3 +518,100 @@ impl<'a> BiomeResolver<'a> {
         Ok(self.search.find(target)?.as_str())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        registry::BlockStateId,
+        worldgen::{
+            block_predicate::BlockPredicate, overrides::PackFile, placement::PlacementModifier,
+        },
+    };
+    use serde_json::json;
+
+    #[test]
+    fn malformed_block_tag_replacement_preserves_biome_feature_membership() {
+        let blocks: &'static BlockRegistry = Box::leak(Box::new(
+            BlockRegistry::from_facts_json(
+                br#"{"states":[
+                    ["air",true,false,"","minecraft:air"],
+                    ["cave_air",true,false,"","minecraft:cave_air"],
+                    ["void_air",true,false,"","minecraft:void_air"],
+                    ["stone",false,false,"","minecraft:stone"],
+                    ["dirt",false,false,"","minecraft:dirt"]
+                ],"defaults":{"minecraft:air":0,"minecraft:cave_air":1,
+                    "minecraft:void_air":2,"minecraft:stone":3,"minecraft:dirt":4}}"#
+                    .as_slice(),
+            )
+            .unwrap(),
+        ));
+        let mut packs = WorldgenOverrides::default();
+        let malformed = r#"{"replace":true,"values":[{}]}"#;
+        let ground = "data/test/tags/block/ground.json";
+        for (pack, file, json) in [
+            ("file/lower", ground, r#"{"values":["minecraft:stone"]}"#),
+            (
+                "file/lower",
+                "data/test/tags/block/unrelated.json",
+                r#"{"values":["minecraft:air"]}"#,
+            ),
+            ("file/malformed", ground, malformed),
+            ("file/later", ground, r#"{"values":["minecraft:dirt"]}"#),
+        ] {
+            assert_eq!(
+                packs.add_file(pack, file, || Some(json.into())),
+                PackFile::Read
+            );
+        }
+        assert!(
+            packs
+                .tags("block_tags")
+                .any(|layer| layer == ("test:ground", "file/malformed", malformed))
+        );
+
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path().join("worldgen");
+        let mut generation =
+            BiomeGenerationRegistries::load(&dir, &packs, blocks, ["test:biome".into()].into())
+                .unwrap();
+        let admitted = BiomeDefinition::decode(
+            json!({
+                "temperature": 0.8, "downfall": 0.4, "has_precipitation": true,
+                "effects": {"water_color": "#2301ef"}, "carvers": [],
+                "features": [[{
+                    "feature": {"type": "minecraft:no_op", "config": {}},
+                    "placement": [{
+                        "type": "minecraft:block_predicate_filter",
+                        "predicate": {"type": "minecraft:matching_blocks", "blocks": "#test:ground"}
+                    }]
+                }]]
+            }),
+            &mut generation,
+        );
+        // Admission logs the warnings; inspect the same loader's diagnostics without a global logger.
+        let mut warnings = Vec::new();
+        let tags = load_block_tags(&dir, &packs, false, &mut warnings, blocks);
+
+        let (_, admitted) = admitted
+            .expect("a malformed block-tag layer must not stop biome admission")
+            .into_parts();
+        let [PlacementModifier::BlockPredicate(BlockPredicate::MatchingBlocks { states, .. })] =
+            admitted.features[0][0].definition.placement.as_slice()
+        else {
+            panic!("biome feature must bind its block-tag predicate");
+        };
+        assert_eq!(**states, BTreeSet::from([BlockStateId(3), BlockStateId(4)]));
+        assert_eq!(tags.unwrap()["test:unrelated"], ["minecraft:air"]);
+        let diagnostics: Vec<_> = warnings
+            .iter()
+            .filter(|warning| warning.contains("file/malformed"))
+            .map(String::as_str)
+            .collect();
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0].contains("test:ground"),
+            "the diagnostic must name the malformed tag: {diagnostics:?}"
+        );
+    }
+}

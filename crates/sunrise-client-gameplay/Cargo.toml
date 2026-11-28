@@ -56,6 +56,7 @@ sunrise-level = { path = "../sunrise-level" }
 winit = "0.30.13"
 
 [dev-dependencies]
+sunrise-core = { path = "../sunrise-core", features = ["test-support"] }
 mod_platform = { package = "sunrise-mod-api", path = "../sunrise-mod-api", features = ["engine-test-platform"] }
 tempfile = "3"
 sunrise-gameplay-common = { path = "../sunrise-gameplay-common", features = ["test-support"] }
