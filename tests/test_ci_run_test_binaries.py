@@ -131,6 +131,14 @@ class RunTestBinariesTests(unittest.TestCase):
                                     {}, ["-Z", "unstable-options", "--report-time"], timed=True)
             self.assertNotIn("listed", result)
             self.assertEqual(runner.untimed(result), [])
+            # Its output follows no libtest contract: lines that read like libtest's hang signs are not judged.
+            binary.write_text("#!/bin/sh\nprintf 'test a::x has been running for over 60 seconds\\ntest a::y ... '\n"
+                              "sleep 1.5\n")
+            with unittest.mock.patch.object(runner, "HANG_SECONDS", 0.5):
+                result = runner.run_one({"executable": str(binary), "cwd": directory, "env": {}, "libtest": False},
+                                        {}, [], timed=True)
+            self.assertEqual(result["status"], "ok")
+            self.assertNotIn("hung", result)
 
     def test_a_listing_counts_only_when_it_is_the_plain_form_with_its_own_total(self):
         binary = {"executable": "x", "cwd": "."}
@@ -330,6 +338,25 @@ exec sleep 30
                     self.assertLess(time.monotonic() - started, 15)
                     self.assertEqual(result["hung"], ["a::stuck"])
                     self.assertTrue(result["status"].startswith("hung: a::stuck"))
+                    result["output"].close()
+
+    @unittest.skipUnless(os.name == "posix" and shutil.which("sh"), "requires a POSIX shell")
+    def test_later_output_hides_no_sign_of_a_hang(self):
+        flood = "i=0; while [ $i -lt 2000 ]; do echo 'child output line that runs on and on and on'; i=$((i+1)); done"
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / "flooding"
+            for case, script in [
+                ("warning then output", f"printf 'test a::stuck has been running for over 60 seconds\\n'\n{flood}"),
+                ("start line then output", f"printf 'test a::stuck ... '\n{flood}"),
+            ]:
+                with self.subTest(case), unittest.mock.patch.object(runner, "HANG_SECONDS", 0.5):
+                    binary.write_text(f"#!/bin/sh\n{script}\nexec sleep 30\n")
+                    binary.chmod(0o755)
+                    started = time.monotonic()
+                    result = runner.run_one({"executable": str(binary), "cwd": directory, "env": {}, "label": "pkg"},
+                                            {}, [])
+                    self.assertLess(time.monotonic() - started, 15)
+                    self.assertEqual(result.get("hung"), ["a::stuck"])
                     result["output"].close()
 
     @unittest.skipUnless(os.name == "posix" and shutil.which("sh"), "requires a POSIX shell")

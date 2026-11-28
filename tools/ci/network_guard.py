@@ -75,8 +75,12 @@ def run_binary(binary, env, test_args, timed, shim, run_one, list_tests):
         for invocation in invocations([binary], env, test_args, list_tests):
             isolated = run(invocation, env, False, shim, run_one)
             if isolated["network_operations"]:
-                name = invocation[0]["isolated_test"]
-                result["network_tests"].append(name)
+                result["network_tests"].append(invocation[0]["isolated_test"])
+            # A rerun that hung is a failure of its own, named beside the violation.
+            for name in isolated.get("hung", []):
+                if name not in result.setdefault("hung", []):
+                    result["hung"].append(name)
+            if isolated["network_operations"] or isolated.get("hung"):
                 isolated["output"].seek(0)
                 result["output"].write(isolated["output"].read())
             isolated["output"].close()

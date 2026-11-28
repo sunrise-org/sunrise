@@ -167,3 +167,27 @@ class HungUnderTheGuard(unittest.TestCase):
         self.assertEqual(result["hung"], ["a::stuck"])
         self.assertEqual(result["status"],
                          "hung: a::stuck still running after 60 s; killed; network guard: connect inet")
+
+    def test_a_hung_isolation_rerun_is_named_without_blaming_it_for_the_violation(self):
+        import io
+        runs = []
+
+        def run_one(binary, env, args, timed, listing_env=None):
+            runs.append((args, timed))
+            isolated = "isolated_test" in binary
+            records = "loaded 7\n" if isolated else "loaded 7\nconnect inet\n"
+            Path(env["SUNRISE_NETWORK_GUARD_LOG"]).write_text(records)
+            result = {"binary": binary, "pid": 7, "output": io.StringIO(), "status": "ok"}
+            if isolated:
+                result["output"].write("test a::stuck ... ")
+                result.update(hung=["a::stuck"], status="hung: a::stuck still running after 60 s; killed")
+            return result
+
+        binary = {"label": "pkg", "env": {}}
+        result = network_guard.run_binary(binary, {}, [], True, Path("/guard.so"), run_one,
+                                          lambda binary, env, args: [] if "--ignored" in args else ["a::stuck"])
+        self.assertEqual(runs, [([], True), (["--exact", "a::stuck"], False)])
+        self.assertEqual(result["hung"], ["a::stuck"])
+        self.assertEqual(result["network_tests"], [])
+        self.assertEqual(result["status"], "network guard: connect inet")
+        self.assertIn("test a::stuck ... ", result["output"].getvalue())
