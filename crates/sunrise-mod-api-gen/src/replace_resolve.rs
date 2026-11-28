@@ -1161,7 +1161,13 @@ impl WorkspaceTraits {
         }
         let here = file_path.parent().unwrap_or(file_path);
         let mut ancestors = vec![file_path.to_path_buf()];
-        Some(self.expand_items(krate, parsed.items, here, &mut ancestors))
+        Some(self.expand_items(
+            krate,
+            parsed.items,
+            here,
+            &mut ancestors,
+            mod_source::modules::IncludeScope::default(),
+        ))
     }
 
     fn expand_items(
@@ -1170,11 +1176,15 @@ impl WorkspaceTraits {
         items: Vec<Item>,
         here: &Path,
         ancestors: &mut Vec<PathBuf>,
+        include_scope: mod_source::modules::IncludeScope,
     ) -> Vec<Item> {
-        let shadowed = mod_source::modules::include_shadowed(&items);
+        let mut cursor = include_scope.with_imports(&items);
         let mut out = Vec::with_capacity(items.len());
         for mut item in items {
-            if let Some((relative, attrs)) = mod_source::modules::literal_include(&item, shadowed) {
+            let item_scope = cursor.before(&item);
+            if let Some((relative, attrs)) =
+                mod_source::modules::literal_include(&item, item_scope.shadowed())
+            {
                 if cfg_state(attrs) == CfgState::Always {
                     let included = lexical(&here.join(relative.value()));
                     if !ancestors.contains(&included)
@@ -1184,7 +1194,8 @@ impl WorkspaceTraits {
                     {
                         ancestors.push(included.clone());
                         let inc_here = included.parent().unwrap_or(here);
-                        let expanded = self.expand_items(krate, parsed.items, inc_here, ancestors);
+                        let expanded =
+                            self.expand_items(krate, parsed.items, inc_here, ancestors, item_scope);
                         ancestors.pop();
                         out.extend(expanded);
                     }
@@ -1192,13 +1203,14 @@ impl WorkspaceTraits {
                 continue;
             }
             if krate == "sunrise_mod_vocab"
+                && !item_scope.shadowed()
                 && let Item::Macro(mac) = &item
                 && mac.mac.path.is_ident("include")
                 && let Some(name) = out_dir_include_name(&mac.mac.tokens)
                 && let Some(code) = self.vocab_generated_file(&name)
                 && let Ok(parsed) = syn::parse_file(&code)
             {
-                let expanded = self.expand_items(krate, parsed.items, here, ancestors);
+                let expanded = self.expand_items(krate, parsed.items, here, ancestors, item_scope);
                 out.extend(expanded);
                 continue;
             }
@@ -1206,7 +1218,7 @@ impl WorkspaceTraits {
                 && let Some((_, inner)) = &mut module.content
             {
                 let taken = std::mem::take(inner);
-                *inner = self.expand_items(krate, taken, here, ancestors);
+                *inner = self.expand_items(krate, taken, here, ancestors, item_scope.child());
             }
             out.push(item);
         }

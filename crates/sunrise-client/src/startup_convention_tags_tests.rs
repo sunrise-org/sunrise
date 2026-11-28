@@ -67,6 +67,17 @@ fn startup_binds_required_convention_tags() -> crate::Result<()> {
             .push(json!("#test:startup_barrels"));
         blocks.insert(tag.into(), file.to_string());
     }
+    let unresolved = [
+        "minecraft:blocks_motion_in_heightmap_no_leaves",
+        "minecraft:crystal_sound_blocks",
+    ];
+    for tag in unresolved {
+        blocks.insert(
+            tag.into(),
+            json!({"replace": true, "values": ["minecraft:barrel", "test:missing_block"]})
+                .to_string(),
+        );
+    }
     fs::write(root.join("block-tags.json"), serde_json::to_vec(&blocks)?)?;
 
     let mut render: BTreeMap<String, Value> =
@@ -110,7 +121,17 @@ fn startup_binds_required_convention_tags() -> crate::Result<()> {
             .blocks_motion_in_heightmap()
     );
 
+    assert!(
+        !assets
+            .properties
+            .heightmap_state(barrel)
+            .blocks_motion_in_heightmap_no_leaves()
+    );
+
     let (facts, behaviours) = BlockFacts::load_pair(root, registry)?;
+    for tag in unresolved {
+        assert!(behaviours.tag(tag).is_none(), "{tag} must be omitted");
+    }
     let tag = behaviours
         .tag("test:startup_barrels")
         .expect("the startup gameplay tag must bind");
@@ -125,6 +146,7 @@ fn startup_binds_required_convention_tags() -> crate::Result<()> {
         .unwrap_or_else(|error| panic!("MotionResources::load_with_facts: {error}"));
     assert!(motion.inside_step_sound.contains("minecraft:barrel"));
     assert!(!motion.inside_step_sound.contains("minecraft:stone"));
+    assert!(motion.crystal_sound.is_empty());
 
     let animate = AnimateTables::load(root, registry)?;
     assert!(animate.terracotta[barrel.0 as usize]);

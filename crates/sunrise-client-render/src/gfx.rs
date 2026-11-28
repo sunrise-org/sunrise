@@ -242,7 +242,7 @@ pub mod lightning;
 mod linear_blend;
 #[cfg(test)]
 use frame_policy::frame_format;
-use frame_policy::{frame_configuration, overlay_format, sunrise_tone_curve};
+use frame_policy::{frame_configuration, overlay_format, pack_owns_tone_curve, sunrise_tone_curve};
 pub mod mod_compute;
 pub mod mod_frame_graph;
 pub mod mod_gpu;
@@ -1060,6 +1060,8 @@ pub(crate) struct PackLoading {
     /// pack's `has_terrain` and `has_shadow` will say (`PackLoading::draws_of`), for the layouts
     /// the frames drawn meanwhile keep (`Renderer::pack_pending`).
     draws: PackDraws,
+    /// Sunrise's HDR as served to it (`Post::hdr`).
+    served: Option<sunrise_shaders::Tonemap>,
 }
 
 /// A running `shaders/` pack's block ids (`Renderer::pack_block_ids`).

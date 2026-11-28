@@ -73,6 +73,64 @@ fn fs_copy(v: Full) -> @location(0) vec4<f32> {
     return textureSample(source, linear, v.uv);
 }
 
+// `fs_copy` for a pack served Sunrise's HDR without a `final`: colortex0 holds linear light, 1.0
+// at paper white, which goes onto the frame as a served `final`'s does (the translator's
+// `LINEAR_ENCODE`): a negative or NaN channel is 0, then vanilla's 2.2 power, at most half
+// float's largest value (docs/hdr-passes.md, rule 5).
+fn linear_light(c: vec3<f32>) -> vec3<f32> {
+    return select(vec3<f32>(0.0), c, c >= vec3<f32>(0.0));
+}
+
+fn encoded(light: vec3<f32>) -> vec3<f32> {
+    return min(pow(light, vec3<f32>(1.0 / 2.2)), vec3<f32>(65504.0));
+}
+
+// With a render scale: it filters the light as `fs_copy` does (bilinear, clamped at the edges),
+// but itself, from the texels that count: a sampler weighs every texel of the four, and an
+// infinity weighed 0 is NaN on some drivers. Alpha is the centre texel's, unfiltered
+// (docs/hdr-passes.md, rule 6).
+@fragment
+fn fs_copy_linear(v: Full) -> @location(0) vec4<f32> {
+    let size = vec2<i32>(textureDimensions(source));
+    let at = v.uv * vec2<f32>(size) - 0.5;
+    let first = vec2<i32>(floor(at));
+    let f = at - floor(at);
+    var light = vec3<f32>(0.0);
+    for (var y = 0; y < 2; y++) {
+        for (var x = 0; x < 2; x++) {
+            let w = select(1.0 - f.x, f.x, x == 1) * select(1.0 - f.y, f.y, y == 1);
+            if w > 0.0 {
+                let texel = clamp(first + vec2<i32>(x, y), vec2<i32>(0), size - 1);
+                light += w * linear_light(textureLoad(source, texel, 0).rgb);
+            }
+        }
+    }
+    let centre = clamp(vec2<i32>(floor(v.uv * vec2<f32>(size))), vec2<i32>(0), size - 1);
+    return vec4<f32>(encoded(light), textureLoad(source, centre, 0).a);
+}
+
+// Without a render scale: each pixel is its own texel, read by its integer position (GL's rows,
+// as `vs_uv` flips them), so no neighbour's light reaches it through a filter weight that the
+// interpolated coordinate leaves a little above 0.
+@fragment
+fn fs_copy_linear_texel(v: Full) -> @location(0) vec4<f32> {
+    let size = vec2<i32>(textureDimensions(source));
+    let p = vec2<i32>(v.position.xy);
+    let c = textureLoad(source, vec2<i32>(p.x, size.y - 1 - p.y), 0);
+    return vec4<f32>(encoded(linear_light(c.rgb)), c.a);
+}
+
+// The upscale of a served `final`'s picture (already encoded, finite and not negative): its
+// colour filtered as `fs_copy` filters it, its alpha the centre texel's, unfiltered
+// (docs/hdr-passes.md, rule 6).
+@fragment
+fn fs_upscale_linear(v: Full) -> @location(0) vec4<f32> {
+    let size = vec2<i32>(textureDimensions(source));
+    let centre = clamp(vec2<i32>(floor(v.uv * vec2<f32>(size))), vec2<i32>(0), size - 1);
+    let rgb = textureSample(source, linear, v.uv).rgb;
+    return vec4<f32>(rgb, textureLoad(source, centre, 0).a);
+}
+
 // One level of a buffer's mip chain from the level above (6.1.7): a box filter, the average
 // of the texels under each destination texel (OpenGL 4.6, 8.14.4, recommends one). Along an
 // even side a texel covers two of the level above; along an odd side of 2d + 1 texels, texel i

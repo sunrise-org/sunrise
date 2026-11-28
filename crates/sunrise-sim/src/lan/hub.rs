@@ -3597,7 +3597,7 @@ fn equipment_source(g: &Guest, index: usize) -> Option<&ItemStack> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     mod carried_check_tests;
     mod cave_air_tests;
     mod collision_exclusion_tests;
@@ -4473,8 +4473,10 @@ mod tests {
         assert!(Arc::ptr_eq(&registry, &hub.rule_registry));
     }
 
-    /// [`hub_with_a_guest`] over a sync the test built.
-    fn hub_with_sync(sync: SyncData) -> (Hub, std::sync::mpsc::Receiver<crate::lan::Out>) {
+    /// A hub with one placed guest, no network listener, and the test's registries.
+    pub(in crate::lan) fn hub_with_sync(
+        sync: SyncData,
+    ) -> (Hub, std::sync::mpsc::Receiver<crate::lan::Out>) {
         hub_with_net(
             sync,
             crate::lan::NetConfig {

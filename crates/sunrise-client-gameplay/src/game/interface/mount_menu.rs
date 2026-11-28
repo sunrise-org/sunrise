@@ -524,13 +524,13 @@ pub(in crate::game) mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn vanilla_body_armour_still_fits_its_mobs() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../.local/sunrise-client")
-            .join(sunrise_core::VANILLA_VERSION);
-        if !root.join("items.json").exists() {
-            return;
-        }
+        let root = crate::prepared_test_root::prepared_root(&[&[
+            "items.json",
+            "registries.json",
+            "data/minecraft/tags",
+        ]]);
         let defaults = sunrise_world::item_defaults::read(&root).unwrap();
         let items = sunrise_items::items::Items::catalog(
             &root,

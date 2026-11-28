@@ -68,13 +68,16 @@ READERS = {
     # Shares sunrise-client's sources, so its unit tests run the same reads.
     "sunrise-client-lib": SUNRISE_CLIENT,
     "sunrise-gameplay-common": [
+        "crates/sunrise-core/src/prepared_test_root.rs",
         "crates/sunrise-gameplay/src", "crates/sunrise-mod-vocab/src/hooks", "crates/sunrise-world/src",
         "docs/api/launch-reference.md", "docs/modding/examples/src/worldgen.rs",
     ],
     "sunrise-gameplay": [
         "crates/sunrise-core/src/prepared_test_root.rs", "crates/sunrise-mod-vocab/src/hooks", "tests/fixtures",
     ],
-    "sunrise-client-gameplay": ["crates/sunrise-mod-vocab/src/hooks"],
+    "sunrise-client-gameplay": [
+        "crates/sunrise-core/src/prepared_test_root.rs", "crates/sunrise-mod-vocab/src/hooks",
+    ],
     "sunrise-parity-fixtures": [*SUNRISE_CLIENT, "crates/sunrise-gameplay-common/src/game/parity_fixtures.rs"],
     "sunrise-sim": [
         "crates/sunrise-client/tests/fixtures/advancement-icons/data",
@@ -86,6 +89,7 @@ READERS = {
     "sunrise-game-data": ["crates/sunrise-client/assets/sunrise/lang"],
     "sunrise-client-render": [
         "crates/sunrise-client/assets/sunrise/lang", "crates/sunrise-client/assets/sunrise/textures/gui",
+        "crates/sunrise-core/src/prepared_test_root.rs",
         # Its WGSL validation compiles the shader pack crate's shaders too.
         "crates/sunrise-render-shaderpack/src",
         "tools/light_storage_scenario.txt", "tools/light_storage_witness.txt",

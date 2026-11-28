@@ -458,7 +458,7 @@ fn frame_clear_and_retained_history_apply_before_partial_post_writes() {
 }
 
 // Frame literal adapted from MIT Sunrise f700231 pack_uniforms.rs test API setup.
-fn fixture_frame(hud: &HudBatch) -> Frame<'_> {
+pub(super) fn fixture_frame(hud: &HudBatch) -> Frame<'_> {
     Frame {
         eye: glam::DVec3::ZERO,
         eye_rotation: [0.0; 2],

@@ -379,7 +379,9 @@ and `Particles` resolves `gbuffers_particles -> gbuffers_textured_lit -> gbuffer
 Pipelines that need pack-defined programs, preprocessor defines, an auxiliary depth target, or
 per-frame pack uniforms attach an optional `.pack_binding(PackBinding::new()...)`. Startup refuses
 invalid GLSL identifiers, reserved Iris/OptiFine sampler/image/uniform names, and cross-mod or
-namespace collisions across samplers, uniforms, defines, and depth-target IDs.
+namespace collisions across samplers, uniforms, defines, and depth-target IDs. A pack binding also
+cannot declare `SUNRISE_HDR` or `SUNRISE_HDR_TONEMAP_PACK`, which the engine defines itself, even
+when HDR is not served.
 
 During a world draw hook, feed declared per-frame pack uniforms with
 `ctx.set_pack_uniform(name, PackUniformValue::...)` (returns `false` without panicking when `name`

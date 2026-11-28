@@ -157,7 +157,20 @@ pub enum Target {
     Buffers,
     /// The window (`final`).
     Window,
+    /// The window, from a `final` writing linear light (Sunrise's HDR extension, served:
+    /// `Macros::define_sunrise_hdr`): after the pack's `main`, ours turns output 0's colour into
+    /// what the frame stores (`LINEAR_ENCODE`).
+    LinearWindow,
 }
+
+/// What a served `final`'s output 0 becomes, `@` naming it: linear light, 1.0 at paper white,
+/// in the frame's gamma (vanilla's 2.2 power, values above 1 kept). A negative or NaN channel
+/// is 0 first (`greaterThanEqual` is false for NaN), and the largest stored value is half
+/// float's largest, 65504, so an infinity isn't written (docs/hdr-passes.md, rule 5). Alpha is
+/// left as the pack wrote it.
+const LINEAR_ENCODE: &str = "    vec3 hz_linear = @.rgb;\n    \
+    hz_linear = mix(vec3(0.0), hz_linear, greaterThanEqual(hz_linear, vec3(0.0)));\n    \
+    @.rgb = min(pow(hz_linear, vec3(1.0 / 2.2)), vec3(65504.0));\n";
 
 /// What a gbuffers-style program's vertex stage reads. The game writes it: it knows its vertex
 /// formats, the translator only places it.
@@ -721,7 +734,7 @@ fn translate(
     fragment_main.push_str(fog);
     if f.frag_coord {
         fragment_main.push_str(match target {
-            Target::Window => "    hz_FragCoord = vec4(gl_FragCoord.x, hz_target.y - gl_FragCoord.y, gl_FragCoord.zw);\n",
+            Target::Window | Target::LinearWindow => "    hz_FragCoord = vec4(gl_FragCoord.x, hz_target.y - gl_FragCoord.y, gl_FragCoord.zw);\n",
             Target::Buffers => "    hz_FragCoord = gl_FragCoord;\n",
         });
     }
@@ -778,6 +791,11 @@ fn translate(
     fragment_main.push_str("    hz_main();\n");
     for copy in &f.out_copies {
         writeln!(fragment_main, "    {copy}").unwrap();
+    }
+    if target == Target::LinearWindow
+        && let Some(color) = f.color_output(0)
+    {
+        fragment_main.push_str(&LINEAR_ENCODE.replace('@', &color));
     }
     // With `out` variables the pack tests alpha itself.
     if let Some(g) = gbuffers
@@ -2343,6 +2361,86 @@ mod tests {
 
     const VSH_120: &str = "#version 120\nvarying vec2 texcoord;\nvoid main() {\n    gl_Position = ftransform();\n    \
                            texcoord = (gl_TextureMatrix[0] * gl_MultiTexCoord0).xy;\n}\n";
+
+    /// How many `pow` calls the fragment stage of `p` makes.
+    fn pows(p: &Program) -> usize {
+        let m = &p.fragment;
+        m.functions
+            .iter()
+            .map(|(_, f)| f)
+            .chain(m.entry_points.iter().map(|e| &e.function))
+            .flat_map(|f| f.expressions.iter())
+            .filter(|(_, e)| {
+                matches!(
+                    e,
+                    naga::Expression::Math {
+                        fun: naga::MathFunction::Pow,
+                        ..
+                    }
+                )
+            })
+            .count()
+    }
+
+    /// A served `final` (`Target::LinearWindow`) encodes output 0 whatever form the pack writes
+    /// it in: one `pow` more than the same program for the window, none for an integer output,
+    /// whose values aren't light.
+    #[test]
+    fn a_linear_final_encodes_output_zero_in_every_form() {
+        for (form, fsh, encoded) in [
+            (
+                "gl_FragColor",
+                "#version 120\nvoid main() { gl_FragColor = vec4(3.0); }\n",
+                true,
+            ),
+            (
+                "gl_FragData",
+                "#version 120\nvoid main() { gl_FragData[0] = vec4(3.0); gl_FragData[1] = vec4(1.0); }\n",
+                true,
+            ),
+            (
+                "out",
+                "#version 330\nout vec4 c;\nvoid main() { c = vec4(3.0); }\n",
+                true,
+            ),
+            (
+                "location",
+                "#version 330\nlayout(location = 1) out vec4 d;\nlayout(location = 0) out vec4 c;\nvoid main() { c = vec4(3.0); d = c; }\n",
+                true,
+            ),
+            (
+                "array",
+                "#version 330\nout vec4 c[2];\nvoid main() { c[0] = vec4(3.0); c[1] = vec4(1.0); }\n",
+                true,
+            ),
+            (
+                "narrow",
+                "#version 330\nlayout(location = 0) out vec3 c;\nvoid main() { c = vec3(3.0); }\n",
+                true,
+            ),
+            (
+                "components",
+                "#version 440\nlayout(location = 0, component = 0) out vec2 a;\nlayout(location = 0, component = 2) out vec2 b;\nvoid main() { a = vec2(3.0); b = vec2(1.0); }\n",
+                true,
+            ),
+            (
+                "integer",
+                "#version 330\nout ivec4 c;\nvoid main() { c = ivec4(3); }\n",
+                false,
+            ),
+            (
+                "only output 1",
+                "#version 330\nlayout(location = 1) out vec4 c;\nvoid main() { c = vec4(3.0); }\n",
+                false,
+            ),
+        ] {
+            let files = [("composite.vsh", VSH_120), ("composite.fsh", fsh)];
+            let window = program(&files, Target::Window).unwrap();
+            let linear = program(&files, Target::LinearWindow).unwrap();
+            assert_eq!(pows(&window), 0, "{form}");
+            assert_eq!(pows(&linear), usize::from(encoded), "{form}");
+        }
+    }
 
     #[test]
     fn mixed_type_array_constructor_arguments_validate() {

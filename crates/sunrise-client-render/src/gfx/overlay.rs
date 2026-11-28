@@ -18,6 +18,9 @@ pub(super) struct Overlay {
     pub(super) hand_drawn: bool,
     /// Camera-relative world to clip space for the hand: its own field of view and the bob.
     pub(super) hand_view_proj: Mat4,
+    /// The shader pack whose post passes drew this frame owns the tone curve
+    /// (`pack_owns_tone_curve`).
+    pub(super) pack_tonemap: bool,
 }
 
 impl Renderer {
@@ -223,9 +226,12 @@ impl Renderer {
             post.clear_active(frame.post_effects.root);
         }
         // The layered frame's light eases into the peak, before the camera overlays draw on it.
-        if sunrise_tone_curve(layered, !frame.title)
-            && let Some(hdr) = &self.hdr
-        {
+        let curve = sunrise_tone_curve(layered, !frame.title, overlay.pack_tonemap);
+        #[cfg(feature = "test-support")]
+        if overlay.real {
+            self.tone_curve_ran = curve && self.hdr.is_some();
+        }
+        if curve && let Some(hdr) = &self.hdr {
             hdr.tonemap(encoder, timing.as_mut());
         }
         if !frame.screen.is_empty() {

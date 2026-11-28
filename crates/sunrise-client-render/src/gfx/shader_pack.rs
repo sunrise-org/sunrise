@@ -15,6 +15,7 @@ impl Renderer {
         if pack.is_none() {
             self.forget_pack_atlas();
         }
+        self.pack_served = pack.as_ref().and_then(|p| p.hdr);
         let draws = self.pack_terrain_draws();
         let buffers = pack_terrain_buffers();
         let buffers = &buffers[..terrain_buffer_count(draws)];
@@ -247,6 +248,11 @@ impl Renderer {
             .map(|f| f.draw_layout.clone());
         let terrain = self.pack_atlas.is_some();
         let draws_sections = PackLoading::draws_of(&pack, terrain);
+        let served = pack.hdr;
+        #[cfg(feature = "test-support")]
+        {
+            self.pack_loads += 1;
+        }
         let clouds = self.cloud_bindings.clone();
         let mod_runtime = crate::mod_pipelines::pack_runtime_specs();
         let mod_set1_owned: Vec<Option<wgpu::BindGroupLayout>> = self
@@ -325,9 +331,13 @@ impl Renderer {
                     started,
                     _cancel: CancelOnDrop(cancel),
                     draws: draws_sections,
+                    served,
                 });
             }
-            Err(e) => self.pack_thread_failed(dimension, &label, &e),
+            Err(e) => {
+                self.pack_thread_failed(dimension, &label, &e);
+                self.pack_served = served;
+            }
         }
     }
     /// `load_shader_pack` found no thread to build its pack on: the pack is refused for
@@ -381,14 +391,57 @@ impl Renderer {
                 Vec::new(),
             ),
         };
+        self.pack_served = loading.served;
         let report = self.install_shader_pack(loading.dimension, built.map(Some), block_ids);
         Some((loading.dimension, loading.label, loading.started, report))
+    }
+    /// Drops the pack still building for another served answer of Sunrise's HDR than `served`
+    /// (`Post::hdr`): whatever it ends in, success or refusal, is for a load nobody wants any
+    /// more, so `poll_shader_pack` never reports it against the pack wanted now. A build for
+    /// another dimension with the same answer is kept, to be polled as before. Whether one was
+    /// dropped; the loader then loads the wanted one.
+    pub fn drop_superseded_pack_load(&mut self, served: Option<sunrise_shaders::Tonemap>) -> bool {
+        if self
+            .pack_loading
+            .as_ref()
+            .is_none_or(|l| l.served == served)
+        {
+            return false;
+        }
+        self.pack_loading = None;
+        self.pack_changed();
+        true
+    }
+    /// Tests: how many shader pack builds `load_shader_pack` started.
+    #[cfg(feature = "test-support")]
+    pub fn shader_pack_loads(&self) -> u64 {
+        self.pack_loads
+    }
+    /// Tests: whether the last real frame ran Sunrise's tone curve.
+    #[cfg(feature = "test-support")]
+    pub fn tone_curve_ran(&self) -> bool {
+        self.tone_curve_ran
+    }
+    /// Tests: every scaled world target fails from now on, as one out of video memory does, so
+    /// the world draws at the window's size without a shader pack's passes.
+    #[cfg(feature = "test-support")]
+    pub fn fail_scaled_targets(&mut self, fail: bool) {
+        self.world_post.fail_targets = fail;
+    }
+    /// Tests: whether a pack `load_shader_pack` started is still building (`poll_shader_pack`
+    /// has nothing to run yet).
+    #[cfg(feature = "test-support")]
+    pub fn shader_pack_building(&self) -> bool {
+        self.pack_loading
+            .as_ref()
+            .is_some_and(|l| !l.thread.is_finished())
     }
     /// Drops the running shader pack.
     pub fn drop_shader_packs(&mut self) {
         self.pack_loading = None;
         self.pack_changed();
         self.pack_post = None;
+        self.pack_served = None;
         self.forget_pack_atlas();
         self.separate_ao = false;
         self.pack_block_ids = None;
@@ -560,10 +613,14 @@ impl Renderer {
         }
     }
 
-    /// The dimension the shader pack was last set for.
-    pub fn shader_pack_dimension(&self) -> Option<i32> {
-        let loading = self.pack_loading.as_ref().map(|l| l.dimension);
-        loading.or_else(|| self.pack_post.as_ref().map(|p| p.0))
+    /// The dimension the shader pack building or running was set for and Sunrise's HDR as it
+    /// was served then (`Post::hdr`): a pack set for another dimension or another answer is
+    /// loaded again.
+    pub fn shader_pack_loaded_for(&self) -> Option<(i32, Option<sunrise_shaders::Tonemap>)> {
+        match &self.pack_loading {
+            Some(loading) => Some((loading.dimension, loading.served)),
+            None => self.pack_post.as_ref().map(|p| (p.0, self.pack_served)),
+        }
     }
 }
 

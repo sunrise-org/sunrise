@@ -81,12 +81,13 @@ removal, in this order:
 1. Scatter the base container slots, unless a Part called `effects.set_keep_contents(true)`.
 2. Scatter each `effects.drop_slot(Some(stack))`; `drop_slot(None)` takes the three
    position draws of an empty `Containers.dropItemStack` slot without spawning anything.
-3. Create each `effects.spawn_item(stack, position)` at that position with the default
-   pickup delay (10 ticks), as a lectern or jukebox does.
+3. Create each `effects.spawn_item(stack, position, motion)` at that position with the
+   default pickup delay (10 ticks). Pass `None` for the random velocity of a lectern or
+   jukebox drop, or `Some([vx, vy, vz])` for explicit velocity.
 4. Apply each `effects.award_experience(amount, position)` via `ExperienceOrb.award`.
 
 Within each group, contributions keep their order. Stacks use the normal checked item
-boundary and positions must be finite. Each call returns its own error: one refusal
+boundary; positions and any supplied motion must be finite. Each call returns its own error: one refusal
 neither consumes a random draw nor loses any valid contribution. A panicking Part loses
 its contributions without changing earlier Parts' effects. A Part that contributes nothing
 doesn't cause any extra removal effects.

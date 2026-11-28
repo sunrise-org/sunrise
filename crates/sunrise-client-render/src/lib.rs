@@ -209,6 +209,9 @@ pub mod render_views;
 #[cfg(test)]
 mod glsl_spirv_dump_tests;
 #[cfg(test)]
+#[path = "../../sunrise-core/src/prepared_test_root.rs"]
+pub(crate) mod prepared_test_root;
+#[cfg(test)]
 use sunrise_level::test_log;
 #[cfg(test)]
 mod test_process;

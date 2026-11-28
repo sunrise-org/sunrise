@@ -1,0 +1,3 @@
+ids = ["hook:enchantment_level_set"]
+why = "enchantment_level_set version 2 (#6712): EnchantmentMenu.slotsChanged clears a cost below its row (row + 1) to 0 before NeoForge's EnchantmentLevelSetEvent, and stores the event's answer as it is. The hook now does the same: a row whose draw is below its minimum is reported with level and original_level 0, not the drawn value, and the level a listener leaves is the row's cost as it is, so a positive level strictly below the row's minimum (row + 1) is now an offer instead of being cleared."
+migrate = "A listener that read original_level to see the draw of a row that offers nothing now sees 0. A listener that lowered a row below row + 1 to remove it sets 0 instead; a level it raises a cleared row to is offered."

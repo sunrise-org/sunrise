@@ -701,6 +701,10 @@ pub(in crate::game) mod server_links;
 pub mod server_packs;
 #[cfg(feature = "client")]
 #[cfg(test)]
+#[path = "interface/shader_pack_hdr_tests.rs"]
+pub(in crate::game) mod shader_pack_hdr_tests;
+#[cfg(feature = "client")]
+#[cfg(test)]
 #[path = "interface/shader_pack_switch_tests.rs"]
 pub(in crate::game) mod shader_pack_switch_tests;
 #[cfg(feature = "client")]

@@ -218,8 +218,6 @@ struct Pass {
     /// The canonical staging root of a lower-crate pass: no source file outside it is read or
     /// edited, whether reached through `include!`, `mod` or `#[path]`.
     root: Option<PathBuf>,
-    /// A bare `include!` in the scope being widened names a shadowing macro.
-    shadowed: bool,
     /// The first fragment a whole-module pass could not read inside an inline module.
     scope_error: Option<String>,
     /// Every `macro_rules!` name the game crate defines: an import of one stays as written,
@@ -232,7 +230,7 @@ const API_CRATES: &[&str] = &["mod_api"];
 
 // Only test-only declarations are excluded. Other cfgs keep their spelling and visibility, and
 // each entry records them: changing visibility doesn't select an OS or feature for the build.
-use mod_source::modules::{conditions, include_shadowed, literal_include, may_compile, test_only};
+use mod_source::modules::{IncludeScope, conditions, literal_include, may_compile, test_only};
 
 /// The attributes a layout's signature keeps: which fields exist, and whether another crate may
 /// build it.
@@ -969,8 +967,16 @@ struct SourceItems {
     file: usize,
     cfg: Vec<String>,
     items: Vec<Item>,
-    /// A bare `include!` here names a shadowing macro ([`include_shadowed`]) from outside.
-    shadowed: bool,
+    include_scope: IncludeScope,
+}
+
+impl SourceItems {
+    fn scoped_items(&self) -> impl Iterator<Item = (&Item, IncludeScope)> {
+        let mut cursor = self.include_scope.with_imports(&self.items);
+        self.items
+            .iter()
+            .map(move |item| (item, cursor.before(item)))
+    }
 }
 
 impl Pass {
@@ -1258,13 +1264,20 @@ impl Pass {
     }
 
     // Does not visit expressions or blocks: local items, macros, uses and trait impls stay intact.
-    fn items(&mut self, file: usize, module: &str, items: &[Item]) {
+    fn items(&mut self, file: usize, module: &str, items: &[Item], include_scope: IncludeScope) {
+        let mut cursor = include_scope.with_imports(items);
         for item in items {
-            self.item(file, module, item, true);
+            self.item(file, module, item, Some(cursor.before(item)));
         }
     }
 
-    fn item(&mut self, file: usize, module: &str, item: &Item, children: bool) {
+    fn item(
+        &mut self,
+        file: usize,
+        module: &str,
+        item: &Item,
+        include_scope: Option<IncludeScope>,
+    ) {
         macro_rules! expose {
             ($value:expr, $kind:literal, $start:expr, $signature:expr) => {{
                 let value = $value;
@@ -1311,7 +1324,7 @@ impl Pass {
                 let (ident, generics) = (&value.ident, &value.generics);
                 let signature = shape_signature(item).expect("a struct");
                 expose!(value, "struct", value.struct_token.span(), signature);
-                if children || self.reaching {
+                if include_scope.is_some() || self.reaching {
                     self.fields(
                         file,
                         module,
@@ -1332,7 +1345,7 @@ impl Pass {
                 };
                 signature.fields = fields;
                 expose!(value, "struct", value.union_token.span(), signature);
-                if children || self.reaching {
+                if include_scope.is_some() || self.reaching {
                     self.fields(
                         file,
                         module,
@@ -1346,7 +1359,7 @@ impl Pass {
             Item::Enum(value) => {
                 let signature = shape_signature(item).expect("an enum");
                 let path = expose!(value, "enum", value.enum_token.span(), signature);
-                if children {
+                if include_scope.is_some() {
                     for variant in &value.variants {
                         if !test_only(&variant.attrs) {
                             self.fields(
@@ -1392,16 +1405,17 @@ impl Pass {
             Item::Mod(value) => {
                 let ident = &value.ident;
                 let path = expose!(value, "mod", value.mod_token.span(), quote!(mod #ident));
-                if children && let Some((_, items)) = &value.content {
+                if let Some(include_scope) = include_scope
+                    && let Some((_, items)) = &value.content
+                {
                     let outer = self.cfg.clone();
-                    let outer_shadowed = self.shadowed;
                     let mut cfg = outer.clone();
                     cfg.extend(conditions(&value.attrs));
                     let child = SourceItems {
                         file,
                         cfg,
                         items: items.clone(),
-                        shadowed: self.shadowed,
+                        include_scope: include_scope.child(),
                     };
                     // A lower-crate pass widens the inline module's fragments in their own
                     // files, under the module's gates, as for the module's own items.
@@ -1415,11 +1429,9 @@ impl Pass {
                     };
                     for unit in scope {
                         self.cfg = unit.cfg;
-                        self.shadowed = unit.shadowed || include_shadowed(&unit.items);
-                        self.items(unit.file, &path, &unit.items);
+                        self.items(unit.file, &path, &unit.items, unit.include_scope);
                     }
                     self.cfg = outer;
-                    self.shadowed = outer_shadowed;
                 }
             }
             // An import `widens_import` names is widened with the game's own items.
@@ -1434,7 +1446,11 @@ impl Pass {
             {
                 self.sources[file].public(&value.vis, value.use_token.span(), "use");
             }
-            Item::Impl(value) if children && value.trait_.is_none() && !test_only(&value.attrs) => {
+            Item::Impl(value)
+                if include_scope.is_some()
+                    && value.trait_.is_none()
+                    && !test_only(&value.attrs) =>
+            {
                 let path = format!("{module}::{}", owner(&value.self_ty));
                 let outer = self.cfg.len();
                 self.cfg.extend(conditions(&value.attrs));
@@ -1454,14 +1470,14 @@ impl Pass {
         let mut scope = Vec::new();
         let mut pending = vec![(initial, vec![physical])];
         while let Some((unit, ancestors)) = pending.pop() {
-            let shadowed = unit.shadowed || include_shadowed(&unit.items);
             let includes: Vec<_> = unit
-                .items
-                .iter()
-                .rev()
-                .filter_map(|item| literal_include(item, shadowed))
+                .scoped_items()
+                .filter_map(|(item, scope)| {
+                    literal_include(item, scope.shadowed())
+                        .map(|(path, attrs)| (path, attrs, scope))
+                })
                 .collect();
-            for (relative, attrs) in includes {
+            for (relative, attrs, include_scope) in includes.into_iter().rev() {
                 if test_only(attrs) {
                     continue;
                 }
@@ -1492,7 +1508,7 @@ impl Pass {
                         file,
                         cfg,
                         items: parsed.items.clone(),
-                        shadowed,
+                        include_scope,
                     },
                     chain,
                 ));
@@ -1518,7 +1534,7 @@ impl Pass {
             file,
             cfg: conditions(&self.sources[file].parsed.attrs),
             items: self.sources[file].parsed.items.clone(),
-            shadowed: false,
+            include_scope: IncludeScope::default(),
         };
         let mut module = crate_name;
         let segments: Vec<_> = segments.collect();
@@ -1548,24 +1564,26 @@ impl Pass {
                     .iter()
                     .flat_map(|unit| unit.items.iter().map(move |item| (unit, item)))
             };
-            let child = items()
-                .find_map(|(unit, item)| child_module(item, ident).map(|child| (unit, child)));
-            if let Some((unit, child)) = child {
+            let child = scope.iter().find_map(|unit| {
+                unit.scoped_items().find_map(|(item, scope)| {
+                    child_module(item, ident).map(|child| (unit, child, scope.child()))
+                })
+            });
+            if let Some((unit, child, include_scope)) = child {
                 self.cfg.clone_from(&unit.cfg);
-                self.item(unit.file, &module, &Item::Mod(child.clone()), false);
+                self.item(unit.file, &module, &Item::Mod(child.clone()), None);
                 module = format!("{module}::{ident}");
                 if index + 1 == segments.len() {
                     return Ok(());
                 }
                 let mut cfg = unit.cfg.clone();
                 cfg.extend(conditions(&child.attrs));
-                let shadowed = unit.shadowed || include_shadowed(&unit.items);
                 if let Some((_, inner)) = &child.content {
                     initial = SourceItems {
                         file: unit.file,
                         cfg,
                         items: inner.clone(),
-                        shadowed,
+                        include_scope,
                     };
                     dir = dir.join(ident.to_string());
                 } else {
@@ -1603,7 +1621,7 @@ impl Pass {
                         file,
                         cfg,
                         items: self.sources[file].parsed.items.clone(),
-                        shadowed,
+                        include_scope,
                     };
                 }
                 continue;
@@ -1626,15 +1644,14 @@ impl Pass {
                 if whole_module {
                     for unit in &scope {
                         self.cfg.clone_from(&unit.cfg);
-                        self.shadowed = unit.shadowed || include_shadowed(&unit.items);
-                        self.items(unit.file, &module, &unit.items);
+                        self.items(unit.file, &module, &unit.items, unit.include_scope);
                     }
                     if let Some(error) = self.scope_error.take() {
                         return Err(error);
                     }
                 } else {
                     self.cfg.clone_from(&unit.cfg);
-                    self.item(unit.file, &module, selected, false);
+                    self.item(unit.file, &module, selected, None);
                 }
                 return Ok(());
             }
@@ -1684,8 +1701,7 @@ impl Pass {
                     if whole_module {
                         for unit in &scope {
                             self.cfg.clone_from(&unit.cfg);
-                            self.shadowed = unit.shadowed || include_shadowed(&unit.items);
-                            self.items(unit.file, &module, &unit.items);
+                            self.items(unit.file, &module, &unit.items, unit.include_scope);
                         }
                         if let Some(error) = self.scope_error.take() {
                             return Err(error);
@@ -1697,7 +1713,7 @@ impl Pass {
                             || matches!(item, Item::Union(value) if value.ident == *ident)
                         {
                             self.cfg.clone_from(&unit.cfg);
-                            self.item(unit.file, &module, item, false);
+                            self.item(unit.file, &module, item, None);
                         }
                     }
                     return Ok(());
@@ -1867,7 +1883,12 @@ pub(crate) fn widen_generated(path: &Path, text: String) -> Result<String, Strin
         edits: BTreeMap::new(),
         annotations: BTreeMap::new(),
     });
-    pass.items(0, &format!("{}::game", ENTRY_DOMAIN.key), &parsed.items);
+    pass.items(
+        0,
+        &format!("{}::game", ENTRY_DOMAIN.key),
+        &parsed.items,
+        IncludeScope::default(),
+    );
     Ok(pass.sources.remove(0).rendered())
 }
 
@@ -1991,6 +2012,7 @@ fn collect(
             file,
             &source.module,
             &pass.sources[file].parsed.items.clone(),
+            IncludeScope::default(),
         );
     }
     pass.cfg.clear();
@@ -3051,6 +3073,46 @@ fn on_unix() {}
         pass.finish().unwrap();
         let child = fs::read_to_string(fixture.0.join("crates/lower/src/child.rs")).unwrap();
         assert_eq!(child, "pub fn helper() {}\n");
+    }
+
+    #[test]
+    fn a_later_include_macro_does_not_hide_an_earlier_fragment() {
+        let fixture = Fixture::new("");
+        fixture.lower();
+        fixture.put(
+            "crates/lower/src/hidden.rs",
+            r#"
+include!("earlier.rs");
+macro_rules! include { ($($t:tt)*) => {}; }
+include!("absent.rs");
+"#,
+        );
+        fixture.put("crates/lower/src/earlier.rs", "fn selected() {}\n");
+        let dir = fixture.0.join("crates/lower/src");
+        let fragment = dir.join("earlier.rs");
+        let files = mod_source::modules::walk_module_files(
+            "lower".into(),
+            dir.join("lib.rs"),
+            dir,
+            false,
+            false,
+            |_, source| syn::parse_file(source).map_err(|e| e.to_string()),
+        )
+        .unwrap();
+        assert!(
+            files
+                .iter()
+                .any(|file| file.included && file.path == fragment)
+        );
+
+        let mut pass = Pass::default();
+        pass.lower(&fixture.0, "lower::hidden::selected", false)
+            .unwrap();
+        pass.finish().unwrap();
+        assert_eq!(
+            fs::read_to_string(fragment).unwrap(),
+            "pub fn selected() {}\n"
+        );
     }
 
     /// A module reached from a fragment through a link out of the root is refused, and the file

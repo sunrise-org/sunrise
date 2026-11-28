@@ -170,6 +170,13 @@ impl PendingScreenshot {
 }
 
 impl PendingScreenshot {
+    /// Tests: the HDR10 copy's size and pixels (16-bit RGB, big-endian PQ codes), when the frame
+    /// had one.
+    #[cfg(feature = "test-support")]
+    pub fn hdr_pixels(&self) -> Option<([u32; 2], &[u8])> {
+        self.hdr.as_ref().map(|h| (h.size, h.pixels.as_slice()))
+    }
+
     /// The frame the screenshot hook may read and change (`ScreenshotEvent.getImage`).
     pub fn image_mut(&mut self) -> &mut mod_api::ScreenshotImage {
         &mut self.image

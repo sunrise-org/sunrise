@@ -182,14 +182,14 @@ fn hdr_request(properties: &Properties) -> (Option<Tonemap>, Vec<String>) {
 /// The loader's read of pack `name`'s `shaders.properties` with `macros` (the standard set and
 /// the renderer's), and what it logs about it, in order: each required feature Sunrise lacks,
 /// each note of the file. Under the switch, also each note about the HDR request not already
-/// logged for the pick (`pick_hdr`), and, when the request read here differs from `frame`, the
-/// one the renderer's frame was made for (`Renderer::pack_hdr`), that the frame's answer counts.
+/// logged for the pick (`pick_hdr`), and, when the request read here differs from `served`, the
+/// answer Sunrise serves the pack (`served_hdr`), that the served answer counts.
 /// A load reads the pack's files again: the pick's request is read again at the next frame.
 fn loaded_properties(
     pack: &Pack,
     macros: &mut Macros,
     switch: bool,
-    frame: Option<Tonemap>,
+    served: Option<Tonemap>,
     name: &str,
     pick_hdr: &mut PickHdr,
 ) -> (Properties, Vec<String>) {
@@ -204,15 +204,40 @@ fn loaded_properties(
         let (loaded, notes) = hdr_request(&properties);
         pick_hdr.follow(name);
         log.extend(pick_hdr.unreported(notes));
-        if loaded != frame {
+        if loaded != served {
             log.push(format!(
                 "shaders.properties asks for Sunrise's HDR as {loaded:?} with the renderer's \
-                 macros, but the frame was made for {frame:?}: the frame's answer counts"
+                 macros, but it is served {served:?}: the served answer counts"
             ));
         }
         pick_hdr.forget();
     }
     (properties, log)
+}
+
+/// Sunrise's HDR as the loader serves it to the pick: under the switch, the request the
+/// renderer's frame was made for (`installed`: `Renderer::pack_hdr_pick`, `Renderer::pack_hdr`)
+/// when it was made for this pick (`current`: `picked_pack`, `PickedPack::hdr`) and its request
+/// now. A frame kept for another pick, or for this pick's old request, after its rebuild failed
+/// (`reconcile_pack_hdr`), serves nothing. The loader's own read of the properties with the
+/// renderer's macros doesn't count (`loaded_properties` notes a difference). `None`: not served.
+fn served_hdr(
+    switch: bool,
+    installed: (&str, Option<Tonemap>),
+    current: (&str, Option<Tonemap>),
+) -> Option<Tonemap> {
+    installed.1.filter(|_| switch && installed == current)
+}
+
+/// Serves `hdr` (`served_hdr`) to the pack read with `macros` and `inputs`, after its
+/// properties were read: its programs see `SUNRISE_HDR` (`Macros::define_sunrise_hdr`), and its
+/// `final` is translated as writing linear light (`GameInputs::hdr`). Not served, both are left
+/// as they are.
+fn serve_hdr(hdr: Option<Tonemap>, macros: &mut Macros, inputs: &mut sunrise_shaders::GameInputs) {
+    if let Some(tonemap) = hdr {
+        macros.define_sunrise_hdr(tonemap);
+    }
+    inputs.hdr = hdr;
 }
 
 /// The shader pack key (Sunrise Settings' Shaders page), by identity: the translated key's
@@ -257,7 +282,7 @@ impl crate::game::ClientGame<'_> {
 }
 
 /// What a renderer readies for the pick, unless it was refused, is missing or its owner is off.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct PickedPack {
     /// It draws flat where the device can: the sections are laid out so.
     pub draws_flat: bool,
@@ -270,10 +295,13 @@ pub(crate) struct PickedPack {
     /// Under the switch, the running pack's `sunrise.hdr` request (`PickHdr`); the renderer
     /// made for this pick keeps it (`Renderer::pack_hdr`).
     pub hdr: Option<Tonemap>,
+    /// The pick (`picked_pack`) this is the shape of: a renderer made for it keeps it with its
+    /// HDR request (`Renderer::pack_hdr_pick`).
+    pub pick: String,
 }
 impl PickedPack {
     /// What it asks of the renderer's frame.
-    pub(crate) fn frame(self) -> sunrise_client::gfx::FrameRequest {
+    pub(crate) fn frame(&self) -> sunrise_client::gfx::FrameRequest {
         sunrise_client::gfx::FrameRequest::new().with_hdr_float(self.hdr_float)
     }
 }
@@ -311,6 +339,7 @@ fn pack_shape(
         starts_wide: active,
         hdr_float: switch && (!active || hdr.is_some()),
         hdr,
+        pick: picked.to_owned(),
     }
 }
 
@@ -346,6 +375,12 @@ impl PickHdr {
         hdr
     }
 
+    /// The request of pack `picked` as last read, without reading anything: `None` when it
+    /// wasn't read since the pick changed or `forget`.
+    fn kept(&self, picked: &str) -> Option<Tonemap> {
+        self.hdr.flatten().filter(|_| self.pick == picked)
+    }
+
     /// The pick's files or chosen options may have changed: the next answer reads them again.
     pub(in crate::game) fn forget(&mut self) {
         self.hdr = None;
@@ -376,11 +411,12 @@ impl PickHdr {
 /// installed one keeps its own.
 pub(in crate::game) fn reconcile_pack_hdr(
     follows: bool,
-    installed: &mut Option<Tonemap>,
-    picked: Option<Tonemap>,
+    installed: (&mut String, &mut Option<Tonemap>),
+    picked: (&str, Option<Tonemap>),
 ) -> bool {
     if follows {
-        *installed = picked;
+        picked.0.clone_into(installed.0);
+        *installed.1 = picked.1;
     }
     !follows
 }
@@ -607,6 +643,32 @@ impl crate::game::ClientGame<'_> {
                 renderer.drop_shader_packs();
             }
         }
+        let dimension = match self.common.dim {
+            Dim::Overworld | Dim::Extra(_) => 0,
+            Dim::Nether => -1,
+            Dim::End => 1,
+        };
+        // Sunrise's HDR as the renderer serves it to the pick (`served_hdr`), looked up only under
+        // the switch and for a pick that runs: the pick's request as this frame's `follow_frame`
+        // read it (`PickHdr::kept`), no file read here. A build for another answer is dropped
+        // before any result is looked at, so a stale build's refusal never counts against the
+        // pick; a build for another dimension is left to be polled, as without the extension.
+        let served = match &self.client.renderer.0 {
+            Some(renderer)
+                if super::native_shaders::linear_frame_switch() && !picked.is_empty() =>
+            {
+                let request = self.client.native_shaders.pick_hdr.borrow().kept(&selected);
+                served_hdr(
+                    true,
+                    (&renderer.pack_hdr_pick, renderer.pack_hdr),
+                    (&selected, request),
+                )
+            }
+            _ => None,
+        };
+        if let Some(renderer) = &mut self.client.renderer.0 {
+            renderer.drop_superseded_pack_load(served);
+        }
         // A pack whose pipelines were building runs once they are built, or is turned off.
         if let Some((dimension, name, started, report)) = self
             .client
@@ -648,13 +710,8 @@ impl crate::game::ClientGame<'_> {
             return PackInputs::default();
         }
         let name = selected.clone();
-        let dimension = match self.common.dim {
-            Dim::Overworld | Dim::Extra(_) => 0,
-            Dim::Nether => -1,
-            Dim::End => 1,
-        };
         if let Some(renderer) = &mut self.client.renderer.0
-            && renderer.shader_pack_dimension() != Some(dimension)
+            && renderer.shader_pack_loaded_for() != Some((dimension, served))
             && !(super::native_shaders::linear_frame_switch() && refused(&path, fingerprint(&path)))
         {
             let name = name.as_str();
@@ -671,10 +728,12 @@ impl crate::game::ClientGame<'_> {
                             &pack,
                             &mut macros,
                             super::native_shaders::linear_frame_switch(),
-                            renderer.pack_hdr,
+                            served,
                             name,
                             &mut self.client.native_shaders.pick_hdr.borrow_mut(),
                         );
+                        #[cfg(test)]
+                        self.client.native_shaders.loaded_log.clone_from(&log);
                         for line in log {
                             log::warn!("shader pack {name}: {line}");
                         }
@@ -701,7 +760,8 @@ impl crate::game::ClientGame<'_> {
                         renderer.set_pack_terrain_bindings(
                             sunrise_client::gfx::pack_atlas::TerrainBindings::of(&properties),
                         );
-                        let inputs = renderer.pack_inputs();
+                        let mut inputs = renderer.pack_inputs();
+                        serve_hdr(served, &mut macros, &mut inputs);
                         let mut post = load_post(&pack, &folder, &properties, &macros, &inputs);
                         // Textures that name one of the game's: from the resource packs over
                         // the game's own resources.
@@ -1640,9 +1700,43 @@ pub(in crate::game) mod native_pack_tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    /// The load names the answer Sunrise serves the pack, which a frame kept after a failed
+    /// rebuild doesn't decide: served nothing, a pack that asks says it is served `None`.
+    #[test]
+    fn the_load_names_the_served_answer() {
+        use super::served_hdr;
+        use sunrise_shaders::{Macros, Pack};
+        let root = std::env::temp_dir().join(format!("sunrise-hdr-served-{}", std::process::id()));
+        let asks = hdr_pack(&root, "asks", "sunrise.hdr = true\n");
+        let pack = Pack::open(&asks).unwrap();
+        // The frame was kept for another pick's request.
+        let served = served_hdr(
+            true,
+            ("other", Some(Tonemap::Pack)),
+            ("asks", Some(Tonemap::Pack)),
+        );
+        let name = asks.to_string_lossy();
+        let (_, log) = loaded_properties(
+            &pack,
+            &mut Macros::standard(),
+            true,
+            served,
+            &name,
+            &mut PickHdr::default(),
+        );
+        assert_eq!(
+            log,
+            [
+                "shaders.properties asks for Sunrise's HDR as Some(Pack) with the renderer's \
+                 macros, but it is served None: the served answer counts"
+            ]
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     /// The loader's read of the properties (`loaded_properties`, what a load logs), with the
     /// renderer's macros, after the frame was made for the pick's request. Where a renderer
-    /// macro changes the request it says the frame's answer counts; an unknown value only the
+    /// macro changes the request it says the served answer counts; an unknown value only the
     /// renderer's macros reach is noted once, with its line, key and value, and one the frame's
     /// read already noted is not noted again. Without the switch it logs what the file's own
     /// notes are, as before. The load reads the pack's files again at the next frame.
@@ -1684,7 +1778,7 @@ pub(in crate::game) mod native_pack_tests {
             warned,
             [
                 "shaders.properties asks for Sunrise's HDR as Some(Sunrise) with the renderer's \
-                 macros, but the frame was made for Some(Pack): the frame's answer counts"
+                 macros, but it is served Some(Pack): the served answer counts"
             ]
         );
         assert!(load(&mut state, &renderer_curve, false, frame).is_empty());
@@ -1746,27 +1840,99 @@ pub(in crate::game) mod native_pack_tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    /// Sunrise's HDR is served only under the switch, as the renderer's frame was made: then
+    /// the pack's programs see `SUNRISE_HDR` 1, `SUNRISE_HDR_TONEMAP_PACK` with the pack's
+    /// curve, and its `final` is translated for linear light; otherwise nothing changes.
+    #[test]
+    fn hdr_is_served_only_under_the_switch_as_the_frame_was_made() {
+        use super::{serve_hdr, served_hdr};
+        use sunrise_shaders::{GameInputs, Macros};
+        let served = |switch, frame| {
+            let mut macros = Macros::standard();
+            let mut inputs = GameInputs::default();
+            let hdr = served_hdr(switch, ("p", frame), ("p", frame));
+            serve_hdr(hdr, &mut macros, &mut inputs);
+            (
+                macros.get("SUNRISE_HDR").map(str::to_owned),
+                macros.is_defined("SUNRISE_HDR_TONEMAP_PACK"),
+                inputs.hdr,
+                macros == Macros::standard(),
+            )
+        };
+        for frame in [None, Some(Tonemap::Pack), Some(Tonemap::Sunrise)] {
+            assert_eq!(served(false, frame), (None, false, None, true), "{frame:?}");
+        }
+        assert_eq!(served(true, None), (None, false, None, true));
+        assert_eq!(
+            served(true, Some(Tonemap::Pack)),
+            (Some("1".into()), true, Some(Tonemap::Pack), false)
+        );
+        assert_eq!(
+            served(true, Some(Tonemap::Sunrise)),
+            (Some("1".into()), false, Some(Tonemap::Sunrise), false)
+        );
+    }
+
     /// A frame that keeps serving takes the pick's new request; one made again keeps the one
     /// it was made for until the new one is made (`build_renderer` sets it then).
     #[test]
     fn a_kept_frame_takes_the_new_request_and_a_rebuild_keeps_the_old() {
-        let mut installed = None;
+        let (mut pick, mut installed) = (String::new(), None);
+        let mut reconcile =
+            |follows, picked| reconcile_pack_hdr(follows, (&mut pick, &mut installed), picked);
+        assert!(!reconcile(true, ("a", Some(Tonemap::Pack))));
+        assert!(!reconcile(true, ("a", Some(Tonemap::Sunrise))));
+        assert!(reconcile(false, ("b", None)));
+        assert_eq!((pick.as_str(), installed), ("a", Some(Tonemap::Sunrise)));
         assert!(!reconcile_pack_hdr(
             true,
-            &mut installed,
+            (&mut pick, &mut installed),
+            ("b", None)
+        ));
+        assert_eq!((pick.as_str(), installed), ("b", None));
+    }
+
+    /// A frame kept after its rebuild failed (`reconcile_pack_hdr`: the frame doesn't follow)
+    /// keeps the answer it was made for, but the loader serves it only to the pick it was made
+    /// for, with that request: another pick that doesn't ask, the same pick replaced under its
+    /// name by one that doesn't, or asks for the other curve, get nothing. Without the switch,
+    /// nothing either.
+    #[test]
+    fn a_frame_kept_after_a_failed_rebuild_serves_only_the_pick_it_was_made_for() {
+        use super::served_hdr;
+        let (mut pick, mut installed) = (String::new(), None);
+        assert!(!reconcile_pack_hdr(
+            true,
+            (&mut pick, &mut installed),
+            ("opted", Some(Tonemap::Pack))
+        ));
+        let served = |pick: &str, installed, current| served_hdr(true, (pick, installed), current);
+        assert_eq!(
+            served(&pick, installed, ("opted", Some(Tonemap::Pack))),
             Some(Tonemap::Pack)
+        );
+        // Replaced by a pack that doesn't ask: its frame is to be made again, and that fails.
+        assert!(reconcile_pack_hdr(
+            false,
+            (&mut pick, &mut installed),
+            ("plain", None)
         ));
         assert_eq!(installed, Some(Tonemap::Pack));
-        assert!(!reconcile_pack_hdr(
-            true,
-            &mut installed,
-            Some(Tonemap::Sunrise)
-        ));
-        assert_eq!(installed, Some(Tonemap::Sunrise));
-        assert!(reconcile_pack_hdr(false, &mut installed, None));
-        assert_eq!(installed, Some(Tonemap::Sunrise));
-        assert!(!reconcile_pack_hdr(true, &mut installed, None));
-        assert_eq!(installed, None);
+        assert_eq!(served(&pick, installed, ("plain", None)), None);
+        // An opted pack of another name, or this one asking otherwise now.
+        assert_eq!(
+            served(&pick, installed, ("other", Some(Tonemap::Pack))),
+            None
+        );
+        assert_eq!(served(&pick, installed, ("opted", None)), None);
+        assert_eq!(
+            served(&pick, installed, ("opted", Some(Tonemap::Sunrise))),
+            None
+        );
+        assert_eq!(
+            served_hdr(false, (&pick, installed), ("opted", Some(Tonemap::Pack))),
+            None
+        );
     }
 
     #[test]

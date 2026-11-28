@@ -49,4 +49,7 @@ pub mod worn_boots;
 extern crate self as sunrise_gameplay_common;
 pub mod game;
 #[cfg(test)]
+#[path = "../../sunrise-core/src/prepared_test_root.rs"]
+pub(crate) mod prepared_test_root;
+#[cfg(test)]
 mod test_game_dir;

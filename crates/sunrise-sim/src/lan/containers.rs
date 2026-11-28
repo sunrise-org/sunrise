@@ -475,7 +475,6 @@ impl Hub {
                 menu: kind,
                 title,
             }));
-            let mod_type = mod_type.or_else(|| crate::containers::mod_menu_type(menu_kind));
             let slot_changed_seen = mod_type.map(|t| {
                 let mut seen = items.clone();
                 seen.resize(t.slots, None);
@@ -1574,8 +1573,62 @@ fn global_level_event_position(pos: [i32; 3], player: [f64; 3], same_level: bool
 
 #[cfg(test)]
 mod tests {
-    use super::{next_sound_seed, within_range};
+    use super::{Slots, Tag, next_sound_seed, within_range};
+    use crate::containers::{mod_menu_type, with_mod_menu_types};
+    use crate::lan::{data::SyncData, hub::tests::hub_with_sync};
     use sunrise_core::random::LegacyRandom;
+    use sunrise_protocol::registry::Ids;
+
+    #[test]
+    fn open_menu_window_at_honors_explicit_mod_type() {
+        const MENU: &str = "test:explicit_menu_type";
+        with_mod_menu_types(
+            [(
+                MENU.into(),
+                "test".into(),
+                9,
+                0,
+                Vec::new(),
+                Vec::new(),
+                None,
+                None,
+                true,
+                None,
+            )],
+            || {
+                let kind = mod_menu_type(MENU).unwrap();
+                let mut sync = SyncData::empty();
+                sync.builtin
+                    .registries
+                    .insert("minecraft:menu".into(), Ids::from_names(vec![MENU.into()]));
+                let (mut hub, _packets) = hub_with_sync(sync);
+                let conn = hub.guests[0].conn;
+                let items = vec![None; 9];
+
+                for mod_type in [None, Some(kind)] {
+                    let window = hub
+                        .open_menu_window_at(
+                            conn,
+                            MENU,
+                            Tag::String("Test".into()),
+                            None,
+                            Slots::Native,
+                            items.clone(),
+                            None,
+                            mod_type,
+                        )
+                        .unwrap();
+                    let menu = hub.guest(conn).unwrap().menu.as_ref().unwrap();
+                    assert_eq!(menu.window, window);
+                    assert_eq!(menu.mod_type, mod_type);
+                    assert_eq!(
+                        menu.slot_changed_seen.as_deref(),
+                        mod_type.map(|_| items.as_slice())
+                    );
+                }
+            },
+        );
+    }
 
     #[test]
     fn two_sounds_in_one_tick_get_different_seeds() {

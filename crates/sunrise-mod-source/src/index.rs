@@ -7,6 +7,8 @@ use std::{
 };
 use syn::{Attribute, Item, Meta, UseTree, Visibility};
 
+use crate::modules::{IncludeScope, gate_items, generated_include, standard_include};
+
 /// The first of `values` this tool's own target has, as `cfg!` saw it when the tool was built.
 macro_rules! built_for {
     ($key:ident: $($value:literal),+) => {
@@ -212,6 +214,7 @@ pub struct Module {
     pub krate: String,
     pub path: Vec<String>,
     pub items: Vec<Item>,
+    child_scopes: ChildScopes,
 }
 
 /// A named item a signature refers to.
@@ -316,6 +319,8 @@ struct GlobLookup {
     candidate: Binding,
     indexed: Option<Found>,
 }
+
+type ChildScopes = HashMap<usize, IncludeScope>;
 
 type ModuleLoader<'a> = dyn FnMut(&str, &[String]) -> Result<Vec<Item>, String> + 'a;
 type ItemFilter<'a> = dyn Fn(&Item) -> bool + 'a;
@@ -556,8 +561,8 @@ impl<'a> Index<'a> {
         if let Some(&id) = self.by_path.get(&(krate.clone(), path.to_vec())) {
             return Ok(id);
         }
-        let items = if let Some(load) = &mut self.load_module {
-            load(&krate, path)?
+        let (items, child_scopes) = if let Some(load) = &mut self.load_module {
+            (load(&krate, path)?, ChildScopes::new())
         } else {
             self.parse_module(&krate, path)?
         };
@@ -566,35 +571,45 @@ impl<'a> Index<'a> {
             krate: krate.clone(),
             path: path.to_vec(),
             items,
+            child_scopes,
         });
         self.by_path.insert((krate, path.to_vec()), id);
         Ok(id)
     }
 
-    fn parse_module(&mut self, krate: &str, path: &[String]) -> Result<Vec<Item>, String> {
+    fn parse_module(
+        &mut self,
+        krate: &str,
+        path: &[String],
+    ) -> Result<(Vec<Item>, ChildScopes), String> {
         Ok(match path.split_last() {
             None => {
                 let file = self.root_files.get(krate).map_or("lib.rs", String::as_str);
-                self.parse(krate, file)?
+                self.parse(krate, file, IncludeScope::default())?
             }
             Some((last, parent)) => {
                 let parent = self.module(krate, parent)?;
-                let declarations = &self.modules[parent].items;
+                let scope = &self.modules[parent];
+                let declarations = &scope.items;
                 let has_declaration = declarations
                     .iter()
                     .any(|item| matches!(item, Item::Mod(item) if item.ident == last.as_str()));
-                let declared = declarations.iter().find_map(|item| match item {
-                    Item::Mod(item)
-                        if item.ident == last.as_str()
-                            && self.default_build(parent, &item.attrs) =>
-                    {
-                        Some((
-                            item.content.clone(),
-                            path_attribute(&item.attrs, self.default_features.get(krate)),
-                        ))
-                    }
-                    _ => None,
-                });
+                let declared = declarations
+                    .iter()
+                    .enumerate()
+                    .find_map(|(at, item)| match item {
+                        Item::Mod(item)
+                            if item.ident == last.as_str()
+                                && self.default_build(parent, &item.attrs) =>
+                        {
+                            Some((
+                                scope.child_scopes[&at],
+                                item.content.clone(),
+                                path_attribute(&item.attrs, self.default_features.get(krate)),
+                            ))
+                        }
+                        _ => None,
+                    });
                 if declared.is_none() && has_declaration {
                     return Err(format!(
                         "{}::{} is excluded from the default build",
@@ -602,63 +617,88 @@ impl<'a> Index<'a> {
                         path.join("::")
                     ));
                 }
+                let (include_scope, declared) = declared
+                    .map_or((IncludeScope::default(), None), |(scope, content, path)| {
+                        (scope, Some((content, path)))
+                    });
                 match declared {
-                    Some((Some((_, items)), _)) => self.expand_includes(items)?,
+                    Some((Some((_, items)), _)) => self.expand_includes(items, include_scope)?,
                     // A generated `#[path]` is absolute.
                     Some((None, Some(file))) if Path::new(&file).is_absolute() => {
-                        self.parse(krate, &file)?
+                        self.parse(krate, &file, include_scope)?
                     }
                     // `#[path]` is relative to the declaring file's directory: `parent.rs`
                     // sits beside it, `parent/mod.rs` below.
                     Some((None, Some(file))) => {
                         let beside = parent_dir(&path[..path.len() - 1]);
                         let below = parent_dir(path);
-                        self.parse(krate, &format!("{beside}{file}"))
-                            .or_else(|_| self.parse(krate, &format!("{below}{file}")))?
+                        self.parse(krate, &format!("{beside}{file}"), include_scope)
+                            .or_else(|_| {
+                                self.parse(krate, &format!("{below}{file}"), include_scope)
+                            })?
                     }
                     _ => {
                         let dir = path.join("/");
-                        self.parse(krate, &format!("{dir}.rs"))
-                            .or_else(|_| self.parse(krate, &format!("{dir}/mod.rs")))?
+                        self.parse(krate, &format!("{dir}.rs"), include_scope)
+                            .or_else(|_| {
+                                self.parse(krate, &format!("{dir}/mod.rs"), include_scope)
+                            })?
                     }
                 }
             }
         })
     }
 
-    fn parse(&self, krate: &str, file: &str) -> Result<Vec<Item>, String> {
+    fn parse(
+        &self,
+        krate: &str,
+        file: &str,
+        include_scope: IncludeScope,
+    ) -> Result<(Vec<Item>, ChildScopes), String> {
         let dir = self.crate_dir(krate).expect("a known crate").1;
         let path = self.root.join(dir).join(file);
         let source = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         self.read.borrow_mut().push(path.clone());
         let source = (self.expand)(self.root, &source)?;
         let file = syn::parse_file(&source).map_err(|e| format!("{}: {e}", path.display()))?;
-        self.expand_includes(file.items)
+        self.expand_includes(file.items, include_scope)
     }
 
-    /// `items` with each `include!` of a generated file replaced by that file's items.
-    fn expand_includes(&self, items: Vec<Item>) -> Result<Vec<Item>, String> {
+    /// `items` with each standard `include!` of a generated file replaced by that file's items,
+    /// under the invocation's `cfg` gates. Any other standard `include!` is an error; a bare one
+    /// in a scope that shadows the name is that macro's and stays.
+    fn expand_includes(
+        &self,
+        items: Vec<Item>,
+        include_scope: IncludeScope,
+    ) -> Result<(Vec<Item>, ChildScopes), String> {
+        let mut cursor = include_scope.with_imports(&items);
         let mut out = Vec::new();
+        let mut child_scopes = ChildScopes::new();
         for item in items {
-            match &item {
-                Item::Macro(mac) if mac.mac.path.is_ident("include") => {
-                    let tokens = mac.mac.tokens.to_string();
-                    // The wire impls are generated from what this reads, so it never reads them.
-                    if tokens.contains("wire_") {
-                        continue;
-                    }
-                    let (name, source) = self
-                        .included
-                        .iter()
-                        .find(|(name, _)| tokens.contains(name))
-                        .ok_or_else(|| format!("include!({tokens}) is not a generated file"))?;
-                    let file = syn::parse_file(source).map_err(|e| format!("{name}: {e}"))?;
-                    out.extend(file.items);
+            let include_scope = cursor.before(&item);
+            let Some(mac) = standard_include(&item, include_scope.shadowed()) else {
+                if matches!(item, Item::Mod(_)) {
+                    child_scopes.insert(out.len(), include_scope.child());
                 }
-                _ => out.push(item),
+                out.push(item);
+                continue;
+            };
+            let (name, source, attrs) = generated_include(&item, include_scope.shadowed())
+                .and_then(|(file, attrs)| {
+                    let (name, source) = self.included.iter().find(|(name, _)| *name == file)?;
+                    Some((name, source, attrs))
+                })
+                .ok_or_else(|| format!("include!({}) is not a generated file", mac.mac.tokens))?;
+            let file = syn::parse_file(source).map_err(|e| format!("{name}: {e}"))?;
+            for item in gate_items(file.items, attrs).map_err(|e| format!("{name}: {e}"))? {
+                if matches!(item, Item::Mod(_)) {
+                    child_scopes.insert(out.len(), include_scope.child());
+                }
+                out.push(item);
             }
         }
-        Ok(out)
+        Ok((out, child_scopes))
     }
 
     /// What `name` means in `module`: an item defined there, a `use` of it, or a glob import
@@ -1498,6 +1538,130 @@ mod index_tests {
             Some(vec!["z".into(), "y".into()])
         );
         assert_eq!(resolves(lib, &["z", "w"], "Hidden"), None);
+    }
+
+    /// The index of a one-crate fixture whose `lib.rs` is `lib`, with `generated` as the files a
+    /// build script would write; the root module's id on success.
+    fn index_of(lib: &str, generated: &[(&str, &str)]) -> Result<usize, String> {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("k/src")).unwrap();
+        fs::write(dir.path().join("k/src/lib.rs"), lib).unwrap();
+        let mut index = Index::new(dir.path(), generated, &[("k", "k/src")]);
+        index.module("k", &[])
+    }
+
+    #[test]
+    fn a_generated_include_keeps_its_cfg_gates_and_its_items_own() {
+        let os = std::env::consts::OS;
+        let on = format!("#[cfg(target_os = \"{os}\")]");
+        let off = format!("#[cfg(not(target_os = \"{os}\"))]");
+        let fragment =
+            format!("pub struct Plain;\n{on} pub struct ItemOn;\n{off} pub struct ItemOff;");
+        let lib = format!(
+            "{on} include!(concat!(env!(\"OUT_DIR\"), \"/gen_on.rs\"));\n\
+             {off} include!(concat!(env!(\"OUT_DIR\"), \"/gen_off.rs\"));"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("k/src")).unwrap();
+        fs::write(dir.path().join("k/src/lib.rs"), lib).unwrap();
+        let generated = [
+            ("gen_on.rs", fragment.as_str()),
+            ("gen_off.rs", fragment.as_str()),
+        ];
+        let mut index = Index::new(dir.path(), &generated, &[("k", "k/src")]);
+        let root = index.module("k", &[]).unwrap();
+        // The gate of the include and the gate of an item in the fragment both apply.
+        for (name, found) in [("Plain", true), ("ItemOn", true), ("ItemOff", false)] {
+            assert_eq!(index.resolve(root, name).is_ok(), found, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_generated_include_under_a_gate_that_is_off_defines_nothing() {
+        let os = std::env::consts::OS;
+        let lib = format!(
+            "#[cfg(not(target_os = \"{os}\"))] include!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("k/src")).unwrap();
+        fs::write(dir.path().join("k/src/lib.rs"), lib).unwrap();
+        let generated = [("gen.rs", "pub struct Gated;")];
+        let mut index = Index::new(dir.path(), &generated, &[("k", "k/src")]);
+        let root = index.module("k", &[]).unwrap();
+        assert!(index.resolve(root, "Gated").is_err());
+    }
+
+    #[test]
+    fn only_the_exact_generated_basename_in_the_out_dir_shape_is_expanded() {
+        let generated = [("gen.rs", "pub struct Gen;")];
+        let real = "include!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));";
+        assert!(index_of(real, &generated).is_ok());
+        // A look-alike beside a real one is an ordinary include, not generated code.
+        for lookalike in [
+            "include!(concat!(env!(\"OUT_DIR\"), \"/not_gen.rs\"));",
+            "include!(concat!(env!(\"OUT_DIR\"), \"/gen.rs.orig\"));",
+            "include!(concat!(env!(\"OUT_DIR\"), \"/nested/gen.rs\"));",
+            "include!(concat!(env!(\"MANIFEST\"), \"/gen.rs\"));",
+            "include!(\"gen.rs\");",
+            "include!(\"wire_gen.rs\");",
+        ] {
+            let lib = format!("{real}\n{lookalike}");
+            let error = index_of(&lib, &generated).expect_err(lookalike);
+            assert!(error.contains("is not a generated file"), "{error}");
+        }
+    }
+
+    /// Only the standard `include!` is read: a custom one shadowing the name stays an ordinary
+    /// macro item, and a qualified standard one is expanded like a bare one.
+    #[test]
+    fn a_shadowed_include_stays_ordinary_and_a_qualified_standard_one_expands() {
+        let generated = [("gen.rs", "pub struct Gen;")];
+        let call = "include!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));";
+        let shadowed = format!("macro_rules! include {{ ($($t:tt)*) => {{}}; }}\n{call}");
+        for (lib, expanded) in [(shadowed, false), (format!("std::{call}"), true)] {
+            let dir = tempfile::tempdir().unwrap();
+            fs::create_dir_all(dir.path().join("k/src")).unwrap();
+            fs::write(dir.path().join("k/src/lib.rs"), lib).unwrap();
+            let mut index = Index::new(dir.path(), &generated, &[("k", "k/src")]);
+            let root = index.module("k", &[]).unwrap();
+            assert_eq!(index.resolve(root, "Gen").is_ok(), expanded);
+        }
+    }
+
+    #[test]
+    fn children_inherit_include_shadowing_from_a_parent_module() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("k/src");
+        fs::create_dir_all(src.join("parent")).unwrap();
+        let call = "include!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));";
+        fs::write(
+            src.join("lib.rs"),
+            format!("mod parent {{ macro_rules! include {{ ($($t:tt)*) => {{}}; }} mod inline {{ {call} }} mod file; }}"),
+        ).unwrap();
+        fs::write(
+            src.join("parent/file.rs"),
+            format!("{call} std::include!(concat!(env!(\"OUT_DIR\"), \"/qualified.rs\"));"),
+        )
+        .unwrap();
+        let generated = [
+            ("gen.rs", "pub struct Gen;"),
+            ("qualified.rs", "pub struct Qualified;"),
+        ];
+        let mut index = Index::new(dir.path(), &generated, &[("k", "k/src")]);
+        for child in ["inline", "file"] {
+            let module = index.module("k", &["parent".into(), child.into()]).unwrap();
+            assert!(index.resolve(module, "Gen").is_err());
+            assert_eq!(index.resolve(module, "Qualified").is_ok(), child == "file");
+        }
+    }
+
+    #[test]
+    fn a_generated_include_with_cfg_attr_is_refused() {
+        let error = index_of(
+            "#[cfg_attr(unix, allow(dead_code))] include!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));",
+            &[("gen.rs", "pub struct Gen;")],
+        ).unwrap_err();
+        assert!(error.contains("cfg_attr"), "{error}");
     }
 
     #[test]

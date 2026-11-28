@@ -1032,28 +1032,38 @@ impl PackPost {
         };
         // Without `final`, colortex0 holds floats (`new` refuses an integer one).
         if !shown {
+            // Served Sunrise's HDR at the window's size, each pixel its own texel.
+            let copy = match &self.copy_texel {
+                Some(texel) if size == window => texel,
+                _ => &self.copy,
+            };
+            let colortex0 = wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(
+                    view(self.main, 0, false).expect("colortex0"),
+                ),
+            };
+            let sampler = wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(&self.linear),
+            };
+            // Served Sunrise's HDR, the copy loads texels and binds no sampler.
+            let entries = if self.hdr.is_some() {
+                &[colortex0][..]
+            } else {
+                &[colortex0, sampler][..]
+            };
             let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Shader pack colortex0"),
-                layout: &self.copy.1,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(
-                            view(self.main, 0, false).expect("colortex0"),
-                        ),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::Sampler(&self.linear),
-                    },
-                ],
+                layout: &copy.1,
+                entries,
             });
             let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Shader pack colortex0"),
                 color_attachments: &[attach(screen, overwrite)],
                 ..Default::default()
             });
-            rp.set_pipeline(&self.copy.0);
+            rp.set_pipeline(&copy.0);
             rp.set_bind_group(0, &group, &[]);
             rp.draw(0..3, 0..1);
         } else if let Some(picture) = &final_view {

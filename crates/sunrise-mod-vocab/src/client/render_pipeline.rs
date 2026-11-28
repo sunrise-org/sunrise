@@ -744,12 +744,16 @@ impl PackBinding {
     }
 
     /// Declare a preprocessor define `#define NAME` (no value) while this pipeline is active.
+    /// A `GL_` name, and the names only Sunrise's HDR extension defines (`SUNRISE_HDR`,
+    /// `SUNRISE_HDR_TONEMAP_PACK`: set when the game serves it to the pack), are refused at
+    /// registration ([`Self::validate_syntax`]).
     pub fn define(mut self, name: impl Into<String>) -> Self {
         self.defines.push((name.into(), None));
         self
     }
 
-    /// Declare a preprocessor define `#define NAME VALUE` while this pipeline is active.
+    /// Declare a preprocessor define `#define NAME VALUE` while this pipeline is active. The
+    /// names [`Self::define`] refuses are refused here too.
     pub fn define_value(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         self.defines.push((name.into(), Some(value.into())));
         self
@@ -793,6 +797,12 @@ impl PackBinding {
             if !is_valid_glsl_identifier(name) || name.starts_with("GL_") {
                 return Err(format!(
                     "invalid pack define name {name:?}: expected a valid non-GL_ GLSL identifier"
+                ));
+            }
+            if SUNRISE_HDR_DEFINES.contains(&name.as_str()) {
+                return Err(format!(
+                    "reserved pack define name {name:?}: only the game defines it, when it serves \
+                     Sunrise's HDR to the pack"
                 ));
             }
             if let Some(val) = value
@@ -1187,6 +1197,10 @@ impl PackGlslInput {
         }
     }
 }
+
+/// The macros only the game defines for a `shaders/` pack, when it serves Sunrise's HDR extension
+/// to it (`sunrise_shaders::Macros::define_sunrise_hdr`): a mod's pack define can't set them.
+const SUNRISE_HDR_DEFINES: [&str; 2] = ["SUNRISE_HDR", "SUNRISE_HDR_TONEMAP_PACK"];
 
 /// Whether `name` is a valid ASCII GLSL identifier (`[A-Za-z_][A-Za-z0-9_]*`).
 pub(crate) fn is_valid_glsl_identifier(name: &str) -> bool {
@@ -4793,7 +4807,15 @@ mod tests {
             ));
         assert_eq!(valid.validate_syntax(), Ok(()));
 
-        for bad_define in ["", "1BAD", "BAD-NAME", "GL_RESERVED", "has space"] {
+        for bad_define in [
+            "",
+            "1BAD",
+            "BAD-NAME",
+            "GL_RESERVED",
+            "has space",
+            "SUNRISE_HDR",
+            "SUNRISE_HDR_TONEMAP_PACK",
+        ] {
             assert!(
                 PackBinding::new()
                     .define(bad_define)
@@ -4802,6 +4824,22 @@ mod tests {
                 "expected invalid define name {bad_define:?} to fail"
             );
         }
+        // Sunrise's HDR names with a value too; a longer name that starts with one is the mod's.
+        for reserved in ["SUNRISE_HDR", "SUNRISE_HDR_TONEMAP_PACK"] {
+            assert!(
+                PackBinding::new()
+                    .define_value(reserved, "1")
+                    .validate_syntax()
+                    .is_err(),
+                "{reserved}"
+            );
+        }
+        assert_eq!(
+            PackBinding::new()
+                .define("SUNRISE_HDR_MOD")
+                .validate_syntax(),
+            Ok(())
+        );
         for bad_val in [
             "",
             "   ",
