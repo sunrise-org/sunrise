@@ -771,6 +771,16 @@ pub fn native_items(
     crate::game::native_hooks::fire::fire_items(context, items);
 }
 
+/// Collect creative tabs from native mods at the same startup cutoff as
+/// `native_blocks`, with the same ownership and refusal rules. A declared tab
+/// joins the content declarations beside the same package's tab files.
+pub fn native_creative_tabs(
+    context: &mod_api::RegistrationContext,
+    tabs: &mut mod_api::__private::DeclarationStage<'_, mod_api::CreativeTab>,
+) {
+    crate::game::native_hooks::fire::fire_creative_tabs(context, tabs);
+}
+
 /// Standalone files and bakers, registered before resource loading.
 /// Every resource load rebakes them; dispatch attributes each entry to its owning mod.
 pub fn native_standalone_models(

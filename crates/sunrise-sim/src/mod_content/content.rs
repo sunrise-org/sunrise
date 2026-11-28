@@ -801,6 +801,7 @@ fn component_types(map: &J) -> BTreeSet<String> {
 pub struct DeclaredContent {
     pub blocks: Vec<LocalDeclaration<Block>>,
     pub items: Vec<LocalDeclaration<Item>>,
+    pub creative_tabs: Vec<LocalDeclaration<CreativeTab>>,
     pub types: Vec<BlockEntityType>,
     pub fluids: Vec<FluidLook>,
 }
@@ -826,8 +827,13 @@ pub fn accept_declared(
         if let Some(i) = existing {
             content.blocks.clone_from(&mods[i].content.blocks);
             content.items.clone_from(&mods[i].content.items);
+            content
+                .creative_tabs
+                .clone_from(&mods[i].content.creative_tabs);
         }
-        if let Err(refusals) = content.declare_validated(&batch.blocks, &batch.items) {
+        if let Err(refusals) =
+            content.declare_validated(&batch.blocks, &batch.items, &batch.creative_tabs)
+        {
             errors.extend(
                 refusals
                     .into_iter()
@@ -903,6 +909,7 @@ pub fn accept_declared(
             let target = &mut mods[i].content;
             target.blocks = content.blocks;
             target.items = content.items;
+            target.creative_tabs = content.creative_tabs;
             target
         } else {
             if let Some(error) = mods.iter().find_map(|m| {

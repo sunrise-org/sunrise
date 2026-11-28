@@ -225,6 +225,37 @@ impl TryIntoEngine<()> for mod_api::Block {
         })
     }
 }
+impl TryIntoEngine<()> for mod_api::CreativeTabEntry {
+    type Engine = engine::CreativeTabEntry;
+    type Error = String;
+    fn try_into_engine(&self, _: &()) -> Result<Self::Engine, Self::Error> {
+        Ok(engine::CreativeTabEntry {
+            stack: self.stack.clone(),
+            operator_only: self.operator_only,
+            searchable: self.searchable,
+            search_lines: self.search_lines.clone(),
+            search_tags: self.search_tags.clone(),
+        })
+    }
+}
+
+impl TryIntoEngine<()> for mod_api::CreativeTab {
+    type Engine = engine::CreativeTab;
+    type Error = String;
+    fn try_into_engine(&self, _: &()) -> Result<Self::Engine, Self::Error> {
+        Ok(engine::CreativeTab {
+            id: self.id.clone(),
+            title: self.title.clone(),
+            icon: self.icon.clone(),
+            entries: self
+                .entries
+                .iter()
+                .map(|entry| entry.try_into_engine(&()))
+                .collect::<Result<_, _>>()?,
+        })
+    }
+}
+
 impl TryIntoEngine<()> for mod_api::Item {
     type Engine = engine::Item;
     type Error = String;
@@ -340,7 +371,7 @@ mod tests {
         let declared = |block: Block| {
             let mut content = sunrise_mod_package::Content::declared("test");
             content
-                .declare(&[block.try_into_engine(&()).unwrap()], &[])
+                .declare(&[block.try_into_engine(&()).unwrap()], &[], &[])
                 .unwrap();
             content
         };
@@ -359,7 +390,7 @@ mod tests {
         ] {
             // The block item holds the id: an item of the same id is refused.
             assert_eq!(
-                content.declare(&[], &[item(id)]),
+                content.declare(&[], &[item(id)], &[]),
                 Err(vec![(
                     mod_api::__private::DeclarationKind::Item,
                     mod_api::DeclarationError::Rejected {
@@ -370,7 +401,7 @@ mod tests {
             );
         }
         let mut without = declared(Block::new("test:bare", "minecraft:stone").with_item(false));
-        assert_eq!(without.declare(&[], &[item("test:bare")]), Ok(()));
+        assert_eq!(without.declare(&[], &[item("test:bare")], &[]), Ok(()));
     }
 
     #[test]
@@ -507,7 +538,7 @@ mod tests {
             };
             let mut content = sunrise_mod_package::Content::declared("test");
             let error = content
-                .declare(&[block.try_into_engine(&()).unwrap()], &[])
+                .declare(&[block.try_into_engine(&()).unwrap()], &[], &[])
                 .unwrap_err();
             assert!(
                 matches!(&error[..], [(mod_api::__private::DeclarationKind::Block, mod_api::DeclarationError::Rejected { id, reason })]
@@ -573,8 +604,8 @@ mod tests {
             let mut expected = sunrise_mod_package::Content::declared("test");
             let mut actual = sunrise_mod_package::Content::declared("test");
             assert_eq!(
-                actual.declare(&[converted], &[]),
-                expected.declare(&[old], &[])
+                actual.declare(&[converted], &[], &[]),
+                expected.declare(&[old], &[], &[])
             );
             assert_eq!(actual.blocks, expected.blocks);
             if light == 16 {
@@ -585,7 +616,7 @@ mod tests {
                 };
                 let bad = api.try_into_engine(&()).unwrap();
                 let mut admission = sunrise_mod_package::Content::declared("test");
-                let error = admission.declare(&[valid, bad], &[]).unwrap_err();
+                let error = admission.declare(&[valid, bad], &[], &[]).unwrap_err();
                 assert_eq!(
                     error,
                     [(
@@ -627,8 +658,8 @@ mod tests {
             let mut expected = sunrise_mod_package::Content::declared("test");
             let mut actual = sunrise_mod_package::Content::declared("test");
             assert_eq!(
-                actual.declare(&[], &[converted]),
-                expected.declare(&[], &[old])
+                actual.declare(&[], &[converted], &[]),
+                expected.declare(&[], &[old], &[])
             );
             assert_eq!(actual.items, expected.items);
         }

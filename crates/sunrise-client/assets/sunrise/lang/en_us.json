@@ -535,6 +535,7 @@
   "sunrise.mods.version": "%s (server %s, yours %s)",
   "sunrise.mods.declaration.block": "Mod %s: block declaration refused: %s",
   "sunrise.mods.declaration.item": "Mod %s: item declaration refused: %s",
+  "sunrise.mods.declaration.creative_tab": "Mod %s: creative tab declaration refused: %s",
   "sunrise.mods.declaration.closed": "registration is closed for %s",
   "sunrise.mods.declaration.invalid_id": "invalid identifier %s",
   "sunrise.mods.declaration.rejected": "%s: %s",

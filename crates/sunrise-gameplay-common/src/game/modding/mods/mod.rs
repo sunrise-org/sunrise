@@ -516,6 +516,7 @@ impl DeclarationFailures {
             let key = match refusal.kind {
                 DeclarationKind::Block => "sunrise.mods.declaration.block",
                 DeclarationKind::Item => "sunrise.mods.declaration.item",
+                DeclarationKind::CreativeTab => "sunrise.mods.declaration.creative_tab",
             };
             let detail = match &refusal.error {
                 DeclarationError::RegistrationClosed { id } => {
@@ -623,6 +624,21 @@ pub fn native_declared() -> std::borrow::Cow<'static, NativeDeclared> {
                         })
                 },
                 |batch, item| batch.items.push(item),
+            );
+        });
+        crate::game::native_hooks::native_creative_tabs(&context, &mut |listen| {
+            declared.stage(
+                listen,
+                |answer| {
+                    answer
+                        .try_into_engine(&())
+                        .and_then(|t| t.validate_local())
+                        .map_err(|reason| DeclarationError::Rejected {
+                            id: answer.id,
+                            reason,
+                        })
+                },
+                |batch, tab| batch.creative_tabs.push(tab),
             );
         });
         declared.refusals = mod_api::__private::take_declaration_refusals(&context);

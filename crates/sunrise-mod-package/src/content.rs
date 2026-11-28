@@ -761,7 +761,32 @@ pub struct Block {
 struct CreativeTabFile {
     title: String,
     icon: String,
-    items: Vec<String>,
+    items: Vec<CreativeTabFileEntry>,
+}
+
+/// One entry of a tab file: a bare item ID (`namespace:path`), or an object whose
+/// `stack` is a full SNBT stack, with the entry's operator-only flag, whether it
+/// joins the search tab, and the lines and tags search matches it by. The object's
+/// fields besides `stack` default as a bare item ID behaves.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum CreativeTabFileEntry {
+    Item(String),
+    Entry {
+        stack: String,
+        #[serde(default)]
+        operator_only: bool,
+        #[serde(default = "default_searchable")]
+        searchable: bool,
+        #[serde(default)]
+        search_lines: Vec<String>,
+        #[serde(default)]
+        search_tags: Vec<String>,
+    },
+}
+
+fn default_searchable() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize)]
@@ -981,16 +1006,84 @@ pub struct FluidModel {
     pub overlay: Option<String>,
 }
 
+/// One entry of a creative tab: a full stack, with how the creative inventory
+/// and the search tab treat it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CreativeTabEntry {
+    /// The stack the tab shows, as an SNBT `ItemStack` compound holding one item.
+    pub stack: String,
+    /// Only operator viewers see this entry; the tab's other entries are unchanged.
+    pub operator_only: bool,
+    /// Whether the entry also appears in the search tab.
+    pub searchable: bool,
+    /// Extra lines the search tab matches this entry by, besides its name.
+    pub search_lines: Vec<String>,
+    /// Extra item tags the search tab matches this entry by (`namespace:path`,
+    /// without the leading `#`).
+    pub search_tags: Vec<String>,
+}
+
+impl CreativeTabEntry {
+    /// A plain entry showing the item `id` (`namespace:path`): every viewer sees
+    /// it, in the tab and in search — what a bare item ID in a tab file means.
+    pub fn item(id: &str) -> CreativeTabEntry {
+        CreativeTabEntry {
+            stack: format!("{{count:1,id:\"{id}\"}}"),
+            operator_only: false,
+            searchable: true,
+            search_lines: Vec::new(),
+            search_tags: Vec::new(),
+        }
+    }
+}
+
 /// A creative inventory tab the mod adds (`data/<id>/sunrise/creative_tab/`):
-/// its title, the item on its button, and its items in order. Items no mod
-/// or vanilla registers are left out when the game loads.
+/// its title, the stack on its button, and its entries in order. Entries whose
+/// items no mod or vanilla registers are left out when the game loads.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CreativeTab {
     /// `<mod id>:<path>`.
     pub id: String,
     pub title: String,
+    /// The stack on the tab's button, as an SNBT `ItemStack` compound holding
+    /// one item.
     pub icon: String,
-    pub items: Vec<String>,
+    pub entries: Vec<CreativeTabEntry>,
+}
+
+/// A creative tab's stack (its icon or one of its entries), checked as the
+/// creative catalog reads it: an SNBT compound holding one item. Returns the
+/// stack's item ID.
+fn check_tab_stack(stack: &str) -> Result<String, String> {
+    use sunrise_core::nbt::Tag;
+    let (tag, _) = sunrise_core::nbt::parse_snbt(stack)
+        .map_err(|e| format!("stack {stack:?} does not parse: {e}"))?;
+    let Tag::Compound(_) = &tag else {
+        return Err(format!("stack {stack:?} is not a compound"));
+    };
+    let Some(Tag::String(id)) = tag.get("id") else {
+        return Err(format!("stack {stack:?} has no item id"));
+    };
+    let id = id.to_string_lossy();
+    if !namespaced_id(&id) {
+        return Err(format!(
+            "stack {stack:?}: id {id:?} is not a namespaced item id"
+        ));
+    }
+    // An `ItemStack` without a count holds one item; any other count is not a
+    // tab stack (the catalog refuses it the same way).
+    let count = match tag.get("count") {
+        None => 1,
+        Some(Tag::Byte(n)) => i64::from(*n),
+        Some(Tag::Short(n)) => i64::from(*n),
+        Some(Tag::Int(n)) => i64::from(*n),
+        Some(Tag::Long(n)) => *n,
+        Some(_) => return Err(format!("stack {stack:?}: count is not a number")),
+    };
+    if count != 1 {
+        return Err(format!("stack {stack:?} holds {count} items, not one"));
+    }
+    Ok(id)
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
@@ -1676,8 +1769,9 @@ impl Content {
         }
     }
 
-    /// Adds blocks and items a native mod declares in code (`native_blocks`,
-    /// `native_items`), checked as declaration files are: ids in any of this
+    /// Adds blocks, items and creative tabs a native mod declares in code
+    /// (`native_blocks`, `native_items`, `native_creative_tabs`), checked as
+    /// declaration files are: ids in any of this
     /// mod's owned namespaces (its id and manifest `namespaces`) and declared once
     /// with what it already has, a vanilla template, and well-formed item and block references.
     /// The references resolve at game load. All or nothing: on an error nothing is added.
@@ -1685,6 +1779,7 @@ impl Content {
         &mut self,
         blocks: &[Block],
         items: &[Item],
+        creative_tabs: &[CreativeTab],
     ) -> Result<(), Vec<(DeclarationKind, DeclarationError)>> {
         let in_own = |id: &str| {
             if namespaced_id(id)
@@ -1707,9 +1802,13 @@ impl Content {
             items
                 .iter()
                 .map(|i| (i, in_own(&i.id).and_then(|()| check_item(i)))),
+            creative_tabs
+                .iter()
+                .map(|t| (t, in_own(&t.id).and_then(|()| check_creative_tab(t)))),
         )?;
         self.blocks.extend_from_slice(blocks);
         self.items.extend_from_slice(items);
+        self.creative_tabs.extend_from_slice(creative_tabs);
         Ok(())
     }
 
@@ -1718,13 +1817,17 @@ impl Content {
         &mut self,
         blocks: &[LocalDeclaration<Block>],
         items: &[LocalDeclaration<Item>],
+        creative_tabs: &[LocalDeclaration<CreativeTab>],
     ) -> Result<(), Vec<(DeclarationKind, DeclarationError)>> {
         self.check_declaration_batch(
             blocks.iter().map(|b| (b.get(), Ok(()))),
             items.iter().map(|i| (i.get(), Ok(()))),
+            creative_tabs.iter().map(|t| (t.get(), Ok(()))),
         )?;
         self.blocks.extend(blocks.iter().map(|b| b.get().clone()));
         self.items.extend(items.iter().map(|i| i.get().clone()));
+        self.creative_tabs
+            .extend(creative_tabs.iter().map(|t| t.get().clone()));
         Ok(())
     }
 
@@ -1732,6 +1835,7 @@ impl Content {
         &self,
         blocks: impl IntoIterator<Item = (&'a Block, Result<(), String>)>,
         items: impl IntoIterator<Item = (&'a Item, Result<(), String>)>,
+        creative_tabs: impl IntoIterator<Item = (&'a CreativeTab, Result<(), String>)>,
     ) -> Result<(), Vec<(DeclarationKind, DeclarationError)>> {
         let mut block_ids: BTreeSet<&str> = self.blocks.iter().map(|b| b.id.as_str()).collect();
         let mut item_ids: BTreeSet<&str> = self
@@ -1780,6 +1884,19 @@ impl Content {
                 Ok(())
             }) {
                 refuse(DeclarationKind::Item, id, reason);
+            }
+        }
+        let mut tab_ids: BTreeSet<&str> =
+            self.creative_tabs.iter().map(|t| t.id.as_str()).collect();
+        for (tab, fields) in creative_tabs {
+            let id = tab.id.as_str();
+            if let Err(reason) = fields.and_then(|()| {
+                if !tab_ids.insert(id) {
+                    return Err("declared twice".into());
+                }
+                Ok(())
+            }) {
+                refuse(DeclarationKind::CreativeTab, id, reason);
             }
         }
         if !errors.is_empty() {
@@ -1991,16 +2108,42 @@ impl Content {
                 s.split_once(':')
                     .is_some_and(|(n, p)| !n.is_empty() && !p.is_empty())
             };
-            if !id_like(&file.icon) || !file.items.iter().all(|i| id_like(i)) {
-                return Err(format!(
-                    "{name}: icon and items are item ids (namespace:path)"
-                ));
+            if !id_like(&file.icon) {
+                return Err(format!("{name}: icon is an item id (namespace:path)"));
+            }
+            let mut entries = Vec::with_capacity(file.items.len());
+            for entry in file.items {
+                let entry = match entry {
+                    CreativeTabFileEntry::Item(id) => {
+                        if !id_like(&id) {
+                            return Err(format!("{name}: items are item ids (namespace:path)"));
+                        }
+                        CreativeTabEntry::item(&id)
+                    }
+                    CreativeTabFileEntry::Entry {
+                        stack,
+                        operator_only,
+                        searchable,
+                        search_lines,
+                        search_tags,
+                    } => {
+                        check_tab_stack(&stack).map_err(|e| format!("{name}: {e}"))?;
+                        CreativeTabEntry {
+                            stack,
+                            operator_only,
+                            searchable,
+                            search_lines,
+                            search_tags,
+                        }
+                    }
+                };
+                entries.push(entry);
             }
             self.creative_tabs.push(CreativeTab {
                 id: tab,
                 title: file.title,
-                icon: file.icon,
-                items: file.items,
+                icon: CreativeTabEntry::item(&file.icon).stack,
+                entries,
             });
         }
         for (fluid, name) in fluids {
@@ -2366,6 +2509,25 @@ impl Item {
         check_item(&self)?;
         Ok(LocalDeclaration(self))
     }
+}
+
+impl CreativeTab {
+    pub fn validate_local(self) -> Result<LocalDeclaration<Self>, String> {
+        check_creative_tab(&self)?;
+        Ok(LocalDeclaration(self))
+    }
+}
+
+/// A creative tab's fields, as a file or code gives them.
+fn check_creative_tab(tab: &CreativeTab) -> Result<(), String> {
+    if tab.title.is_empty() {
+        return Err("title is empty".into());
+    }
+    check_tab_stack(&tab.icon).map_err(|e| format!("icon {e}"))?;
+    for entry in &tab.entries {
+        check_tab_stack(&entry.stack)?;
+    }
+    Ok(())
 }
 
 /// An item's fields, as a file or code gives them.
@@ -3026,7 +3188,7 @@ capabilities = ["registries"]
         let mut declared = Content::declared("ruby");
         let mut lamp = content.blocks[0].clone();
         lamp.state_light.as_mut().unwrap().default = Some(16);
-        assert!(declared.declare(&[lamp], &[]).is_err());
+        assert!(declared.declare(&[lamp], &[], &[]).is_err());
         assert!(declared.blocks.is_empty());
     }
 
@@ -3045,7 +3207,7 @@ capabilities = ["registries"]
             .unwrap();
             assert_eq!(content.items[0].block.as_deref(), Some(target));
             let mut declared = Content::declared("ruby");
-            declared.declare(&[], &content.items).unwrap();
+            declared.declare(&[], &content.items, &[]).unwrap();
             assert_eq!(declared.items[0].block.as_deref(), Some(target));
         }
         for (i, target) in ["stone", "ruby:Bad", "ruby:"].into_iter().enumerate() {
@@ -3071,6 +3233,7 @@ capabilities = ["registries"]
                         block: Some(target.into()),
                         ..Default::default()
                     }],
+                    &[],
                 )
                 .unwrap_err();
             assert_eq!(errors.len(), 1);
@@ -3115,13 +3278,18 @@ capabilities = ["registries"]
             item: true,
             ..Block::default()
         };
-        assert!(content.declare(std::slice::from_ref(&block), &[]).is_err());
+        assert!(
+            content
+                .declare(std::slice::from_ref(&block), &[], &[])
+                .is_err()
+        );
         content
             .declare(
                 &[Block {
                     item: false,
                     ..block
                 }],
+                &[],
                 &[],
             )
             .unwrap();
@@ -3149,15 +3317,15 @@ capabilities = ["registries"]
             ..item("ruby:wrench")
         };
         content
-            .declare(&[block("ruby:gear"), block("ruby:casing")], &[wrench])
+            .declare(&[block("ruby:gear"), block("ruby:casing")], &[wrench], &[])
             .unwrap();
         assert_eq!(content.blocks.len(), 2);
         assert_eq!(content.items[0].id, "ruby:wrench");
         // Each refusal adds nothing.
         let refused = |blocks: &[Block], items: &[Item]| {
             let mut c = Content::declared("ruby");
-            c.declare(&[block("ruby:gear")], &[]).unwrap();
-            let e = c.declare(blocks, items).unwrap_err()[0].1.to_string();
+            c.declare(&[block("ruby:gear")], &[], &[]).unwrap();
+            let e = c.declare(blocks, items, &[]).unwrap_err()[0].1.to_string();
             assert_eq!((c.blocks.len(), c.items.len()), (1, 0), "{e}");
             e
         };
@@ -3174,11 +3342,12 @@ capabilities = ["registries"]
         assert!(refused(&[block("ruby:gear")], &[]).contains("declared twice"));
         assert!(refused(&[], &[item("ruby:gear")]).contains("block's item"));
         let mut content = Content::declared("ruby");
-        content.declare(&[block("ruby:gear")], &[]).unwrap();
+        content.declare(&[block("ruby:gear")], &[], &[]).unwrap();
         let errors = content
             .declare(
                 &[block("ruby:gear"), block("ruby:lamp")],
                 &[item("ruby:lamp")],
+                &[],
             )
             .unwrap_err();
         assert_eq!(
@@ -3231,7 +3400,7 @@ capabilities = ["registries"]
             connects_to: Some("ruby:cables".into()),
             ..block("ruby:cable")
         };
-        content.declare(&[cable], &[]).unwrap();
+        content.declare(&[cable], &[], &[]).unwrap();
     }
 
     #[test]
@@ -4743,10 +4912,14 @@ capabilities = ["registries"]
         };
         let mut content = Content::declared("ruby");
         let sign = block("ruby:sign", "minecraft:oak_sign", true, Some("ruby:wall"));
-        assert!(content.declare(std::slice::from_ref(&sign), &[]).is_err());
+        assert!(
+            content
+                .declare(std::slice::from_ref(&sign), &[], &[])
+                .is_err()
+        );
         assert!(content.blocks.is_empty());
         let wall = block("ruby:wall", "minecraft:oak_wall_sign", false, None);
-        content.declare(&[sign, wall], &[]).unwrap();
+        content.declare(&[sign, wall], &[], &[]).unwrap();
         assert_eq!(content.blocks.len(), 2);
     }
 
@@ -5114,12 +5287,104 @@ capabilities = ["registries"]
             [CreativeTab {
                 id: "ruby:gems".into(),
                 title: "Ruby Gems".into(),
-                icon: "ruby:ruby".into(),
-                items: vec!["ruby:ruby".into(), "minecraft:diamond".into()],
+                icon: "{count:1,id:\"ruby:ruby\"}".into(),
+                entries: vec![
+                    CreativeTabEntry::item("ruby:ruby"),
+                    CreativeTabEntry::item("minecraft:diamond"),
+                ],
             }]
         );
         let e = tab(r#"{"title": "Gems", "icon": "ruby", "items": []}"#).unwrap_err();
+        assert!(e.contains("item id"), "{e}");
+        let e = tab(r#"{"title": "Gems", "icon": "ruby:ruby", "items": ["ruby"]}"#).unwrap_err();
         assert!(e.contains("item ids"), "{e}");
+    }
+
+    #[test]
+    fn creative_tab_files_take_object_entries() {
+        let files: &[(&str, &[u8])] = &[(
+            "data/ruby/sunrise/creative_tab/gems.json",
+            br#"{"title": "Ruby Gems", "icon": "ruby:ruby", "items": [
+                {"stack": "{count:1,id:\"ruby:ruby\",components:{\"minecraft:enchantment_glint_override\":true}}", "operator_only": true, "search_lines": ["shiny gem"], "search_tags": ["ruby:gems"]},
+                {"stack": "{count:1,id:\"minecraft:diamond\"}", "searchable": false}
+            ]}"#,
+        )];
+        let content = smod("tab-object", MANIFEST_TEXT, files).unwrap();
+        assert_eq!(
+            content.creative_tabs,
+            [CreativeTab {
+                id: "ruby:gems".into(),
+                title: "Ruby Gems".into(),
+                icon: "{count:1,id:\"ruby:ruby\"}".into(),
+                entries: vec![
+                    CreativeTabEntry {
+                        stack: "{count:1,id:\"ruby:ruby\",components:{\"minecraft:enchantment_glint_override\":true}}"
+                            .into(),
+                        operator_only: true,
+                        searchable: true,
+                        search_lines: vec!["shiny gem".into()],
+                        search_tags: vec!["ruby:gems".into()],
+                    },
+                    CreativeTabEntry {
+                        stack: "{count:1,id:\"minecraft:diamond\"}".into(),
+                        operator_only: false,
+                        searchable: false,
+                        search_lines: Vec::new(),
+                        search_tags: Vec::new(),
+                    },
+                ],
+            }]
+        );
+    }
+
+    #[test]
+    fn creative_tab_files_refuse_a_bad_entry_stack() {
+        let tab = |json: &str| {
+            let files: &[(&str, &[u8])] =
+                &[("data/ruby/sunrise/creative_tab/gems.json", json.as_bytes())];
+            smod("tab-bad-stack", MANIFEST_TEXT, files)
+        };
+        for items in [
+            r#"[{"stack": "{count:2,id:\"ruby:ruby\"}"}]"#,
+            r#"[{"stack": "not a stack"}]"#,
+            r#"[{"stack": "{count:1}"}]"#,
+        ] {
+            let json = format!(r#"{{"title": "Gems", "icon": "ruby:ruby", "items": {items}}}"#);
+            let e = tab(&json).unwrap_err();
+            assert!(e.contains("gems.json"), "{e}");
+        }
+    }
+
+    #[test]
+    fn declared_creative_tabs_land_and_refuse_bad_stacks() {
+        let tab = |stack: &str| CreativeTab {
+            id: "ruby:gems".into(),
+            title: "Ruby Gems".into(),
+            icon: "{count:1,id:\"ruby:ruby\"}".into(),
+            entries: vec![CreativeTabEntry {
+                stack: stack.into(),
+                operator_only: false,
+                searchable: true,
+                search_lines: Vec::new(),
+                search_tags: Vec::new(),
+            }],
+        };
+        let mut content = Content::declared("ruby");
+        content
+            .declare(&[], &[], &[tab("{count:1,id:\"ruby:ruby\"}")])
+            .unwrap();
+        assert_eq!(content.creative_tabs, [tab("{count:1,id:\"ruby:ruby\"}")]);
+        let mut content = Content::declared("ruby");
+        let errors = content
+            .declare(&[], &[], &[tab("{count:2,id:\"ruby:ruby\"}")])
+            .unwrap_err();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].0, DeclarationKind::CreativeTab);
+        assert!(matches!(
+            errors[0].1,
+            DeclarationError::Rejected { ref id, .. } if id == "ruby:gems"
+        ));
+        assert!(content.creative_tabs.is_empty());
     }
 
     #[test]
@@ -5374,11 +5639,13 @@ capabilities = ["registries"]
         assert_eq!(content.blocks[0].id, "kaisyn:a");
         let mut code = Content::declared("ruby");
         code.namespaces.push("kaisyn".into());
-        code.declare(&content.blocks, &[]).unwrap();
+        code.declare(&content.blocks, &[], &[]).unwrap();
         assert_eq!(code.blocks[0].id, "kaisyn:a");
         let mut foreign = content.blocks[0].clone();
         foreign.id = "unowned:a".into();
-        let error = code.declare(&[foreign], &[]).unwrap_err()[0].1.to_string();
+        let error = code.declare(&[foreign], &[], &[]).unwrap_err()[0]
+            .1
+            .to_string();
         assert!(
             error.contains("unowned:a")
                 && error.contains("owned namespaces")

@@ -439,6 +439,7 @@ pub(crate) mod tests {
                     block: Some("ruby:frame".into()),
                     ..Default::default()
                 }),
+                &[],
             )
             .unwrap();
         let mods = [ContentMod {

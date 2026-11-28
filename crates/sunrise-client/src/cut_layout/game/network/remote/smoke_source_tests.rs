@@ -40,6 +40,7 @@ fn client_placement_predicts_signal_fire_from_a_block_part() {
                 ..Default::default()
             }],
             &[],
+            &[],
         )
         .unwrap();
     let inventory = sunrise_mod_package::enabled::EnabledMods::new([(

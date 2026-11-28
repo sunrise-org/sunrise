@@ -389,7 +389,7 @@ pub(in crate::game) mod tests {
                 ..Default::default()
             })
             .collect();
-        content.declare(&blocks, &[]).unwrap();
+        content.declare(&blocks, &[], &[]).unwrap();
         build(
             &base,
             std::path::Path::new(""),

@@ -98,6 +98,7 @@ fn actual_data_commands_preserve_same_mod_entity_runtime_state() {
                     ..Default::default()
                 }],
                 &[],
+                &[],
             )
             .unwrap();
         build(

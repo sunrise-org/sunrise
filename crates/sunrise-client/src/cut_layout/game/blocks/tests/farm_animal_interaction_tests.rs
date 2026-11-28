@@ -146,7 +146,7 @@ fn a_brown_mooshroom_milks_the_effects_of_a_mod_block_item() {
     ]);
     let mut content = Content::declared("stewtest");
     content
-        .declare(&[block.try_into_engine(&()).unwrap()], &[])
+        .declare(&[block.try_into_engine(&()).unwrap()], &[], &[])
         .unwrap();
     let root = resource_root(
         &base,

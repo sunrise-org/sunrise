@@ -58,6 +58,7 @@ pub(super) fn with_crate(test: impl FnOnce(&mut ServerGame<'_>, BlockEntityRef))
                     ..Default::default()
                 }],
                 &[],
+                &[],
             )
             .unwrap();
         build(

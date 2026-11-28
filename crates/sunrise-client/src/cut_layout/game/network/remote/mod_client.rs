@@ -183,6 +183,7 @@ pub(crate) mod tests {
                     ..Default::default()
                 }],
                 &[],
+                &[],
             )
             .unwrap();
         let root = resource_root(
