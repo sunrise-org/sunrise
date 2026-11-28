@@ -9,6 +9,8 @@
 //! SUNRISE_HOME, SUNRISE_LAUNCHER_HOME, XDG_DATA_HOME and XDG_CONFIG_HOME (AGENTS.md):
 //! `cargo test -p sunrise-client-render --test pack_block_entity_runs -- --ignored`
 //! (under `python3 tools/ci/with_xvfb.py` without a display) gives each its own.
+#[path = "common/daily_child.rs"]
+mod daily_child;
 use client::{
     gfx::{Frame, Renderer, ScreenshotRequest, pack_draw::EntitySpan},
     graphics::GraphicsApi,
@@ -27,13 +29,13 @@ use winit::{
 #[test]
 #[ignore = "daily"]
 fn pack_block_entity_runs() {
-    run_daily("pack_block_entity_runs", fixture);
+    run_daily(daily_child::test_name!(), fixture);
 }
 
 #[test]
 #[ignore = "daily"]
 fn pack_hand_terrain_quads() {
-    run_daily("pack_hand_terrain_quads", hand_fixture);
+    run_daily(daily_child::test_name!(), hand_fixture);
 }
 
 /// The two sprite layers' colour: each channel 0 or 255, so a texel times a vertex colour is
@@ -553,51 +555,14 @@ fn run(out: &Path, fixture: Fixture) {
 }
 
 /// Runs `fixture` in a child process of this test binary that runs only `test`, with
-/// throwaway homes.
+/// throwaway homes (`daily_child`).
 fn run_daily(test: &str, fixture: Fixture) {
-    const OUTPUT: &str = "SUNRISE_BLOCK_ENTITY_RUNS_FIXTURE_OUTPUT";
-    if let Some(output) = std::env::var_os(OUTPUT) {
-        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-        descriptor.backends = wgpu::Backends::VULKAN;
-        let instance = wgpu::Instance::new(descriptor);
-        pollster::block_on(instance.request_adapter(&Default::default()))
-            .expect("pack_block_entity_runs refused: no Vulkan adapter");
-        run(Path::new(&output), fixture);
-        return;
-    }
-
-    // Keep the event loop and every writable home in a fresh process.
-    let scratch = tempfile::tempdir().unwrap();
-    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
-    command
-        .args(["--exact", test, "--ignored", "--nocapture"])
-        .current_dir(scratch.path())
-        .env(OUTPUT, scratch.path().join("output"))
-        .env("SUNRISE_LAUNCHER_NO_SELF_UPDATE", "1")
-        .env("SUNRISE_NO_AUDIO", "1")
-        .env("SUNRISE_TELEMETRY_URL", "off");
-    for name in [
-        "SUNRISE_HOME",
-        "SUNRISE_LAUNCHER_HOME",
-        "XDG_DATA_HOME",
-        "XDG_CONFIG_HOME",
-        "XDG_RUNTIME_DIR",
-        "SUNRISE_LAUNCHER_TRASH",
-        "SUNRISE_LAUNCHER_CLIPBOARD",
-        "SUNRISE_LAUNCHER_DESKTOP",
-    ] {
-        let home = scratch.path().join(name);
-        std::fs::create_dir(&home).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700)).unwrap();
-        }
-        command.env(name, home);
-    }
-    assert!(
-        command.status().unwrap().success(),
-        "block entity run fixture {test} failed"
+    daily_child::run_daily(
+        test,
+        "SUNRISE_BLOCK_ENTITY_RUNS_FIXTURE_OUTPUT",
+        &[],
+        "pack_block_entity_runs",
+        |out| run(out, fixture),
     );
 }
 
