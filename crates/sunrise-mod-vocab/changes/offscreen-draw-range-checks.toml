@@ -1,0 +1,6 @@
+ids = [
+    "method:OffscreenDrawContext::draw_mesh",
+    "method:OffscreenDrawContext::draw_vertices",
+]
+why = "#6409: a frame-graph pass checks a draw as the world pass does. OffscreenDrawContext::draw_vertices refuses with PipelineDrawError::InvalidRange an index that, after base_vertex, addresses a record below 0 or past the shortest vertex-step slice, and generated indices (Quads, Lines, TriangleFan) too large for the device's largest buffer; OffscreenDrawContext::draw_mesh refuses the generated-index case too. These draws were accepted and reached the GPU."
+migrate = "Nothing to change for a draw the world pass already accepts; one that relied on an offscreen pass accepting it now gets InvalidRange."

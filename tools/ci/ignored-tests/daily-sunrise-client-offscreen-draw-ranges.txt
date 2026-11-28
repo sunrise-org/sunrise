@@ -1,0 +1,2 @@
+# A frame-graph pass refuses inline indices outside the vertex slice as the world pass does (#6409); needs a GPU adapter.
+sunrise-client-gameplay game::client_side::native_custom_geometry::tests::an_offscreen_pass_refuses_indices_outside_its_vertex_slice lib daily gpu

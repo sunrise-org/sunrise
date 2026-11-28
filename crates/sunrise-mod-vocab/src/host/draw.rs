@@ -973,7 +973,10 @@ pub trait RenderLevelStageContext {
 /// pass runs in the compiled frame graph. Self-sampling the pass's own target returns
 /// [`PipelineDrawError::TargetReadWriteHazard`].
 pub trait OffscreenDrawContext {
-    /// Record a retained GPU [`MeshRef`] draw into this offscreen pass.
+    /// Record a retained GPU [`MeshRef`] draw into this offscreen pass. Checked as
+    /// [`WorldDrawContext::draw_mesh`] checks it: [`PipelineDrawError::InvalidRange`] for a
+    /// range outside the mesh, and for a `Quads`, `Lines` or `TriangleFan` draw whose generated
+    /// indices would not fit the device's largest buffer. A refused draw records nothing.
     fn draw_mesh(
         &mut self,
         pipeline: RenderPipelineRef,
@@ -985,7 +988,11 @@ pub trait OffscreenDrawContext {
         Err(PipelineDrawError::Pipeline(RenderPipelineError::Invalid))
     }
 
-    /// Record a transient per-frame vertex/index draw into this offscreen pass.
+    /// Record a transient per-frame vertex/index draw into this offscreen pass. Checked as
+    /// [`WorldDrawContext::draw_vertices`] checks it: [`PipelineDrawError::InvalidRange`] for an
+    /// index that, after `base_vertex`, addresses a record below 0 or past the shortest
+    /// vertex-step slice, for an instance range past an instance-step slice, and for generated
+    /// indices too large for the device's largest buffer. A refused draw records nothing.
     fn draw_vertices(
         &mut self,
         pipeline: RenderPipelineRef,

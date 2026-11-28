@@ -541,7 +541,9 @@ draws a range of an index buffer, and `.with_instances(range)` sets the instance
 ranges are checked against what the buffers hold: a vertex-step buffer must contain every record
 an indexed draw reaches (after `base_vertex`), an instance-step buffer must contain the instance
 range, and `Quads`, `Lines` and `TriangleFan` draws, which the engine feeds from generated
-indices, must fit the device's largest buffer.
+indices, must fit the device's largest buffer. The same checks hold for a draw recorded into a
+frame-graph pass (`OffscreenDrawContext::draw_mesh` / `draw_vertices`) as for one in the world
+pass: a refused draw returns `PipelineDrawError::InvalidRange` and records nothing.
 
 ## Pipeline modifiers (`register_pipeline_modifiers`)
 
