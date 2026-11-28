@@ -710,13 +710,16 @@ impl crate::game::ServerGame<'_> {
                                 per_tick >= 1.0
                             })
                             .unwrap_or(false);
-                        if !one_hit
-                            && let Some(host) = self.server.lan.as_mut()
-                            && let Some(play) = host.play.get_mut(&conn)
-                        {
-                            play.destroy_pos = Some(pos);
-                        }
-                        if !one_hit {
+                        if one_hit {
+                            // Vanilla's START decides an instant break and destroys the
+                            // block now; the active dig's tick never breaks one.
+                            let _ = self.guest_destroy_at(gi, conn, pos);
+                        } else {
+                            if let Some(host) = self.server.lan.as_mut()
+                                && let Some(play) = host.play.get_mut(&conn)
+                            {
+                                play.destroy_pos = Some(pos);
+                            }
                             self.guest_dig_feedback(conn);
                         }
                     }
@@ -734,10 +737,10 @@ impl crate::game::ServerGame<'_> {
                         .update(gi, |g| g.reaches_block(context, a.pos))
                     {
                         // Too far (handleBlockBreakAction's "too far"): the ack has the client
-                        // undo its prediction, and only the dig drops — `destroy_pos` and the
-                        // ticks since its START stay, so a STOP for the same block after the
-                        // guest comes back into reach counts them (#4124).
-                        host.play.entry(conn).or_default().dig_ended();
+                        // undo its prediction, and the dig stays — `destroy_pos` and the ticks
+                        // since its START stay, so a STOP for the same block after the guest
+                        // comes back into reach counts them (#4124). Only ABORT_DESTROY_BLOCK
+                        // clears the active dig on an out-of-range action (#6853).
                         return;
                     }
                     self.guest_stop_digging(conn, a.pos);
@@ -1588,3 +1591,7 @@ use sunrise_gameplay_common::game::pick_entity_common::PickEntityCommonGameExt1 
 use sunrise_gameplay_common::game::player_equip::PlayerEquipGameExt1 as _;
 
 use sunrise_gameplay_common::game::GameGameExt1 as _;
+
+#[cfg(test)]
+#[path = "tests/stop_out_of_range_dig_tests.rs"]
+pub(in crate::game) mod stop_out_of_range_dig_tests;

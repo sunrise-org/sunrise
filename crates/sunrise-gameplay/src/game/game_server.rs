@@ -1608,12 +1608,14 @@ impl crate::game::ServerGame<'_> {
             self.destroy_progress_event(pos, hit.face, ticks);
         }
         let m = self.common.mining.as_mut().ok_or("mining")?;
-        // ServerPlayerGameMode breaks a player's block at once only when it is instant (START's
-        // insta-mine); otherwise it waits for the client's STOP_DESTROY_BLOCK
-        // (`guest_stop_digging`), never breaking it on its own count. Breaking it here would
-        // take the block from under the player's crack before the player's client predicts the
-        // break, so it gets neither particles nor sound.
-        if m.progress >= 1.0 && (self.server.lan_acting.is_none() || m.ticks == 1) {
+        // ServerPlayerGameMode breaks a player's block at once only when START saw it instant
+        // (its insta-mine); otherwise it waits for the client's STOP_DESTROY_BLOCK
+        // (`guest_stop_digging`), never breaking it on its own count. A guest's tick only
+        // advances feedback: a tool or block that becomes instant after START must not break
+        // the block out of reach. Breaking it here would also take the block from under the
+        // player's crack before the player's client predicts the break, so it gets neither
+        // particles nor sound.
+        if m.progress >= 1.0 && self.server.lan_acting.is_none() {
             let pos = m.pos;
             self.common.mining = None;
             self.break_block(pos)?;
