@@ -625,3 +625,97 @@ impl Item {
         }
     }
 }
+
+/// One entry of a declared creative tab: a full stack, with how the creative
+/// inventory and the search tab treat it.
+/// `Default` and [`CreativeTabEntry::new`] describe a plain entry, as a bare item
+/// ID in a tab file does: every viewer sees it, in the tab and in search.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+#[derive(sunrise_mod_api_macros::Wire)]
+pub struct CreativeTabEntry {
+    /// The stack the tab shows, as an SNBT `ItemStack` compound holding one item,
+    /// such as `{count:1,id:"mymod:ruby",components:{"minecraft:enchantment_glint_override":true}}`.
+    /// Entries no mod or vanilla registers are left out when the game loads.
+    pub stack: String,
+    /// Only operator viewers see this entry; the tab's other entries are unchanged.
+    /// False when unset.
+    pub operator_only: bool,
+    /// Whether the entry also appears in the search tab. True when unset, as for a
+    /// bare item ID in a tab file; false keeps the entry in its own tab only.
+    pub searchable: bool,
+    /// Extra lines the search tab matches this entry by, besides its name: words a
+    /// player would search for that the name does not contain.
+    pub search_lines: Vec<String>,
+    /// Extra item tags the search tab matches this entry by, as `namespace:path`
+    /// without the leading `#`.
+    pub search_tags: Vec<String>,
+}
+
+impl Default for CreativeTabEntry {
+    fn default() -> Self {
+        Self {
+            stack: String::new(),
+            operator_only: false,
+            searchable: true,
+            search_lines: Vec::new(),
+            search_tags: Vec::new(),
+        }
+    }
+}
+impl CreativeTabEntry {
+    /// Start a plain entry showing `stack` (an SNBT `ItemStack` compound of one item).
+    pub fn new(stack: impl Into<String>) -> Self {
+        Self {
+            stack: stack.into(),
+            ..Self::default()
+        }
+    }
+    /// Show this entry to operator viewers only.
+    pub fn with_operator_only(mut self, operator_only: bool) -> Self {
+        self.operator_only = operator_only;
+        self
+    }
+    /// Keep this entry out of the search tab (`searchable` false), or let it appear
+    /// there (true).
+    pub fn with_searchable(mut self, searchable: bool) -> Self {
+        self.searchable = searchable;
+        self
+    }
+}
+
+/// An unvalidated draft; `Content::declare` validates it at load.
+/// Refused drafts are reported by the content admission path naming the submitting mod,
+/// without admitting part of its declarations.
+#[derive(Clone, Debug, PartialEq, Default)]
+#[non_exhaustive]
+#[derive(sunrise_mod_api_macros::Wire)]
+pub struct CreativeTab {
+    /// Tab identifier: a bare name uses the declaring mod's ID, and an explicit valid
+    /// `namespace:path` keeps its namespace.
+    pub id: String,
+    /// The tab's title: the text on its button and at the top of its page.
+    pub title: String,
+    /// The stack on the tab's button, as an SNBT `ItemStack` compound holding one item.
+    pub icon: String,
+    /// The tab's entries, in the order they appear.
+    pub entries: Vec<CreativeTabEntry>,
+}
+
+impl CreativeTab {
+    /// Start an unvalidated declaration request; content admission checks the
+    /// identifier, the title and every stack.
+    pub fn new(id: impl Into<String>, title: impl Into<String>, icon: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            title: title.into(),
+            icon: icon.into(),
+            entries: Vec::new(),
+        }
+    }
+    /// Add one entry at the end of the tab.
+    pub fn with_entry(mut self, entry: CreativeTabEntry) -> Self {
+        self.entries.push(entry);
+        self
+    }
+}

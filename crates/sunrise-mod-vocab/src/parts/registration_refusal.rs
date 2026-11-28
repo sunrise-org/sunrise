@@ -82,6 +82,8 @@ pub enum DeclarationKind {
     Block,
     /// A native item declaration.
     Item,
+    /// A native creative tab declaration.
+    CreativeTab,
 }
 
 /// A loading message as a translation key and its arguments, resolved against the

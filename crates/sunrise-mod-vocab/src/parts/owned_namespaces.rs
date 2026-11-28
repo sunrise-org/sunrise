@@ -139,8 +139,8 @@ fn validate_declaration_id(id: String) -> Result<String, DeclarationError> {
     Ok(id)
 }
 
-/// A declaration a mod's `blocks` or `items` hook adds: its id, and the names of other
-/// content it references.
+/// A declaration a mod's `blocks`, `items` or `creative_tabs` hook adds: its id, and
+/// the names of other content it references.
 pub(crate) trait Declaration {
     const KIND: DeclarationKind;
 
@@ -172,6 +172,15 @@ impl Declaration for crate::Item {
             &mut self.id,
             [&mut self.crafting_remainder, &mut self.block],
         )
+    }
+}
+
+impl Declaration for crate::CreativeTab {
+    const KIND: DeclarationKind = DeclarationKind::CreativeTab;
+
+    fn names(&mut self) -> (&mut String, impl IntoIterator<Item = &mut Option<String>>) {
+        // The icon and the entries are stacks, not names: their SNBT is kept as written.
+        (&mut self.id, [])
     }
 }
 

@@ -1,0 +1,18 @@
+ids = [
+    "hook:creative_tabs",
+    "method:Hooks::creative_tabs",
+    "type:CreativeTabsEvent.tabs",
+    "type:CreativeTab",
+    "type:CreativeTab.id",
+    "type:CreativeTab.title",
+    "type:CreativeTab.icon",
+    "type:CreativeTab.entries",
+    "type:CreativeTabEntry",
+    "type:CreativeTabEntry.stack",
+    "type:CreativeTabEntry.operator_only",
+    "type:CreativeTabEntry.searchable",
+    "type:CreativeTabEntry.search_lines",
+    "type:CreativeTabEntry.search_tags",
+]
+why = "Creative tabs can be declared in code with the new registration collect hook `creative_tabs`, beside the `blocks` and `items` declarations, instead of only as tab files. A tab's icon and entries are full SNBT stacks, so an entry can carry components; an entry can be shown to operator viewers only, stay out of the search tab, or add lines and tags the search tab matches it by. Tab files take the same entry model: an entry is still a bare item ID, or an object with a `stack` and the same flags and search lines and tags."
+migrate = "No source change required for existing mods or tab files: bare-string entries keep their meaning, and a file's icon and items are read as the plain stacks they always produced. Native mods declare a tab by listening to `creative_tabs` and passing each `CreativeTab` to `event.register`, handling its typed `DeclarationError` like the `blocks` and `items` declarations."
