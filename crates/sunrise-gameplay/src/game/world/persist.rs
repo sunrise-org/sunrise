@@ -3015,3 +3015,49 @@ use sunrise_gameplay_common::game::commands_common::CommandsCommonGameExt2 as _;
 use sunrise_gameplay_common::game::entity_initialization_common::EntityInitializationCommonGameExt1 as _;
 
 use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt5 as _;
+
+#[cfg(test)]
+mod departure_order_tests {
+    use super::*;
+    use crate::game::{
+        native_entity_refs::tests::with_resident_game, natural_spawning::NaturalAdmission,
+    };
+
+    #[test]
+    #[ignore = "daily"]
+    fn reconstruction_captures_natural_candidate_before_detaching_saved_tags() {
+        with_resident_game(|game| {
+            let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
+            let id = game.take_entity_id();
+            game.common.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
+            game.server.natural_admission = Some(NaturalAdmission::Placed {
+                level: game.common.dim,
+                id,
+                join: game.common.mobs[0].join,
+            });
+            game.common.persist.raw.insert(
+                id,
+                Tag::compound([("Tags", Tag::List(vec![Tag::String("travelling".into())]))]),
+            );
+            game.common.persist.transient.insert(id);
+            game.common.persist.uuids.insert(id, [0, 0, 0, 1]);
+
+            game.extract_vehicle_rows_for_reconstruction(vec![id]);
+
+            let Some(NaturalAdmission::Detached(candidate)) = &game.server.natural_admission else {
+                panic!("natural candidate should survive as a detached owner");
+            };
+            assert_eq!(candidate.extra.spawn_tags, ["travelling"]);
+            assert!(game.common.mobs.is_empty());
+            assert!(!game.common.persist.raw.contains_key(&id));
+            assert!(!game.common.persist.uuids.contains_key(&id));
+            assert!(game.common.persist.transient.contains(&id));
+
+            game.server.natural_admission = None;
+            let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
+            game.common.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
+            game.remove_vehicle_tree(id);
+            assert!(!game.common.persist.transient.contains(&id));
+        });
+    }
+}

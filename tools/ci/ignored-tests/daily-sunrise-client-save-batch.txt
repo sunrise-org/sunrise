@@ -10,3 +10,9 @@ sunrise-gameplay game::server_side::levels::tests::idle_eviction_keeps_the_refus
 sunrise-gameplay game::server_side::general_server::tests::failed_general_tree_transfer_flushes_leaves_before_restoring_original_rows lib daily resources
 sunrise-gameplay game::server_side::levels::tests::destructive_entity_snapshot_captures_rows_before_section_eviction lib daily resources
 sunrise-gameplay game::server_side::native_entity_remove::tests::pending_item_removal_retracts_membership_before_the_retirement_callback lib daily resources
+sunrise-gameplay game::server_side::persist::unload_sweep::departure_order_tests::refused_vehicle_eviction_uses_only_surviving_riders lib daily resources
+sunrise-gameplay game::server_side::persist::departure_order_tests::reconstruction_captures_natural_candidate_before_detaching_saved_tags lib daily resources
+sunrise-gameplay game::server_side::dragon::residency::departure_order_tests::dragon_discard_forgets_part_sidecars_while_the_dragon_is_present lib daily resources
+sunrise-gameplay game::server_side::native_entities::departure_order_tests::refused_join_detaches_a_vetoed_candidate_before_forgetting_and_drops_a_panicking_one lib daily resources
+sunrise-gameplay game::server_side::native_entity_remove::departure_order_tests::pending_sweep_retracts_projectiles_before_earlier_queued_non_projectiles lib daily resources
+sunrise-gameplay game::server_side::levels::departure_order_tests::mounted_portal_arrival_lands_passenger_before_root_in_an_earlier_level lib daily resources

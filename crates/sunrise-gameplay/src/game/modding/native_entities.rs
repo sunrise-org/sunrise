@@ -851,3 +851,56 @@ mod tests {
         });
     }
 }
+
+#[cfg(test)]
+mod departure_order_tests {
+    use super::*;
+    use crate::game::{
+        native_entity_refs::tests::with_resident_game, natural_spawning::NaturalAdmission,
+    };
+    use sunrise_sim::mobs::Mob;
+
+    #[test]
+    #[ignore = "daily"]
+    fn refused_join_detaches_a_vetoed_candidate_before_forgetting_and_drops_a_panicking_one() {
+        with_resident_game(|game| {
+            let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
+            for admission in [
+                Ok(()),
+                Err(Box::new("join panicked") as Box<dyn std::any::Any + Send>),
+            ] {
+                let id = game.take_entity_id();
+                game.common
+                    .mobs
+                    .push(Mob::new(id, kind.clone(), Vec3::ZERO, 0.0));
+                game.server.natural_admission = Some(NaturalAdmission::Placed {
+                    level: game.common.dim,
+                    id,
+                    join: game.common.mobs[0].join,
+                });
+                game.common.persist.raw.insert(
+                    id,
+                    Tag::compound([("Tags", Tag::List(vec![Tag::String("candidate".into())]))]),
+                );
+
+                game.retire_refused_join(
+                    Slot::Walk(super::super::entity::EntityHandle::Mob(0)),
+                    id,
+                    &admission,
+                );
+
+                match &game.server.natural_admission {
+                    Some(NaturalAdmission::Detached(mob)) if admission.is_ok() => {
+                        assert_eq!(mob.extra.spawn_tags, ["candidate"]);
+                    }
+                    Some(NaturalAdmission::Placed { id: candidate, .. }) if admission.is_err() => {
+                        assert_eq!(*candidate, id);
+                    }
+                    _ => panic!("wrong natural candidate ownership after refusal"),
+                }
+                assert!(game.common.mobs.is_empty());
+                assert!(!game.common.persist.raw.contains_key(&id));
+            }
+        });
+    }
+}

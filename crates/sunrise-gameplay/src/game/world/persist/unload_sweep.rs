@@ -243,3 +243,77 @@ impl crate::game::ServerGame<'_> {
         }
     }
 }
+
+#[cfg(test)]
+mod departure_order_tests {
+    use super::*;
+    use crate::game::native_entity_refs::tests::with_resident_game;
+    use sunrise_gameplay_common::game::boats_common::Boat;
+
+    #[test]
+    #[ignore = "daily"]
+    fn refused_vehicle_eviction_uses_only_surviving_riders() {
+        with_resident_game(|game| {
+            let mob_type = game.res.mob_types().get("minecraft:pig").unwrap().clone();
+            let mut setup = |x| {
+                let at = Vec3::new(x, 64.0, 0.5);
+                let boat = game.take_entity_id();
+                let rider = game.take_entity_id();
+                game.retain_refused_admission(
+                    boat,
+                    OffLevel::Boat(Boat::new(boat, "oak".into(), at, 0.0)),
+                );
+                let mut mob = Mob::new(rider, mob_type.clone(), at, 0.0);
+                mob.extra.mount = Some(boat);
+                game.common.mobs.push(mob);
+                (boat, rider)
+            };
+            let (leaving, leaving_rider) = setup(0.5);
+            let (staying, staying_rider) = setup(32.5);
+            let orphan = game.take_entity_id();
+            game.retain_refused_admission(
+                orphan,
+                OffLevel::Boat(Boat::new(orphan, "oak".into(), Vec3::ZERO, 0.0)),
+            );
+            game.common
+                .persist
+                .unknown
+                .insert((0, 0), vec![Tag::Int(1)]);
+            game.common
+                .persist
+                .unknown
+                .insert((2, 0), vec![Tag::Int(2)]);
+            for id in [leaving, leaving_rider, staying, orphan] {
+                game.common.persist.uuids.insert(id, [0, 0, 0, id as i32]);
+            }
+
+            game.remove_unloading_entities(&HashSet::from([(0, 0)]));
+
+            assert_eq!(
+                game.common
+                    .mobs
+                    .iter()
+                    .map(|mob| mob.id)
+                    .collect::<Vec<_>>(),
+                [staying_rider]
+            );
+            assert_eq!(
+                game.common
+                    .persist
+                    .off_level
+                    .keys()
+                    .copied()
+                    .collect::<Vec<_>>(),
+                [staying]
+            );
+            for id in [leaving, leaving_rider, orphan] {
+                assert!(!game.common.persist.uuids.contains_key(&id));
+            }
+            assert!(game.common.persist.uuids.contains_key(&staying));
+            assert_eq!(
+                game.common.persist.unknown,
+                HashMap::from([((2, 0), vec![Tag::Int(2)])])
+            );
+        });
+    }
+}

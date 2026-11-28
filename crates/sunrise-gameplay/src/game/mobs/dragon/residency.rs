@@ -67,3 +67,32 @@ impl crate::game::ServerGame<'_> {
         );
     }
 }
+
+#[cfg(test)]
+mod departure_order_tests {
+    use super::*;
+    use crate::game::native_entity_refs::tests::with_resident_game;
+
+    #[test]
+    #[ignore = "daily"]
+    fn dragon_discard_forgets_part_sidecars_while_the_dragon_is_present() {
+        with_resident_game(|game| {
+            let mut dragon = Dragon::new(Vec3::ZERO, 0.0, 0);
+            dragon.id = 100;
+            game.replace_resident_dragon(dragon);
+            let ids = (0..8).map(|part| dragon_part_id(100, part)).chain([100]);
+            for id in ids.clone() {
+                game.common.persist.no_physics.insert(id, true);
+                game.common.persist.uuids.insert(id, [0, 0, 0, id as i32]);
+            }
+
+            game.discard_resident_dragon();
+
+            assert!(game.common.dragon.as_ref().is_none());
+            for id in ids {
+                assert!(!game.common.persist.no_physics.contains_key(&id));
+                assert!(!game.common.persist.uuids.contains_key(&id));
+            }
+        });
+    }
+}

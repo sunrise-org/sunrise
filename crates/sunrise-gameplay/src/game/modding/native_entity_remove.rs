@@ -902,3 +902,101 @@ mod tests {
         });
     }
 }
+
+#[cfg(test)]
+mod departure_order_tests {
+    use super::*;
+    use crate::game::native_entity_refs::tests::with_resident_game;
+    use mod_api::{EntityLeaveLevelEvent, Hooks, ServerHost};
+    use std::sync::{Arc, Mutex};
+    use sunrise_gameplay_common::game::boats_common::Boat;
+    use sunrise_sim::{
+        join_seq::residency::{Change, Journal},
+        projectiles::{Projectile, ProjectileKind},
+    };
+
+    #[derive(Default)]
+    struct Observations {
+        setup: Option<(u32, u32, Journal)>,
+        at_first_leave: Option<(Vec<u32>, bool)>,
+    }
+
+    struct Observer(Arc<Mutex<Observations>>);
+
+    #[mod_api::__subscriptions]
+    impl Hooks for Observer {
+        fn entity_leave_level(
+            &self,
+            host: &mut dyn ServerHost,
+            event: &mut EntityLeaveLevelEvent<'_>,
+        ) {
+            let mut observations = self.0.lock().unwrap();
+            let Some((first, second, journal)) = &observations.setup else {
+                return;
+            };
+            if event.entity != *first {
+                return;
+            }
+            let mut events = Vec::new();
+            journal.drain_into(&mut events);
+            let removed = events
+                .into_iter()
+                .filter_map(|event| match event.change {
+                    Change::Remove(identity) => Some(identity.id.get()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            observations.at_first_leave = Some((removed, host.entity(*second).is_none()));
+        }
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn pending_sweep_retracts_projectiles_before_earlier_queued_non_projectiles() {
+        let observations = Arc::new(Mutex::new(Observations::default()));
+        mod_platform::testing::with_mods(
+            vec![mod_api::ModEntry::new(
+                "departure-order",
+                Box::new(Observer(observations.clone())),
+            )]
+            .into(),
+            || {
+                with_resident_game(|game| {
+                    let first = game.take_entity_id();
+                    let second = game.take_entity_id();
+                    let projectile = game.take_entity_id();
+                    let at = Vec3::new(0.5, 64.0, 0.5);
+                    for id in [first, second] {
+                        game.common.boats.push(Boat::new(id, "oak".into(), at, 0.0));
+                    }
+                    let mut shot = Projectile::new(ProjectileKind::Snowball, at, None);
+                    shot.id = projectile;
+                    game.common.creatures.projectiles.push(shot);
+                    game.native_joins_flush(false, 0);
+                    assert!(game.entity(second).is_some());
+                    let journal = game
+                        .common
+                        .resident_entities
+                        .table
+                        .borrow()
+                        .producer()
+                        .observe_structural_events();
+                    observations.lock().unwrap().setup = Some((first, second, journal));
+                    game.common.persist.removals.extend([
+                        Target::Boat(first),
+                        Target::Projectile(projectile),
+                        Target::Boat(second),
+                    ]);
+
+                    game.native_removals_flush();
+
+                    assert_eq!(
+                        observations.lock().unwrap().at_first_leave,
+                        Some((vec![projectile, first], true))
+                    );
+                    assert!(game.common.boats.is_empty());
+                })
+            },
+        );
+    }
+}
