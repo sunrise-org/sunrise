@@ -16,6 +16,11 @@ mod stubs {
                 &mut self.id
             }
         }
+        impl Declaration for mod_api::mod_api::CreativeTab {
+            fn id(&mut self) -> &mut String {
+                &mut self.id
+            }
+        }
         pub(in crate::tests) type DeclarationRefusal = ();
         pub(in crate::tests) type DeclarationSink<'a, D> =
             dyn FnMut(Answered<D>) -> Result<(), DeclarationError> + 'a;

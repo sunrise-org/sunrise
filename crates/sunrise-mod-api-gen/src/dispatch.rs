@@ -351,7 +351,7 @@ pub(super) fn emit<'a>(
                 Contract::Collect
                     if answered
                         && answered_batch(&reference.elem).is_none()
-                        && !(matches!(name, "blocks" | "items")
+                        && !(matches!(name, "blocks" | "items" | "creative_tabs")
                             && declaration_sink(&reference.elem).is_some()) =>
                 {
                     return Err(format!("{name}: output must be Vec<Answered<T>>"));
@@ -582,7 +582,7 @@ pub(super) fn emit<'a>(
         // The checked declaration view replaces the old plain collect output.
         // Surface export reads the input tree's types, including older trees.
         let declaration = match (name, output.as_ref()) {
-            ("blocks" | "items", Some((_, Type::Reference(output)))) => {
+            ("blocks" | "items" | "creative_tabs", Some((_, Type::Reference(output)))) => {
                 declaration_sink(&output.elem)
                     .or_else(|| answered_batch(&output.elem))
                     .map(ToTokens::to_token_stream)
