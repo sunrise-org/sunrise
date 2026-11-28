@@ -329,6 +329,20 @@ impl Renderer {
                         let sections = &self.visible_renderable_sections;
                         let (stage, color, depth) = match boundary {
                             WorldBoundary::AfterSky => {
+                                // Passes scheduled before the `AfterSky` stage run ahead of
+                                // its listeners on this route too.
+                                execute_pack_fg_slot(
+                                    &mut frame_graph,
+                                    mod_frame_graph::FrameGraphSlot::BeforeStage(
+                                        mod_api::RenderLevelStage::AfterSky,
+                                    ),
+                                    &self.device,
+                                    &self.queue,
+                                    encoder,
+                                    world_primitives.as_mut(),
+                                    &self.mod_gpu.render_targets,
+                                    &self.transient_targets,
+                                );
                                 hooks.on_after_sky(sections, false);
                                 execute_pack_fg_slot(
                                     &mut frame_graph,

@@ -1243,18 +1243,10 @@ impl Renderer {
         self.hook_geometry.see_through.clear();
         self.hook_geometry.prepared_draws.clear();
         self.hook_geometry.text_patches.clear();
-        if live_hooks && let Some(hooks) = hooks.as_deref_mut() {
-            if sky_stage == Some(SkyStageOwner::Engine) {
-                hooks.on_after_sky(&self.visible_renderable_sections, hook_oit);
-            }
-            hooks.on_prepare_render_buffers(
-                &self.visible_renderable_sections,
-                hook_oit,
-                &mut self.hook_geometry,
-            );
-            self.prepared_draws
-                .append(&mut self.hook_geometry.prepared_draws);
-        }
+        // The recorded frame graph has been complete since `frame_graph_setup` fired, long
+        // before the sky pass, and taking it does not depend on the stage buffers prepared
+        // below: take and compile it now so the pre-stage slot can run before the `AfterSky`
+        // notification.
         let mut frame_graph = if live_hooks
             && let Some(hooks) = hooks.as_deref_mut()
             && let Some(recorded) = hooks.take_frame_graph()
@@ -1268,6 +1260,42 @@ impl Renderer {
         } else {
             None
         };
+        // Passes scheduled before the `AfterSky` stage run here on the separate-sky route:
+        // after the sky pass, before its listeners. Queued storage writes land first, as they
+        // do ahead of the later slots. The slot is not gated on the stage's owner, so a mod
+        // with no `render_level_stage` listener still gets the position.
+        if separate_sky
+            && sky_stage == Some(SkyStageOwner::Engine)
+            && frame_graph.as_ref().is_some_and(|fg| {
+                fg.has_slot(mod_frame_graph::FrameGraphSlot::BeforeStage(
+                    mod_api::RenderLevelStage::AfterSky,
+                ))
+            })
+        {
+            self.flush_mod_storage();
+            post::execute_pack_fg_slot(
+                &mut frame_graph,
+                mod_frame_graph::FrameGraphSlot::BeforeStage(mod_api::RenderLevelStage::AfterSky),
+                &self.device,
+                &self.queue,
+                &mut encoder,
+                self.world_primitives.as_mut(),
+                &self.mod_gpu.render_targets,
+                &self.transient_targets,
+            );
+        }
+        if live_hooks && let Some(hooks) = hooks.as_deref_mut() {
+            if sky_stage == Some(SkyStageOwner::Engine) {
+                hooks.on_after_sky(&self.visible_renderable_sections, hook_oit);
+            }
+            hooks.on_prepare_render_buffers(
+                &self.visible_renderable_sections,
+                hook_oit,
+                &mut self.hook_geometry,
+            );
+            self.prepared_draws
+                .append(&mut self.hook_geometry.prepared_draws);
+        }
         // Upload both mods' stage batches and deferred geometry through the same path, before
         // the first consuming pass. Stage listeners may only reference these prepared ranges.
         let world_primitives = !frame.title && {
@@ -2379,6 +2407,37 @@ impl Renderer {
                     sky_switches,
                     hdr_gain,
                 );
+                // Passes scheduled before the `AfterSky` stage run after the inline sky
+                // content and before its listeners, mirroring the separate-sky route. The
+                // slot is not gated on the stage's owner, so a mod with no
+                // `render_level_stage` listener still gets the position; the classic pack
+                // route delivers its own boundary in PackPost instead.
+                if sky_stage != Some(SkyStageOwner::ClassicPack)
+                    && frame_graph.as_ref().is_some_and(|fg| {
+                        fg.has_slot(mod_frame_graph::FrameGraphSlot::BeforeStage(
+                            mod_api::RenderLevelStage::AfterSky,
+                        ))
+                    })
+                {
+                    drop(pass);
+                    post::execute_pack_fg_slot(
+                        &mut frame_graph,
+                        mod_frame_graph::FrameGraphSlot::BeforeStage(
+                            mod_api::RenderLevelStage::AfterSky,
+                        ),
+                        &self.device,
+                        &self.queue,
+                        &mut encoder,
+                        self.world_primitives.as_mut(),
+                        &self.mod_gpu.render_targets,
+                        &self.transient_targets,
+                    );
+                    let mut resumed =
+                        after_culling_pass(&mut encoder, world_view, world_depth, true, None)
+                            .forget_lifetime();
+                    resumed.set_bind_group(0, &self.group, &[]);
+                    pass = pack_timing::CountedPass::plain(resumed);
+                }
                 // The inline sky boundary does not lend the world pass to mods.
                 if sky_stage == Some(SkyStageOwner::Inline)
                     && let Some(hooks) = hooks.as_deref_mut()
