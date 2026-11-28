@@ -43,6 +43,11 @@ scoreboard tag without allocating. To read all tags, the
 yields UTF-16 slices in saved order. Choose checked or lossy conversion explicitly
 when you need UTF-8.
 
+## Reading an entity replica's saved data
+
+For a client-side structure capture, call `EntityRef::client_nbt` with the `ClientHost`
+from the hook. Use `EntityRef::nbt` on the server when you need the server's own state instead.
+
 ## Opening a container
 
 `player_container_open` runs synchronously after a successful open. Failed opens and opening the player's

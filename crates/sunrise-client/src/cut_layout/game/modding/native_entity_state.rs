@@ -1,5 +1,9 @@
 #![cfg(test)]
 use mod_api::EntityRef;
+
+#[cfg(feature = "client")]
+#[path = "native_entity_nbt.rs"]
+mod client_nbt_tests;
 #[cfg(test)]
 pub(crate) mod tests {
 

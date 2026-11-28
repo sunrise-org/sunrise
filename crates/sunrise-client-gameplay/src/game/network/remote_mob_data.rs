@@ -111,7 +111,11 @@ pub(in crate::game) fn apply(
             // AgeableMob.isBaby: `canBeABaby` too, so a parrot or a slime
             // sent as one is still drawn grown.
             (i, Value::Bool(b)) if Some(i) == baby => {
-                m.extra.age = if *b && can_be_a_baby(species) { -1 } else { 0 };
+                m.extra.age = if *b && can_be_a_baby(species) {
+                    -1
+                } else {
+                    i32::from(finalize::ageable(species) && can_be_a_baby(species))
+                };
             }
             // AgeableMob.AGE_LOCKED, the entry after DATA_BABY_ID (not
             // Zombie's or Piglin's).
@@ -585,6 +589,10 @@ impl ClientGame<'_> {
 /// what `Mob::new` gives, such as a wolf's and a cat's red collar.
 pub(in crate::game) fn client_defaults(m: &mut Mob) {
     m.air = m.max_air_supply();
+    // AgeableMob.getAge reads the synced baby flag as -1 or 1 on the client.
+    if finalize::ageable(m.species()) && can_be_a_baby(m.species()) {
+        m.extra.age = 1;
+    }
     if matches!(m.species(), Species::Wolf | Species::Cat) {
         m.extra.color = tame::RED;
     }

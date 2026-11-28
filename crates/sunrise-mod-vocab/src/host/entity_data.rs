@@ -14,6 +14,19 @@ pub trait EntityDataBackend {
     /// to convert them to UTF-8.
     fn entity_tags(&self, entity: EntityRef) -> Option<EntityTags<'_>>;
 }
+/// The handles' client reads of the `entity_data` area, reached through [`Backend`].
+#[doc(hidden)]
+#[sunrise_mod_api_macros::host_area]
+pub trait EntityDataClientBackend {
+    /// Side: client.
+    /// Saves the client replica as `Entity.saveWithoutId` does, without the root `id`.
+    /// This is not a copy of server NBT: it uses the replica's own state and defaults
+    /// for data the server never synced. Saved passengers have their own `id` and
+    /// follow the same nesting rules as [`EntityRef::nbt`].
+    /// Returns `None` for a stale or unmaterialised entity, a player, a dragon part,
+    /// or a fishing hook. Does not assign a UUID or send a packet.
+    fn entity_client_nbt(&self, entity: EntityRef) -> Option<Compound>;
+}
 /// The handles' writes of the `entity_data` area, implemented by the game and reached through [`BackendMut`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait
 #[doc(hidden)]

@@ -2,7 +2,7 @@ use mod_api::{Billboard, ItemDisplayContext, TextAlignment, Transformation};
 use std::sync::Arc;
 use sunrise_core::nbt::Tag;
 use sunrise_game_data::nbt_path::int_value;
-use sunrise_items::item_nbt::{item_from_nbt, item_to_nbt};
+use sunrise_items::item_nbt::item_from_nbt;
 use sunrise_sim::{
     entity_nbt,
     save::{float, number, text},
@@ -111,80 +111,6 @@ impl crate::game::ServerGame<'_> {
             _ => return None,
         };
         Some(read_display_fields(contents, tag))
-    }
-
-    /// `Display.addAdditionalSaveData`: save the settings as the codecs read
-    /// them, including defaults. The raw start delay is only used by tracking.
-    pub(super) fn write_display_nbt(&self, state: &DisplayState, tag: &mut Tag) {
-        let Tag::Compound(fields) = tag else { return };
-        let real = |v: f32| Tag::Float(if v == 0.0 { 0 } else { v.to_bits() });
-        let floats = |parts: &[f32]| Tag::List(parts.iter().copied().map(real).collect());
-        let t = state.transformation;
-        let transform = Tag::compound([
-            ("translation", floats(&t.translation)),
-            ("left_rotation", floats(&t.left_rotation)),
-            ("scale", floats(&t.scale)),
-            ("right_rotation", floats(&t.right_rotation)),
-        ]);
-        for (key, value) in [
-            ("transformation", transform),
-            ("billboard", Tag::String(state.billboard.name().into())),
-            (
-                "interpolation_duration",
-                Tag::Int(state.interpolation_duration),
-            ),
-            ("teleport_duration", Tag::Int(state.teleport_duration)),
-            ("view_range", real(state.view_range)),
-            ("shadow_radius", real(state.shadow_radius)),
-            ("shadow_strength", real(state.shadow_strength)),
-            ("width", real(state.width)),
-            ("height", real(state.height)),
-            ("glow_color_override", Tag::Int(state.glow_color_override)),
-        ] {
-            fields.insert(key.into(), value);
-        }
-        fields.remove(&"start_interpolation".into());
-        if let Some((block, sky)) = state.brightness {
-            fields.insert(
-                "brightness".into(),
-                Tag::compound([
-                    ("block", Tag::Int(i32::from(block))),
-                    ("sky", Tag::Int(i32::from(sky))),
-                ]),
-            );
-        } else {
-            fields.remove(&"brightness".into());
-        }
-        match &state.contents {
-            DisplayContents::Block(state) => {
-                fields.insert("block_state".into(), self.common.state_to_nbt(*state));
-            }
-            DisplayContents::Item { stack, context } => {
-                fields.insert("item_display".into(), Tag::String(context.name().into()));
-                if let Some(stack) = stack {
-                    fields.insert("item".into(), item_to_nbt(stack, self.items()));
-                } else {
-                    fields.remove(&"item".into());
-                }
-            }
-            DisplayContents::Text(text) => {
-                for (key, value) in [
-                    ("text", text.component.to_nbt()),
-                    ("line_width", Tag::Int(text.line_width)),
-                    ("background", Tag::Int(text.background)),
-                    ("text_opacity", Tag::Byte(text.opacity)),
-                    ("shadow", Tag::Byte(i8::from(text.shadow))),
-                    ("see_through", Tag::Byte(i8::from(text.see_through))),
-                    (
-                        "default_background",
-                        Tag::Byte(i8::from(text.default_background)),
-                    ),
-                    ("alignment", Tag::String(text.alignment.name().into())),
-                ] {
-                    fields.insert(key.into(), value);
-                }
-            }
-        }
     }
 }
 

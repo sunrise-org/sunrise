@@ -1,5 +1,6 @@
 //! Server text displays: metadata, interpolation, billboard transforms and world text.
 use crate::game::ClientGame;
+use std::sync::Arc;
 use sunrise_assets::item_model::DisplayContext;
 use sunrise_client::{
     gfx::{
@@ -12,6 +13,9 @@ use sunrise_client::{
 use sunrise_game_data::text::Text;
 use sunrise_items::items::ItemStack;
 use sunrise_protocol::entity_data::Value;
+use sunrise_sim::text_display_data::resident::{
+    DisplayComponent, DisplayContents, DisplayState, DisplayText,
+};
 use sunrise_world::registry::BlockStateId;
 
 /// What a display shows besides its transformation: its text (in `data`),
@@ -46,6 +50,8 @@ impl Shows {
 
 pub struct RemoteTextDisplay {
     pub data: TextDisplayData,
+    /// The synced text component in its saved representation, before render projection.
+    saved_text: Option<Arc<DisplayComponent>>,
     pub(in crate::game) join: sunrise_sim::join_seq::JoinSeq,
     pub(in crate::game) shows: Shows,
     /// Pending synced sub-state fields (`BlockDisplay` id 23, `ItemDisplay` ids 23-24).
@@ -273,6 +279,7 @@ impl RemoteTextDisplay {
         let pos = glam::DVec3::from(position);
         let mut display = Self {
             data: Default::default(),
+            saved_text: None,
             join: sunrise_sim::join_seq::JoinSeq::next(),
             shows,
             pending_block: None,
@@ -548,6 +555,65 @@ impl RemoteTextDisplay {
             self.dirty = true;
         }
     }
+    /// Project the current synced values, not the display's interpolated render state.
+    pub(in crate::game) fn save_state(&self) -> DisplayState {
+        let d = &self.data;
+        let contents = match self.shows {
+            Shows::Block => DisplayContents::Block(
+                self.pending_block
+                    .unwrap_or(sunrise_world::registry::BlockStateId(0)),
+            ),
+            Shows::Item => DisplayContents::Item {
+                stack: self.pending_item.clone().map(Arc::new),
+                context: mod_api::ItemDisplayContext::ALL
+                    .get(usize::from(self.pending_item_display))
+                    .copied()
+                    .unwrap_or(mod_api::ItemDisplayContext::None),
+            },
+            Shows::Text => DisplayContents::Text(DisplayText {
+                component: self.saved_text.clone().unwrap_or_default(),
+                line_width: d.line_width,
+                background: d.background,
+                opacity: d.opacity,
+                shadow: d.flags & 1 != 0,
+                see_through: d.flags & 2 != 0,
+                default_background: d.flags & 4 != 0,
+                alignment: match d.align() {
+                    sunrise_client::text_display::Align::Left => mod_api::TextAlignment::Left,
+                    sunrise_client::text_display::Align::Right => mod_api::TextAlignment::Right,
+                    sunrise_client::text_display::Align::Center => mod_api::TextAlignment::Center,
+                },
+            }),
+        };
+        DisplayState {
+            transformation: mod_api::Transformation {
+                translation: d.translation,
+                left_rotation: d.left_rotation,
+                scale: d.scale,
+                right_rotation: d.right_rotation,
+            },
+            billboard: mod_api::Billboard::ALL
+                .get(usize::from(d.billboard))
+                .copied()
+                .unwrap_or(mod_api::Billboard::Fixed),
+            brightness: (d.brightness != -1).then(|| {
+                (
+                    ((d.brightness >> 4) & 15) as u8,
+                    ((d.brightness >> 20) & 15) as u8,
+                )
+            }),
+            view_range: d.view_range,
+            shadow_radius: d.shadow_radius,
+            shadow_strength: d.shadow_strength,
+            width: d.width,
+            height: d.height,
+            glow_color_override: d.glow_color,
+            interpolation_duration: d.interpolation_duration,
+            start_interpolation: d.interpolation_delay,
+            teleport_duration: self.interp_length,
+            contents,
+        }
+    }
     pub fn metadata(&mut self, values: &[(u8, i32, Value)]) {
         let mut culling_dirty = false;
         for (id, _, value) in values {
@@ -562,6 +628,10 @@ impl RemoteTextDisplay {
                 (9, _) => self.duration_dirty = true,
                 (10, Value::Int(v)) => self.interp_length = *v,
                 (20 | 21, _) => culling_dirty = true,
+                (23, Value::Text(tag)) if self.shows == Shows::Text => {
+                    self.saved_text = DisplayComponent::from_nbt(tag).map(Arc::new);
+                    self.dirty = true;
+                }
                 (id, _) if renders(self.shows, *id) => self.dirty = true,
                 _ => {}
             }

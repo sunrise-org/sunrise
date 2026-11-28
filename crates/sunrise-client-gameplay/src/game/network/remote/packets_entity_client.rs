@@ -331,30 +331,27 @@ impl crate::game::ClientGame<'_> {
         let single = std::slice::from_ref(entry);
         let size_key = self.synched_size_key(id as u32);
         if let Some(r) = self.client.remote.as_mut() {
+            if let Some(t) = r.entities.get_mut(&id) {
+                match (index, value) {
+                    (0, Value::Byte(flags)) => t.on_fire = flags & 1 != 0,
+                    (1, Value::Int(air)) => t.air_supply = Some(*air),
+                    (2, Value::OptText(name)) => t.custom_name = name.clone(),
+                    (2, Value::Text(name)) => t.custom_name = Some(name.clone()),
+                    (3, Value::Bool(visible)) => t.custom_name_visible = *visible,
+                    (4, Value::Bool(silent)) => t.silent = *silent,
+                    (5, Value::Bool(no_gravity)) => t.no_gravity = *no_gravity,
+                    (7, Value::Int(ticks)) => t.ticks_frozen = *ticks,
+                    _ => {}
+                }
+            }
             match (index, value) {
-                (0, Value::Byte(flags)) => {
-                    if let Some(t) = r.entities.get_mut(&id) {
-                        t.on_fire = flags & 1 != 0;
-                    }
-                    if flags & 0x40 != 0 {
-                        r.glowing.insert(id);
-                    } else {
-                        r.glowing.remove(&id);
-                    }
+                (0, Value::Byte(flags)) if flags & 0x40 != 0 => {
+                    r.glowing.insert(id);
                 }
-                (4, Value::Bool(silent)) => {
-                    if id == r.entity_id {
-                        r.local_entity_silent = *silent;
-                    }
-                    if let Some(t) = r.entities.get_mut(&id) {
-                        t.silent = *silent;
-                    }
+                (0, Value::Byte(_)) => {
+                    r.glowing.remove(&id);
                 }
-                (5, Value::Bool(no_gravity)) => {
-                    if let Some(t) = r.entities.get_mut(&id) {
-                        t.no_gravity = *no_gravity;
-                    }
-                }
+                (4, Value::Bool(silent)) if id == r.entity_id => r.local_entity_silent = *silent,
                 _ => {}
             }
             // Entity.DATA_CUSTOM_NAME and DATA_CUSTOM_NAME_VISIBLE of a general row.

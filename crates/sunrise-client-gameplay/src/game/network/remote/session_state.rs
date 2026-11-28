@@ -67,6 +67,11 @@ pub struct Tracked {
     pub silent: bool,
     /// Retained for an item before its stack arrives and creates its body.
     pub no_gravity: bool,
+    /// Inherited saved fields, including for bodies that don't model them themselves.
+    pub air_supply: Option<i32>,
+    pub custom_name: Option<sunrise_core::nbt::Tag>,
+    pub custom_name_visible: bool,
+    pub ticks_frozen: i32,
     /// `Entity.vehicle`: the entity it rides (`SetPassengers`), whatever either one's type.
     pub vehicle: Option<u32>,
     /// `Entity.tickCount` of this client's copy: the ticks the client level gave it since the
@@ -92,6 +97,10 @@ impl Tracked {
             mod_fire_immune: false,
             silent: false,
             no_gravity: false,
+            air_supply: None,
+            custom_name: None,
+            custom_name_visible: false,
+            ticks_frozen: 0,
             vehicle: None,
             tick_count: 0,
             size_answer: None,

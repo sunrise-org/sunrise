@@ -190,9 +190,6 @@ impl crate::game::ServerGame<'_> {
         uuid: [i32; 4],
         include_id: bool,
     ) -> sunrise_core::nbt::Tag {
-        use sunrise_core::nbt::{Compound, Tag};
-        let double = |v: f64| Tag::Double(if v == 0.0 { 0 } else { v.to_bits() });
-        let float = |v: f32| Tag::Float(if v == 0.0 { 0 } else { v.to_bits() });
         let pos = if let Some(vehicle) = b.mount
             && let Some(vp) = self.vehicle_position_by_id(vehicle)
         {
@@ -200,64 +197,7 @@ impl crate::game::ServerGame<'_> {
         } else {
             b.at
         };
-        let mut c = Compound::new();
-        if include_id {
-            c.insert("id".into(), Tag::String("minecraft:lightning_bolt".into()));
-        }
-        c.insert("Pos".into(), Tag::List(pos.map(double).to_vec()));
-        c.insert(
-            "Motion".into(),
-            Tag::List(
-                [b.velocity.x, b.velocity.y, b.velocity.z]
-                    .map(double)
-                    .to_vec(),
-            ),
-        );
-        c.insert("Rotation".into(), Tag::List(b.rotation.map(float).to_vec()));
-        c.insert("fall_distance".into(), double(b.fall_distance));
-        c.insert("Fire".into(), Tag::Short(b.fire_ticks as i16));
-        c.insert("Air".into(), Tag::Short(b.air as i16));
-        c.insert("OnGround".into(), Tag::Byte(i8::from(b.on_ground)));
-        c.insert("Invulnerable".into(), Tag::Byte(i8::from(b.invulnerable)));
-        c.insert("PortalCooldown".into(), Tag::Int(b.portal_cooldown));
-        if b.invulnerable_time > 0 {
-            c.insert("invulnerable_time".into(), Tag::Int(b.invulnerable_time));
-        }
-        c.insert("UUID".into(), Tag::IntArray(uuid.to_vec()));
-        if let Some(name) = &b.custom_name {
-            c.insert("CustomName".into(), name.clone());
-        }
-        if b.custom_name_visible {
-            c.insert("CustomNameVisible".into(), Tag::Byte(1));
-        }
-        if b.silent {
-            c.insert("Silent".into(), Tag::Byte(1));
-        }
-        if b.no_gravity {
-            c.insert("NoGravity".into(), Tag::Byte(1));
-        }
-        if b.glowing {
-            c.insert("Glowing".into(), Tag::Byte(1));
-        }
-        if b.ticks_frozen > 0 {
-            c.insert("TicksFrozen".into(), Tag::Int(b.ticks_frozen));
-        }
-        if b.has_visual_fire {
-            c.insert("HasVisualFire".into(), Tag::Byte(1));
-        }
-        if let Some(raw) = self.common.persist.raw.get(&b.id) {
-            if let Some(Tag::List(tags)) = raw.get("Tags")
-                && !tags.is_empty()
-            {
-                c.insert("Tags".into(), Tag::List(tags.clone()));
-            }
-            if let Some(Tag::Compound(data)) = raw.get("data")
-                && !data.is_empty()
-            {
-                c.insert("data".into(), Tag::Compound(data.clone()));
-            }
-        }
-        Tag::Compound(c)
+        b.to_nbt(pos, uuid, include_id, self.common.persist.raw.get(&b.id))
     }
     pub(in crate::game::server_side) fn vehicle_position_by_id(
         &self,

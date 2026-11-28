@@ -203,6 +203,85 @@ impl Base<'_> {
     }
 }
 
+/// Write an ordered tree of passenger saves, omitting a rider's subtree when its
+/// own save is unavailable. Build it bottom-up without recursing through rides.
+pub fn write_passenger_tree<C>(
+    cx: &mut C,
+    tag: &mut Tag,
+    id: u32,
+    passengers: impl Fn(&C, u32) -> Vec<u32>,
+    mut own_nbt: impl FnMut(&mut C, u32) -> Option<Tag>,
+) {
+    // Leave room for the enclosing save and the entity's own data.
+    const SAVE_NESTING_MARGIN: usize = 64;
+    const ROOT: usize = usize::MAX;
+    let mut nodes: Vec<(usize, Tag)> = Vec::new();
+    let mut pending: Vec<(usize, u32)> = passengers(cx, id)
+        .into_iter()
+        .rev()
+        .map(|rider| (ROOT, rider))
+        .collect();
+    // Nesting of each node under `tag`: one compound and one list per level.
+    let mut levels: Vec<usize> = Vec::new();
+    while let Some((parent, rider)) = pending.pop() {
+        let level = if parent == ROOT {
+            1
+        } else {
+            levels[parent] + 1
+        };
+        // The disk writer's own recursion guard: past it no tree can be written, so a chain
+        // this deep is cut here and said so, never built (its drop would recurse as deep).
+        if level * 2 + SAVE_NESTING_MARGIN > sunrise_core::nbt::DISK_WRITE_NESTING_GUARD {
+            log::error!("entity {rider}: passenger chain deeper than {level} riders is not saved");
+            continue;
+        }
+        let Some(own) = own_nbt(cx, rider) else {
+            continue;
+        };
+        let node = nodes.len();
+        levels.push(level);
+        nodes.push((parent, own));
+        pending.extend(
+            passengers(cx, rider)
+                .into_iter()
+                .rev()
+                .map(|child| (node, child)),
+        );
+    }
+    let mut attached: Vec<Vec<Tag>> = (0..=nodes.len()).map(|_| Vec::new()).collect();
+    for (node, (parent, mut own)) in nodes.into_iter().enumerate().rev() {
+        let mut children = std::mem::take(&mut attached[node]);
+        children.reverse();
+        add_passengers(&mut own, children);
+        let slot = if parent == ROOT {
+            attached.len() - 1
+        } else {
+            parent
+        };
+        attached[slot].push(own);
+    }
+    let mut riders = attached.pop().unwrap_or_default();
+    riders.reverse();
+    add_passengers(tag, riders);
+}
+
+/// `riders` under `tag`'s `Passengers`, after the passengers it kept from
+/// loading (`Entity.saveWithoutId`).
+pub fn add_passengers(tag: &mut Tag, riders: Vec<Tag>) {
+    if let Tag::Compound(c) = tag {
+        let mut list = match c.get(&"Passengers".into()) {
+            Some(Tag::List(l)) => l.clone(),
+            _ => Vec::new(),
+        };
+        list.extend(riders);
+        if list.is_empty() {
+            c.remove(&"Passengers".into());
+        } else {
+            c.insert("Passengers".into(), Tag::List(list));
+        }
+    }
+}
+
 /// `Entity.saveWithoutId`'s common fields for entities Sunrise keeps as raw
 /// compounds: each one is inserted only when the loaded compound has no value
 /// for it, so explicit values survive.

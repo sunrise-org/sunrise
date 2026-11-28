@@ -206,17 +206,27 @@ pub fn fireball_to_nbt(
 /// `Projectile.addAdditionalSaveData`: Owner, LeftOwner only when set, and
 /// the explicit HasBeenShot flag.
 fn put_projectile(tag: &mut Tag, p: &Projectile, owner: Option<[i32; 4]>) {
+    put_projectile_flags(tag, p.left_owner, p.has_been_shot, p.no_gravity, owner);
+}
+
+fn put_projectile_flags(
+    tag: &mut Tag,
+    left_owner: bool,
+    has_been_shot: bool,
+    no_gravity: bool,
+    owner: Option<[i32; 4]>,
+) {
     if let Tag::Compound(map) = tag {
         map.remove(&"LeftOwner".into());
     }
-    if p.left_owner {
+    if left_owner {
         put(tag, "LeftOwner", Tag::Byte(1));
     }
     // Entity.saveWithoutId writes NoGravity only when set.
-    if p.no_gravity {
+    if no_gravity {
         put(tag, "NoGravity", Tag::Byte(1));
     }
-    put(tag, "HasBeenShot", Tag::Byte(i8::from(p.has_been_shot)));
+    put(tag, "HasBeenShot", Tag::Byte(i8::from(has_been_shot)));
     if let Some(owner) = owner {
         put(tag, "Owner", Tag::IntArray(owner.to_vec()));
     }
@@ -394,16 +404,38 @@ pub fn throwable_to_nbt(
         on_ground: p.ground.on_ground,
         fall_distance: p.fall_distance,
     };
+    Some(thrown_item_to_nbt(
+        base,
+        &stack,
+        p.has_been_shot,
+        Some(p),
+        owner,
+        raw,
+        items,
+    ))
+}
+
+/// `ThrowableItemProjectile.addAdditionalSaveData`. A client potion or
+/// bottle with a separate body has no `Projectile` fields beyond the shot flag.
+pub fn thrown_item_to_nbt(
+    base: Base<'_>,
+    stack: &crate::items::ItemStack,
+    has_been_shot: bool,
+    projectile: Option<&Projectile>,
+    owner: Option<[i32; 4]>,
+    raw: Option<&Tag>,
+    items: &crate::items::Items,
+) -> Tag {
     let mut tag = base.tag(raw);
-    put_projectile(&mut tag, p, owner);
-    put_projectile_entity_fields(&mut tag, p);
-    // Entity.saveWithoutId writes NoGravity only when set.
-    if p.no_gravity {
-        put(&mut tag, "NoGravity", Tag::Byte(1));
+    if let Some(p) = projectile {
+        put_projectile(&mut tag, p, owner);
+        put_projectile_entity_fields(&mut tag, p);
+    } else {
+        // Projectile.checkLeftOwner succeeds on the first tick without an owner.
+        put_projectile_flags(&mut tag, has_been_shot, has_been_shot, false, owner);
     }
-    // ThrowableItemProjectile.addAdditionalSaveData writes the entity's typed Item at count 1.
-    put(&mut tag, "Item", item_to_nbt(&stack, items));
-    Some(tag)
+    put(&mut tag, "Item", item_to_nbt(stack, items));
+    tag
 }
 
 /// `ThrowableItemProjectile.readAdditionalSaveData`, validating `Item` against `items`.

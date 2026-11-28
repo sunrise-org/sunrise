@@ -299,7 +299,6 @@ impl crate::game::ClientGame<'_> {
             }
             (mob.yaw, mob.previous_yaw) = (yaw, yaw);
             (mob.head_pitch, mob.previous_head_pitch) = (pitch, pitch);
-            mob.persistent = true;
             self.common.mobs.retain(|m| m.id != id as u32);
             self.common.mobs.push(mob);
         }

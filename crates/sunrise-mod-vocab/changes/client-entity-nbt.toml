@@ -1,0 +1,3 @@
+ids = ["method:EntityRef::client_nbt"]
+why = "Read a materialised non-player entity's saved-data view on the client, using the replica's fields and vanilla defaults rather than requesting server NBT."
+migrate = "Additive. Call EntityRef::client_nbt with a ClientHost; the root has no id tag, while saved passengers keep theirs."

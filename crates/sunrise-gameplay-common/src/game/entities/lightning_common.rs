@@ -105,6 +105,83 @@ impl Bolt {
         )
     }
 
+    /// `LightningBolt` writes only the inherited entity fields.
+    pub fn to_nbt(
+        &self,
+        pos: [f64; 3],
+        uuid: [i32; 4],
+        include_id: bool,
+        raw: Option<&sunrise_core::nbt::Tag>,
+    ) -> sunrise_core::nbt::Tag {
+        use sunrise_core::nbt::{Compound, Tag};
+        let double = |v: f64| Tag::Double(if v == 0.0 { 0 } else { v.to_bits() });
+        let float = |v: f32| Tag::Float(if v == 0.0 { 0 } else { v.to_bits() });
+        let mut c = Compound::new();
+        if include_id {
+            c.insert("id".into(), Tag::String("minecraft:lightning_bolt".into()));
+        }
+        c.insert("Pos".into(), Tag::List(pos.map(double).to_vec()));
+        c.insert(
+            "Motion".into(),
+            Tag::List(
+                [self.velocity.x, self.velocity.y, self.velocity.z]
+                    .map(double)
+                    .to_vec(),
+            ),
+        );
+        c.insert(
+            "Rotation".into(),
+            Tag::List(self.rotation.map(float).to_vec()),
+        );
+        c.insert("fall_distance".into(), double(self.fall_distance));
+        c.insert("Fire".into(), Tag::Short(self.fire_ticks as i16));
+        c.insert("Air".into(), Tag::Short(self.air as i16));
+        c.insert("OnGround".into(), Tag::Byte(i8::from(self.on_ground)));
+        c.insert(
+            "Invulnerable".into(),
+            Tag::Byte(i8::from(self.invulnerable)),
+        );
+        c.insert("PortalCooldown".into(), Tag::Int(self.portal_cooldown));
+        if self.invulnerable_time > 0 {
+            c.insert("invulnerable_time".into(), Tag::Int(self.invulnerable_time));
+        }
+        c.insert("UUID".into(), Tag::IntArray(uuid.to_vec()));
+        if let Some(name) = &self.custom_name {
+            c.insert("CustomName".into(), name.clone());
+        }
+        if self.custom_name_visible {
+            c.insert("CustomNameVisible".into(), Tag::Byte(1));
+        }
+        if self.silent {
+            c.insert("Silent".into(), Tag::Byte(1));
+        }
+        if self.no_gravity {
+            c.insert("NoGravity".into(), Tag::Byte(1));
+        }
+        if self.glowing {
+            c.insert("Glowing".into(), Tag::Byte(1));
+        }
+        if self.ticks_frozen > 0 {
+            c.insert("TicksFrozen".into(), Tag::Int(self.ticks_frozen));
+        }
+        if self.has_visual_fire {
+            c.insert("HasVisualFire".into(), Tag::Byte(1));
+        }
+        if let Some(raw) = raw {
+            if let Some(Tag::List(tags)) = raw.get("Tags")
+                && !tags.is_empty()
+            {
+                c.insert("Tags".into(), Tag::List(tags.clone()));
+            }
+            if let Some(Tag::Compound(data)) = raw.get("data")
+                && !data.is_empty()
+            {
+                c.insert("data".into(), Tag::Compound(data.clone()));
+            }
+        }
+        Tag::Compound(c)
+    }
+
     /// `Entity.load` inherited fields (`LightningBolt.readAdditionalSaveData` is empty).
     pub fn apply_nbt(&mut self, tag: &sunrise_core::nbt::Tag) {
         use sunrise_game_data::nbt_path::int_value;

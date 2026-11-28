@@ -8,6 +8,9 @@ use mod_api::{EntityRef, LevelReadError, LevelRef};
 use sunrise_core::geometry::{Aabb, Vec3};
 use sunrise_sim::join_seq::residency::table::SectionSearch;
 
+#[path = "native_entity_nbt_client.rs"]
+mod nbt;
+
 impl crate::game::ClientGame<'_> {
     /// `LevelRenderer.destroyBlockProgress` for this client's own view only.
     pub(in crate::game) fn level_set_client_break_progress(

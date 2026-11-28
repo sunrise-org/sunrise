@@ -1,0 +1,2 @@
+# #6232: compare client packet replicas with server entity saves in a fresh process.
+sunrise-client cut_layout::game::server_side::native_entity_state::client_nbt_tests::replica_nbt_matches_synced_fields_and_keeps_client_defaults lib daily child-process

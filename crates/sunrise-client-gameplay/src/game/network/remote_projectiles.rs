@@ -953,7 +953,7 @@ impl crate::game::ClientGame<'_> {
                 age: 0,
                 no_gravity: false,
                 portal: Default::default(),
-                drop_item: false,
+                drop_item: true,
                 fall_distance: 0.0,
                 ground: Default::default(),
                 fire_ticks: 0,

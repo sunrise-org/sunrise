@@ -116,7 +116,7 @@ impl Rocket {
             previous: position,
             velocity,
             life: 0,
-            lifetime: i32::MAX,
+            lifetime: 0,
             explosions: explosions.into(),
             attached: false,
             guest: None,
@@ -129,8 +129,7 @@ impl Rocket {
             item: item.into(),
             random: sunrise_sim::projectiles::unique_random(position),
             ground: Default::default(),
-            // The server posts the shot.
-            has_been_shot: true,
+            has_been_shot: false,
             silent: false,
             fall_distance: 0.0,
             stuck: Vec3::ZERO,
@@ -241,6 +240,10 @@ impl Rocket {
     pub fn remote_step(&mut self, motion: sunrise_sim::motion::BodyMotion<'_>) {
         self.previous = self.position;
         self.previous_rotation = self.rotation;
+        // Projectile.tick sets these even on a replica. The rocket spawn
+        // packet does not carry an owner, so it starts outside the owner range.
+        self.has_been_shot = true;
+        self.left_owner = true;
         if self.attached_to.is_none() {
             let mut scene = SceneCollisions {
                 world: motion.world,
