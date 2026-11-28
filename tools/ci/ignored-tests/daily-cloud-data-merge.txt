@@ -1,0 +1,4 @@
+# PACKAGE TEST TARGET daily REASON; exact logical libtest identities, sorted.
+# /data merge reloading live area-effect clouds (#6769).
+sunrise-client cut_layout::game::server_side::commands_server::data::tests::a_data_merge_keeps_a_lingering_clouds_live_potion_and_victims lib daily child-process
+sunrise-client cut_layout::game::server_side::commands_server::data::tests::a_data_merge_keeps_generated_dragon_clouds_in_the_dragon_tick lib daily child-process
