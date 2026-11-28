@@ -204,22 +204,34 @@ impl ServerGame<'_> {
         let Some(conn) = self.server.lan_acting else {
             return;
         };
-        if let Some(i) = self.common.boats.iter().position(|b| b.id == vehicle) {
+        if let Some(i) = self
+            .common
+            .entities
+            .boats
+            .iter()
+            .position(|b| b.id == vehicle)
+        {
             let seat = self.position_boat_player(i);
             if let Some(p) = self.common.player.as_mut() {
                 p.position = seat;
             }
-        } else if let Some(c) = self.common.carts.iter().find(|c| c.id == vehicle) {
+        } else if let Some(c) = self.common.entities.carts.iter().find(|c| c.id == vehicle) {
             let seat = sunrise_gameplay_common::game::minecarts::player_cart_seat(c.position);
             if let Some(p) = self.common.player.as_mut() {
                 p.position = seat;
             }
-        } else if let Some(c) = self.common.cushions.iter().find(|c| c.id == vehicle) {
+        } else if let Some(c) = self
+            .common
+            .entities
+            .cushions
+            .iter()
+            .find(|c| c.id == vehicle)
+        {
             let seat = c.seat();
             if let Some(p) = self.common.player.as_mut() {
                 p.position = seat;
             }
-        } else if self.common.mobs.iter().any(|m| m.id == vehicle) {
+        } else if self.common.entities.mobs.iter().any(|m| m.id == vehicle) {
             self.position_rider();
         }
         let Some(p) = self.common.player.as_mut() else {
@@ -230,6 +242,7 @@ impl ServerGame<'_> {
         let seat = [p.position.x, p.position.y, p.position.z];
         let effects: Vec<_> = self
             .common
+            .entities
             .mobs
             .iter()
             .find(|m| m.id == vehicle)

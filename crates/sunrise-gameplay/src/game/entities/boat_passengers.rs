@@ -234,7 +234,7 @@ impl crate::game::ServerGame<'_> {
     pub(in crate::game) fn position_boat_player(&mut self, i: usize) -> Vec3 {
         self.common.yaw = sunrise_level::camera_math::clamp_boat_rotation(
             self.common.yaw,
-            self.common.boats[i].yaw,
+            self.common.entities.boats[i].yaw,
         )
         .0;
         self.player_boat_seat(i)
