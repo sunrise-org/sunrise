@@ -2,8 +2,6 @@ sunrise-gameplay game::server_side::dedicated::management::tests::management_vie
 sunrise-gameplay game::server_side::functions::tests::tick_functions_write_to_the_overworld_before_its_idle_environment_tick lib daily child-process
 sunrise-gameplay game::server_side::game_tests::tests::game_test_batch_uses_the_weather_parameter_veto lib daily child-process
 sunrise-client cut_layout::game::server_side::integrated::tests::owner_distances_follow_the_server_tick lib daily child-process
-sunrise-client cut_layout::game::server_side::native_hooks_server::server_tick_rate_changed::server_tick_rate_changed_tests::a_listener_runs_before_the_autosave_wait_is_adjusted lib daily child-process
-sunrise-client cut_layout::game::server_side::native_hooks_server::server_tick_rate_changed::server_tick_rate_changed_tests::a_mod_hears_every_route_of_on_tick_rate_changed_once lib daily child-process
 sunrise-client cut_layout::game::server_side::native_level_border::tests::border_setters_notify_the_named_level lib daily child-process
 sunrise-client cut_layout::game::server_side::native_level_weather::tests::local_difficulty_reaches_the_game lib daily child-process
 sunrise-client cut_layout::game::server_side::native_level_weather::tests::weather_parameters_are_shared_and_strengths_are_local lib daily child-process

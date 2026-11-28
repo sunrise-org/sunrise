@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tools import merge_base
-from tools.ci import check_ignored_test_rows as check, ignored_inventory, ignored_shards, ignored_tests
+from tools.ci import check_ignored_test_rows as check, ignored_inventory, ignored_shards, ignored_tests, rust_tests
 
 
 class WindowsTargetCoverage(unittest.TestCase):
@@ -57,6 +57,45 @@ class WindowsTargetCoverage(unittest.TestCase):
 
     def test_the_launcher_workspace_is_not_supported(self):
         self.assertIn("only supported in the game workspace, not launcher", self.problems(package="launcher")[0])
+
+
+class IgnoredSourceCoverage(unittest.TestCase):
+    def test_compiled_out_items_do_not_shift_active_function_lines(self):
+        source = '''\
+#[cfg(any())] mod culled {
+    #[test] #[ignore = "daily"] fn dead_inside() {}
+}
+mod inner_culled {
+    #![cfg(any())]
+    #[test] #[ignore = "daily"] fn dead_inside_inner() {}
+}
+#[cfg(any())] #[test] #[ignore = "daily"] fn dead_fn() {}
+#[cfg_attr(test, cfg(any()))] #[test] #[ignore = "daily"] fn dead_attr() {}
+#[cfg_attr(all(), cfg(any()))] #[test] #[ignore = "daily"] fn dead_always_attr() {}
+#[cfg(false)] #[test] fn dead_false() {}
+#[cfg(not(all()))] #[test] fn dead_not_all() {}
+#[cfg(not(test))] fn dead_outside_tests() {}
+#[cfg(test)] #[test] #[ignore = "daily"] fn active() {}
+#[cfg(feature = "client")] #[test] fn optional() {}
+'''
+        self.assertEqual(rust_tests.functions('// File docs\n#![cfg(any())]\n' + source), [])
+        found = rust_tests.functions(source, rust_tests.DAILY_KEEP)
+        self.assertEqual([(fn.name, fn.line, fn.is_daily) for fn in found],
+                         [("active", 14, True), ("optional", 15, False)])
+
+    def test_ignored_functions_only_scan_reachable_paths_when_supplied(self):
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        live = "crates/game/src/lib.rs"
+        dead = "crates/game/src/culled.rs"
+        git(root, "init", "-q")
+        (root / live).parent.mkdir(parents=True)
+        (root / live).write_text('#[cfg(any())] mod culled;\n#[test] #[ignore = "daily"] fn live() {}\n')
+        (root / dead).write_text('#[test] #[ignore = "daily"] fn dead() {}\n')
+        git(root, "add", "--", live, dead)
+        with patch.object(check, "source_packages", return_value={"crates/game": {"game"}}):
+            self.assertCountEqual([item[0] for item in check.ignored_functions(root)], [live, dead])
+            self.assertEqual(check.ignored_functions(root, reachable={live}),
+                             [(live, 2, "live", {"game"}, "lib", True)])
 
 
 LEGACY_VARIABLES = ("SUNRISE_TEST_RESOURCES", "SUNRISE_RESOURCES", "SUNRISE_MESH_TEST_RESOURCES",

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Every Rust file under a workspace crate's `src/` is compiled: a `mod` item or an `include!` reaches it.
+"""Every Rust file under a workspace crate's `src/` has a `mod` or `include!` declaration.
 
     python3 tools/ci/check_unreached_sources.py
 
 Modules are plain `mod` items (`game.rs` names each file of a `game/<area>/` folder with a `#[path]`), so a file
-nobody declares is not compiled, and its tests do not run. This walks every workspace target with the compiler's
-module rules (sunrise-game-discovery `--files`) and names each `.rs` file under a member's `src/` that no target
-reaches. CI's verify-static runs it.
+nobody declares is not compiled, and its tests do not run. This walks workspace targets' declarations
+(sunrise-game-discovery `--declared-files`), including cfg-gated modules, and names each `.rs` file under a
+member's `src/` that no target reaches. CI's verify-static runs it.
 """
 
 import os
@@ -29,7 +29,8 @@ def reached(root: Path, targets) -> set[str]:
     command = [binary] if binary else ["cargo", "run", "--quiet", "--locked", "-p", "sunrise-game-discovery",
                                       "--bin", "sunrise-game-discovery", "--"]
     inputs = "".join("\t".join(row) + "\n" for row in targets)
-    result = subprocess.run([*command, str(root), "--files"], input=inputs, capture_output=True, text=True, cwd=ROOT)
+    result = subprocess.run([*command, str(root), "--declared-files"], input=inputs, capture_output=True,
+                            text=True, cwd=ROOT)
     if result.returncode:
         raise SystemExit(f"module walk failed ({result.returncode}):\n{result.stderr}")
     return {line.replace(os.sep, "/") for line in result.stdout.splitlines()}

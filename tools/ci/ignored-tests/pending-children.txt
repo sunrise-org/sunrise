@@ -22,5 +22,4 @@ sunrise-client cut_layout::game::server_side::creatures_server::pending_birth_te
 sunrise-client cut_layout::game::creatures::pending_birth_tests::a_waiting_baby_publishes_its_uuid_only_when_it_joins lib daily game-boot
 sunrise-client cut_layout::game::server_side::creatures_server::pending_birth_tests::breeding_spawns_after_parent_host_edit_and_cancel_resets_both_parents lib daily game-boot
 sunrise-client cut_layout::game::creatures::pending_birth_tests::detached_constructed_baby_preserves_attachments_and_reattaches_across_worlds_without_collision lib daily game-boot
-sunrise-client cut_layout::game::creatures::pending_birth_tests::mob_split_constructs_all_children_before_any_join_and_cleans_up_on_unwind lib daily game-boot
 sunrise-client cut_layout::game::creatures::pending_birth_matrix_tests::native_pending_children_shared_matrix lib daily child-process
