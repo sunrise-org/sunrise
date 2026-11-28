@@ -48,7 +48,7 @@ impl crate::game::ServerGame<'_> {
         let saved = (|| -> Result<_> {
             let keys = plan.unloading_columns();
             if keys.is_empty() {
-                return Ok(Vec::new());
+                return Ok((Vec::new(), HashSet::new()));
             }
             self.admit_level_save()?;
             let chunks = self.with_entities(
@@ -56,21 +56,27 @@ impl crate::game::ServerGame<'_> {
                     .filter(|key| self.common.world.modified.contains(key))
                     .filter_map(|key| self.common.world.chunks.get(key)),
             );
+            // `SaveDir::entity_records` is the single filter for failed entity
+            // reads: capture the unloading snapshots, then remove and notify
+            // only for the chunks that were actually queued/saved.
             let (entities, refused_entities) = self.unloading_entity_snapshots(keys);
             let mut counts = Vec::new();
             if mod_api::__private::listened(mod_api::HookId::EntitiesUnload) {
                 counts.extend(entities.iter().map(|(key, rows)| (*key, rows.len())));
             }
-            if wait {
+            let saved_entities = if wait {
+                let mut saved_entities: HashSet<_> = entities.iter().map(|(key, _)| *key).collect();
                 let refused = self.server.save.0.save_eviction(
                     &chunks,
                     self.common.pack.assets.registry,
                     world_biomes!(self),
                     entities,
                 )?;
+                saved_entities.retain(|key| !refused.contains(key));
                 plan.retain_unloading_columns(|key| {
                     !refused.contains(key) && !refused_entities.contains(key)
                 });
+                saved_entities
             } else {
                 if !chunks.is_empty() {
                     self.server.save.0.save_later(
@@ -79,10 +85,11 @@ impl crate::game::ServerGame<'_> {
                         world_biomes!(self),
                     )?;
                 }
-                self.server.save.0.save_entities_later(entities)?;
+                let saved_entities = self.server.save.0.save_entities_later(entities)?;
                 plan.retain_unloading_columns(|key| !refused_entities.contains(key));
-            }
-            Ok(counts)
+                saved_entities
+            };
+            Ok((counts, saved_entities))
         })();
         if saved.is_err() {
             plan.keep_columns();
@@ -112,10 +119,14 @@ impl crate::game::ServerGame<'_> {
             self.common.world.modified.unloaded(key);
         }
         if !unloaded_columns.is_empty() {
-            self.remove_unloading_entities(unloaded_columns);
-            if let Ok(counts) = &saved {
+            if let Ok((counts, saved_entities)) = &saved {
+                let removed_entities: HashSet<_> = saved_entities
+                    .intersection(unloaded_columns)
+                    .copied()
+                    .collect();
+                self.remove_unloading_entities(&removed_entities);
                 for &(chunk, count) in counts {
-                    if unloaded_columns.contains(&chunk) {
+                    if removed_entities.contains(&chunk) {
                         self.native_entities_unload(dim.id(), [chunk.0, chunk.1], count);
                     }
                 }

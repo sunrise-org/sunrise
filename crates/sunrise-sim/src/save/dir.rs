@@ -847,9 +847,16 @@ impl SaveDir {
     pub fn save_entities(&self, chunks: Vec<((i32, i32), Vec<Tag>)>) -> Result<()> {
         self.queue(Folder::Entities, self.entity_records(chunks, None), true)
     }
-    /// `save_entities` on the writer thread.
-    pub fn save_entities_later(&self, chunks: Vec<((i32, i32), Vec<Tag>)>) -> Result<()> {
-        self.queue(Folder::Entities, self.entity_records(chunks, None), false)
+    /// `save_entities` on the writer thread. Returns the entity chunk keys
+    /// actually queued (excluding any whose earlier read failed).
+    pub fn save_entities_later(
+        &self,
+        chunks: Vec<((i32, i32), Vec<Tag>)>,
+    ) -> Result<HashSet<(i32, i32)>> {
+        let records = self.entity_records(chunks, None);
+        let queued = records.iter().map(|(key, _)| *key).collect();
+        self.queue(Folder::Entities, records, false)?;
+        Ok(queued)
     }
     /// `PersistentEntitySectionManager.storeChunkSections`: never store a pending entity chunk.
     fn entity_records(

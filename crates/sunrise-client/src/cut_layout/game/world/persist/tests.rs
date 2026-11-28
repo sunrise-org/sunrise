@@ -176,6 +176,102 @@ use sunrise_sim::save::text;
 
 include!("position_load_tests.rs");
 
+#[test]
+#[ignore = "daily"]
+fn terrain_unload_keeps_entities_in_a_pending_entity_chunk() {
+    use sunrise_gameplay::game::native_entity_refs::tests::with_game;
+    use sunrise_sim::save::{LevelShape, SaveDir};
+
+    // The chunks are neighbors in separate regions, so the failed read in B
+    // cannot affect accesses to A's file.
+    let a = (31, 0);
+    let b = (32, 0);
+    let at_a = [500.0, 64.0, 4.0];
+    let at_b: [f64; 3] = [516.0, 64.0, 4.0];
+    let disk = tempfile::tempdir().unwrap();
+    let open_save = || SaveDir::new(disk.path().to_owned(), LevelShape::OVERWORLD, None);
+    let stored = Tag::compound([
+        ("id", Tag::String("minecraft:text_display".into())),
+        ("UUID", Tag::IntArray(vec![0, 0, 0, 1])),
+        (
+            "Pos",
+            Tag::List(at_b.into_iter().map(|v| Tag::Double(v.to_bits())).collect()),
+        ),
+    ]);
+    open_save()
+        .save_entities(vec![(b, vec![stored.clone()])])
+        .unwrap();
+    let region = disk.path().join("entities/r.1.0.mca");
+    let saved = std::fs::read(&region).unwrap();
+    let mut broken = saved.clone();
+    let sector = u32::from_be_bytes(saved[..4].try_into().unwrap()) >> 8;
+    let compression = sector as usize * 4096 + 4;
+    // Make B fail decompression regardless of the configured save compression.
+    broken[compression..][..2]
+        .copy_from_slice(&[sunrise_world::compression::Compression::Zlib as u8, 0]);
+    std::fs::write(&region, &broken).unwrap();
+
+    mod_platform::testing::with_mods(Default::default(), || {
+        with_game(|game| {
+            game.server.save.0 = Arc::new(open_save());
+            // B becomes resident only after the first save: a resident, empty B
+            // would make that save delete B's unread record.
+            game.world
+                .chunks
+                .insert(a, Arc::new(Chunk::empty(a.0, a.1)));
+            let target = game
+                .summon_with_nbt("minecraft:text_display", at_a, "{UUID:[I;0,0,0,2]}")
+                .unwrap()
+                .unwrap();
+            let display = game
+                .entity(game.resident_target_id(target).unwrap())
+                .unwrap();
+            game.save_entities(true).unwrap();
+            assert_eq!(game.server.save.0.load_entities(a.0, a.1).unwrap().len(), 1);
+            game.world
+                .chunks
+                .insert(b, Arc::new(Chunk::empty(b.0, b.1)));
+            assert!(display.teleport_to(game, at_b, None));
+
+            let chunk_a = game.world.chunks.remove(&a).unwrap();
+            let _chunk_b = game.world.chunks.remove(&b).unwrap();
+            let keys = HashSet::from([a, b]);
+            let (entities, refused_entities) = game.unloading_entity_snapshots(&keys);
+            assert!(refused_entities.is_empty());
+            // Latch B's read failure even after snapshot capture: `entity_records`
+            // is the single filter and `save_entities_later` returns only the
+            // chunks actually queued (`{a}`), so B's live entity stays resident.
+            assert!(game.server.save.0.load_entities(b.0, b.1).is_err());
+            let queued = game.server.save.0.save_entities_later(entities).unwrap();
+            assert_eq!(queued, HashSet::from([a]));
+            game.remove_unloading_entities(&queued);
+            game.server.save.0.flush().unwrap();
+            assert_eq!(display.position(game), Some(at_b));
+            assert!(
+                game.server
+                    .save
+                    .0
+                    .load_entities(a.0, a.1)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert_eq!(std::fs::read(&region).unwrap(), broken);
+
+            // Keep the unread record intact. The live display can be saved
+            // once it moves back out of the failed entity chunk.
+            std::fs::write(&region, &saved).unwrap();
+            game.world.chunks.insert(a, chunk_a);
+            assert!(display.teleport_to(game, at_a, None));
+            game.save_entities(true).unwrap();
+        });
+    });
+    let reopened = open_save();
+    let live = reopened.load_entities(a.0, a.1).unwrap();
+    assert_eq!(live.len(), 1);
+    assert_eq!(entity_nbt::uuid(&live[0]), Some([0, 0, 0, 2]));
+    assert_eq!(reopened.load_entities(b.0, b.1).unwrap(), vec![stored]);
+}
+
 mod transient_entities {
     use super::*;
     use mod_api::EntityRef;
