@@ -2,8 +2,8 @@
 #![forbid(unsafe_code)]
 
 #[cfg(test)]
-#[used]
-static KEEP_TEST_PLATFORM: fn() = mod_platform::__private::test_platform::keep;
+mod_platform::__install_engine_test_platform!();
+
 #[macro_use]
 extern crate sunrise_gameplay_common;
 pub mod allays;
