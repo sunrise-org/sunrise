@@ -129,6 +129,11 @@ impl Pack {
         self
     }
 
+    /// The option values chosen in [`Pack::with_chosen`], by name.
+    pub(crate) fn chosen(&self) -> &BTreeMap<String, String> {
+        &self.chosen
+    }
+
     /// The folder or file name the pack was opened from (`BSL.zip`).
     pub fn name(&self) -> &str {
         &self.name
@@ -165,15 +170,20 @@ impl Pack {
     /// A text file, decoded as UTF-8 (invalid bytes replaced) without its byte-order mark, with
     /// the chosen option values in its sources.
     pub fn read_text(&self, path: &str) -> Option<String> {
-        let bytes = self.read(path)?;
-        let text = String::from_utf8_lossy(&bytes);
-        let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
+        let text = self.read_text_as_written(path)?;
         let source = !path.ends_with(".properties") && !path.ends_with(".lang");
         Some(if source && !self.chosen.is_empty() {
-            crate::options::apply(text, &self.chosen)
+            crate::options::apply(&text, &self.chosen)
         } else {
-            text.to_owned()
+            text
         })
+    }
+
+    /// [`Pack::read_text`] without the chosen option values: the file as the pack wrote it.
+    pub(crate) fn read_text_as_written(&self, path: &str) -> Option<String> {
+        let bytes = self.read(path)?;
+        let text = String::from_utf8_lossy(&bytes);
+        Some(text.strip_prefix('\u{feff}').unwrap_or(&text).to_owned())
     }
 
     pub fn exists(&self, path: &str) -> bool {
@@ -216,6 +226,28 @@ impl Pack {
         };
         names.sort();
         names
+    }
+
+    /// The names of the files directly inside a folder of the pack that [`Pack::exists`] finds,
+    /// a link to a file among them, sorted.
+    pub(crate) fn files_in(&self, dir: &str) -> Vec<String> {
+        let Some(dir) = normalize(dir) else {
+            return Vec::new();
+        };
+        match &self.files {
+            Files::Folder(root) => {
+                let mut names: Vec<String> = fs::read_dir(root.join(&dir))
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .filter(|e| e.path().is_file())
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect();
+                names.sort();
+                names
+            }
+            Files::Zip { .. } => self.list(&dir),
+        }
     }
 
     /// Every file of the pack, by its path inside `shaders`, sorted.

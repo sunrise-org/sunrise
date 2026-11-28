@@ -15,11 +15,6 @@ over the scenario, and must never fall between two packets of one tick.
 
   python3 tools/test_wire_stream_parity.py                      # every scenario
   python3 tools/test_wire_stream_parity.py --scenarios walk,bow --keep
-  python3 tools/test_wire_stream_parity.py --clients sunrise,sunrise-legacy   # Legacy (1.8.9) combat feel
-
-The second form plays the same scenarios with two Sunrise clients, the second set to the Legacy combat feel with
-every combat extra on (sunrise-extras.txt: `LEGACY_EXTRAS`), and compares their streams the same way: the feel
-changes what the player sees and hears, never what the client sends.
 
 Sunrise runs `--headless` (no window or GPU: the ticks are what it sends from); the vanilla client runs on the
 virtual screen (`vscreen`) on Linux, from the logged-in session on macOS. Every game and server here runs in fresh temporary folders (SUNRISE_HOME,
@@ -69,11 +64,8 @@ TARGET = ('summon minecraft:husk {x} {y} {z} {{NoAI:1b,Silent:1b,PersistenceRequ
 PRELUDE = 10
 # Client ticks between a reset's last teleport and the scenario: the player lands and stands still.
 SETTLE = 40
-# The Legacy client's sunrise-extras.txt (crates/sunrise-client-render/src/pvp.rs): the 1.8.9 feel, its
-# indicator and sounds.
-LEGACY_EXTRAS = 'combatFeel:legacy\ncombatIndicator:true\ncombatSounds:true\n'
 # The clients --clients may name: the first is the reference, the second must send what it sends.
-CLIENTS = {'vanilla': 'vanilla', 'sunrise': 'Sunrise', 'sunrise-legacy': 'Sunrise Legacy'}
+CLIENTS = {'vanilla': 'vanilla', 'sunrise': 'Sunrise'}
 
 
 def taps(key, ticks):
@@ -274,13 +266,10 @@ class HeadlessGame(Game):
     """server_pack_e2e's game, `--headless`: no display, window or GPU; the frame and the ticks run as a
     window's do (game/runtime/headless.rs), and only the ticks' packets matter here."""
 
-    def __init__(self, bins, resources, work, scripts, extras=None):
+    def __init__(self, bins, resources, work, scripts):
         self.home = work / 'home'
         for d in ('home', 'launcher', 'data', 'config'):
             (work / d).mkdir(parents=True)
-        if extras:
-            # The game folder is the home here (Game runs sunrise-ctl there): extras sit next to options.txt.
-            (self.home / 'sunrise-extras.txt').write_text(extras)
         self.env = lab.game_env(SUNRISE_HOME=self.home, SUNRISE_LAUNCHER_HOME=work / 'launcher',
                                 XDG_DATA_HOME=work / 'data', XDG_CONFIG_HOME=work / 'config',
                                 SUNRISE_TELEMETRY_URL='off', SUNRISE_TICK_SCRIPT=scripts / 'scenario.json')
@@ -291,9 +280,9 @@ class HeadlessGame(Game):
 
 
 class SunriseClient:
-    def __init__(self, bins, resources, work, address, scripts, extras=None):
+    def __init__(self, bins, resources, work, address, scripts):
         self.scripts = scripts
-        self.game = HeadlessGame(bins, resources, work, scripts, extras)
+        self.game = HeadlessGame(bins, resources, work, scripts)
         self.game('connect', address, PLAYER)
         self.game('wait-for', 'loaded', '--timeout', 180)
 
@@ -404,7 +393,7 @@ def run(args, out):
             try:
                 if who != 'vanilla':
                     client = SunriseClient(Path(args.bin).resolve(), resources, work / who, f'127.0.0.1:{listen}',
-                                           scripts, LEGACY_EXTRAS if who == 'sunrise-legacy' else None)
+                                           scripts)
                 else:
                     client = VanillaClient(f'127.0.0.1:{listen}', work / 'vanilla', out / 'vanilla-client.log')
                     if not client.ready.wait(900):
@@ -477,8 +466,8 @@ def main():
     parser.add_argument('--out', default=str(lab.LOCAL / 'wire-stream-parity'))
     parser.add_argument('--scenarios', default=','.join(SCENARIOS), type=lambda s: s.split(','))
     parser.add_argument('--clients', default='vanilla,sunrise', type=lambda s: s.split(','),
-                        help='the reference client and the one compared with it, of vanilla, sunrise and '
-                             'sunrise-legacy; one alone is only captured (a loaded machine whose vanilla client fails '
+                        help='the reference client and the one compared with it, of vanilla and sunrise; '
+                             'one alone is only captured (a loaded machine whose vanilla client fails '
                              'to log in: rerun sunrise alone, copy an earlier vanilla.jsonl into --out, then '
                              '--compare-only)')
     parser.add_argument('--compare-only', action='store_true', help='compare the captures already in --out')

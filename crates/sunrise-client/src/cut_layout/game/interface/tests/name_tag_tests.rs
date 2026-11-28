@@ -117,7 +117,7 @@ fn game<'a>(
     game.block_ticks
         .add_empty_chunk(ChunkPos::new(0, 0))
         .unwrap();
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)));
     game.selected = 0;
     game.set_mode_id(0);
     game
@@ -169,7 +169,7 @@ fn client_game<'a>(
     game.world
         .chunks
         .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)));
     game.client.screen = Screen::Playing;
     game.selected = 0;
     game

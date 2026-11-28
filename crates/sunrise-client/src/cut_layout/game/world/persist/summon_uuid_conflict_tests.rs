@@ -408,7 +408,7 @@ fn with_game(test: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>, u32)
             .add_empty_chunk(ChunkPos::new(0, 0))
             .unwrap();
         assert!(game.run_command("forceload add 0 0"));
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)));
         game.creative = true;
         // Setup controls: the live actors the later trees name.
         assert!(summon(game, "h160_existing", 100, ""));

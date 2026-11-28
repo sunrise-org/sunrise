@@ -19,6 +19,7 @@ pub struct Options<'a> {
     /// The package identity and internals already checked by `prebuilt::compile`.
     pub sdk: &'a prebuilt::Identity,
     pub catalog: &'a internals::Catalog,
+    pub diagnostics: super::BuildDiagnostics,
 }
 
 fn compiler_plan(
@@ -547,25 +548,23 @@ pub(super) fn stage_and_cargo(
         // Not `json-render-diagnostics`: Cargo would print every diagnostic again on its standard
         // error, at the staged files. The failure shows them from the messages, at the author's.
         .arg("--message-format=json");
-    // Cargo's per-crate timings (`target/cargo-timings/`), for the check that measures where a
-    // registry build's time goes; a player's kept build folder doesn't collect them.
-    if std::env::var_os("SUNRISE_NATIVE_CARGO_TIMINGS").is_some() {
+    // Opt in to Cargo's per-unit timings in the kept target folder.
+    if options.diagnostics.timings == super::Timings::Html {
         command.arg("--timings");
     }
     let wrapper = compiler_plan(rust, game, bindings);
     wrapper.configure(&mut command, &out.join("rustc-plan.json"), options.adapter)?;
     let messages = out.join("cargo-messages.jsonl");
-    let result = super::run_checked(
+    let (result, outputs) = super::run_cargo_messages(
         command,
         if check_only {
             tr("Checking native mod libraries")
         } else {
             tr("Compiling registry mod libraries")
         },
-        Some(fs::File::create(&messages).map_err(|e| e.to_string())?),
-        None,
-    );
-    let outputs = super::registry_runtime::Outputs::read(&messages)?;
+        fs::File::create(&messages).map_err(|e| e.to_string())?,
+        options.diagnostics.stderr,
+    )?;
     if let Some(patch) = &patch {
         patch.log()?;
     }
@@ -1298,6 +1297,7 @@ mod tests {
                 mixins: &crate::MixinsIdentity::resolve([&bundle], None).unwrap(),
                 sdk: &sdk,
                 catalog: &catalog,
+                diagnostics: super::super::BuildDiagnostics::default().with_env(),
             },
             false,
         );

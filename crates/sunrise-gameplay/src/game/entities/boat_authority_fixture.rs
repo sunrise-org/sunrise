@@ -52,8 +52,7 @@ impl ServerGame<'_> {
             boat.velocity = Vec3::new(x, y, z);
             boat.delta_rotation = case.spin;
             self.common.boats.push(boat);
-            let mut player =
-                sunrise_sim::motion::PlayerMotion::new(self.common.motion, Vec3::ZERO)?;
+            let mut player = sunrise_sim::motion::PlayerMotion::new(self.common.motion, Vec3::ZERO);
             player.velocity = Vec3::new(
                 attack.player_velocity[0],
                 attack.player_velocity[1],

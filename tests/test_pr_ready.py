@@ -165,10 +165,10 @@ class PrReadyTests(unittest.TestCase):
                 if wrapper is not None:
                     env["RUSTC_WRAPPER"] = wrapper
                 steps = [pr_ready.Step(name, "printf 'ran\\n'")
-                         for name in ("clippy", "registry clippy", "dispatch tests clippy")]
+                         for name in ("clippy", "dispatch tests clippy")]
                 with mock.patch.dict(os.environ, env, clear=True), contextlib.redirect_stderr(io.StringIO()) as log:
                     pr_ready.run_script(steps, "local", verbose=False)
-                self.assertEqual([(step.status, step.output.strip()) for step in steps], [("pass", "ran")] * 3)
+                self.assertEqual([(step.status, step.output.strip()) for step in steps], [("pass", "ran")] * 2)
                 expected = wrapper in (None, "", "other-wrapper")
                 self.assertEqual(log.getvalue().count(pr_ready.CLIPPY_CACHE_HINT), int(expected))
                 if expected:
@@ -370,7 +370,7 @@ class PrReadyTests(unittest.TestCase):
                 self.assertIsNone(step.skip)
                 self.assertEqual(step.command, pr_ready.CONTENT_ROOT_TESTS)
 
-    def test_dispatch_and_registry_suites_run_when_their_inputs_change(self):
+    def test_dispatch_suite_runs_when_its_inputs_change(self):
         def suite_steps(path):
             with mock.patch.object(pr_ready, "affected_here", return_value=[]):
                 steps = pr_ready.plan(args(quick=True), "origin/main", {path}, SURFACE_PACKAGES, LIBRARIES,
@@ -389,20 +389,9 @@ class PrReadyTests(unittest.TestCase):
                 self.assertIn("crates/sunrise-mod-api-gen/dispatch-tests/Cargo.toml",
                               by_name["dispatch tests clippy"].command)
                 self.assertIn("--test-threads=4", by_name["dispatch tests tests"].command)
-                self.assertEqual(by_name["mod registry tests clippy"].skip, "mod registry untouched")
-        for path in ["crates/sunrise-mod-registry/src/main.rs", "crates/sunrise-mod-registry/Cargo.toml"]:
-            with self.subTest(path=path):
-                by_name = suite_steps(path)
-                for name in ("mod registry tests clippy", "mod registry tests tests"):
-                    self.assertIsNone(by_name[name].skip)
-                self.assertEqual(by_name["dispatch tests clippy"].skip, "dispatch surface untouched")
-                # A separate workspace: refused by nothing, and none of the root workspace's checks.
-                for name in ("rustfmt", "clippy"):
-                    self.assertEqual(by_name[name].skip, "no Rust change")
-                self.assertEqual(by_name["tests"].skip, "no crate touched")
         by_name = suite_steps("crates/sunrise-core/src/lib.rs")
         self.assertEqual(by_name["dispatch tests clippy"].skip, "dispatch surface untouched")
-        self.assertEqual(by_name["mod registry tests tests"].skip, "mod registry untouched")
+        self.assertEqual(by_name["dispatch tests tests"].skip, "dispatch surface untouched")
 
     def surface_step(self, changed, name="posix", packages=SURFACE_PACKAGES, dependencies=SURFACE_DEPENDENCIES):
         with mock.patch.object(pr_ready, "affected_here", return_value=[]), \
@@ -708,7 +697,7 @@ class PrReadyTests(unittest.TestCase):
         self.assertIn("no workspace crate owns crates/alpha/b.rs, crates/zeta/a.rs:", str(caught.exception))
 
     def test_separate_workspaces_are_not_built_by_the_main_workspace(self):
-        for path in ("crates/sunrise-mod-registry/src/main.rs", "crates/sunrise-telemetry-server/src/main.rs"):
+        for path in ("crates/sunrise-telemetry-server/src/main.rs",):
             with self.subTest(path=path):
                 self.assertFalse(pr_ready.workspace_rust(path))
                 by_name = self.selected_steps({path}, PACKAGES, DEPENDENCIES)
@@ -723,7 +712,7 @@ class PrReadyTests(unittest.TestCase):
 
     def test_full_runs_the_workspace_whatever_changed(self):
         for changed in ({"crates/sunrise-client/src/game/a.rs"}, {"README.md"}, {"crates/unknown/src/lib.rs"},
-                        {"crates/sunrise-mod-registry/src/main.rs"}):
+                        {"crates/sunrise-telemetry-server/src/main.rs"}):
             with self.subTest(changed=changed):
                 by_name = self.selected_steps(changed, full=True)
                 self.assertEqual(by_name["clippy"].command, CLIPPY)

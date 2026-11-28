@@ -1,7 +1,7 @@
 //! Portable hand simulation: arm swing (`LivingEntity.SwingState`,
 //! `getModifiedSwingDuration`), block breaking (`MultiPlayerGameMode`), and
 //! click handling (`Minecraft.startAttack`, `continueAttack`, `startUseItem`).
-pub use mod_api::client::first_person::Hand;
+pub use mod_api::Hand;
 pub use sunrise_items::use_animation::consumable_animation;
 
 /// `SwingAnimation`: its type (`SwingAnimationType` ordinal) and duration.

@@ -22,8 +22,10 @@ public final class VanillaStackMiningOracle {
             + (stack.isDamageableItem() ? stack.getMaxDamage() : 0);
     }
 
+    /** args: inputs, output and, for the pack rows, a data pack whose tags the registries bind. */
     public static void main(String[] args) throws Exception {
-        ParityData.init();
+        if (args.length > 2) ParityData.init(Path.of(args[2]));
+        else ParityData.init();
         var parser = new ItemParser(ParityData.lookup);
         try (var out = new PrintWriter(Files.newBufferedWriter(Path.of(args[1])));
              var lines = Files.lines(Path.of(args[0]))) {

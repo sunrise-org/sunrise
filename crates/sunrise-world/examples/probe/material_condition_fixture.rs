@@ -671,7 +671,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         tag_definitions.apply_json(&name, "vanilla", &json)?;
     }
     let tags = tag_definitions
-        .build(|id, _required| biome_definitions.contains_key(id).then(|| id.to_owned()))?;
+        .bind(|id, _required| biome_definitions.contains_key(id).then(|| id.to_owned()));
     assert!(tags.missing.is_empty());
     let registry = MaterialConditionRegistry::from_json_with_biome_tags(
         &definitions,

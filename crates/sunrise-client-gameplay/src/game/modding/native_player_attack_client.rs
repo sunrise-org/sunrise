@@ -56,8 +56,7 @@ mod tests {
         mod_platform::testing::with_mods(Default::default(), || {
             with_client_game(|game| {
                 let _server = logged_client(game);
-                game.common.player =
-                    Some(PlayerMotion::new(game.common.motion, Vec3::ZERO).unwrap());
+                game.common.player = Some(PlayerMotion::new(game.common.motion, Vec3::ZERO));
                 let local = game.local_player().unwrap();
                 let other = mod_api::__private::game::player_ref(
                     mod_api::EntityRef::new(local.entity().epoch(), 99),

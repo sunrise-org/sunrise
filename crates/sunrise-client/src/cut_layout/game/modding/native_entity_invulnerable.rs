@@ -19,7 +19,7 @@ mod tests {
         mod_platform::testing::with_mods(Default::default(), || {
             with_client_game(|game| {
                 let _server = logged_client(game);
-                game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+                game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
                 let local = game.local_player().unwrap().entity();
                 let health = |game: &mut sunrise_client_gameplay::game::ClientGame<'_>,
                               health: f32| {
@@ -270,8 +270,7 @@ mod tests {
                         Some(true)
                     );
                 }
-                let mut player =
-                    sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::ZERO).unwrap();
+                let mut player = sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::ZERO);
                 player.entity_id = 7;
                 game.player = Some(player);
                 sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 7, 1);
@@ -474,7 +473,7 @@ mod tests {
     fn the_flag_reaches_players_and_non_mobs_and_refuses_player_damage() {
         use sunrise_sim::motion::PlayerMotion;
         super::super::native_entity_refs::tests::with_resident_game(|game| {
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
             let player = game.entity(20).unwrap();
             game.armor_stands
@@ -571,7 +570,7 @@ mod tests {
             game.mobs.clear();
 
             // The player's two, on the same clock.
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
             let player = game.entity(20).unwrap();
             assert!(game.entity_set_damage_cooldown_time(player, 7));
@@ -696,7 +695,7 @@ mod tests {
     fn the_players_permanent_flag_is_apart_from_their_abilities() {
         use sunrise_sim::motion::PlayerMotion;
         super::super::native_entity_refs::tests::with_resident_game(|game| {
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
             let player = game.entity(20).unwrap();
 
@@ -790,7 +789,7 @@ mod tests {
         with_resident_game(|game| {
             // A player's tickets: chunks out of the simulation distance
             // around them do not tick entities.
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             game.update_chunk_tickets();
             let stack = || ItemStack {
                 item: "minecraft:stone".into(),
@@ -835,7 +834,7 @@ mod tests {
             assert!(game.entity_set_invulnerable_time(mob, 3));
             assert_eq!(mob.invulnerable_to_piercing_weapon(game), Some(true));
             // A player's flag, apart from the abilities.
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
             let player = game.entity(20).unwrap();
             assert!(game.entity_set_invulnerable(player, true));
@@ -866,7 +865,7 @@ mod tests {
                 .clone();
             game.mobs
                 .push(Mob::new(300001, zombie, Vec3::new(0.5, 64.0, 0.5), 0.0));
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
             let player = game.entity(20).unwrap();
             // Survival and alive: a zombie takes the player as a target.
@@ -926,7 +925,7 @@ mod tests {
         use sunrise_core::nbt::Tag;
         use sunrise_sim::motion::PlayerMotion;
         with_resident_game(|game| {
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
             let player = game.entity(20).unwrap();
             assert!(game.entity_set_invulnerable(player, true));

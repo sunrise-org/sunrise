@@ -22,7 +22,7 @@ use sunrise_polytone::particles::{CustomParticle, Gpu, RenderType};
 
 /// How a particle quad turns (`rotation_mode`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) enum Orientation {
+pub enum Orientation {
     /// `look_at_xyz`: faces the camera (what every other mode falls back to).
     #[default]
     Camera,
@@ -627,7 +627,7 @@ impl Store {
 /// The packs' GPU particles: each type's records, the ticks they count in and the heightmap
 /// they read.
 #[derive(Default)]
-pub(super) struct GpuParticles {
+pub struct GpuParticles {
     stores: Vec<Store>,
     ticks: u64,
     /// The heights last read (`ParticleEngine::polytone_gpu_decide`) and the tick they were

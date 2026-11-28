@@ -11,7 +11,7 @@ fn wing_contacts_restore_motion_and_sync_only_when_hurt_is_refused() {
         g.creative = false;
         let initial = Vec3::new(0.25, -0.125, 0.75);
         let push = Vec3::new(0.5, f64::from(0.2_f32), -0.25);
-        g.player = Some(PlayerMotion::new(g.motion, Vec3::new(30.0, 64.0, 0.5)).unwrap());
+        g.player = Some(PlayerMotion::new(g.motion, Vec3::new(30.0, 64.0, 0.5)));
         g.player.as_mut().unwrap().velocity = initial;
         g.armor[1] = Some(ItemStack::new("minecraft:leather_chestplate", 1));
         g.dragon_wing_knock_back(push, false);
@@ -73,7 +73,7 @@ fn wing_contacts_restore_motion_and_sync_only_when_hurt_is_refused() {
 fn a_shield_faces_the_dragons_origin_not_the_wing_push() {
     with_game(|g| {
         g.creative = false;
-        g.player = Some(PlayerMotion::new(g.motion, Vec3::ZERO).unwrap());
+        g.player = Some(PlayerMotion::new(g.motion, Vec3::ZERO));
         g.armor[1] = Some(ItemStack::new("minecraft:leather_chestplate", 1));
         g.inventory[0] = Some(ItemStack::new("minecraft:shield", 1));
         g.selected = 0;

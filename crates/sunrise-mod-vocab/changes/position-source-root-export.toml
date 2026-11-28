@@ -1,0 +1,8 @@
+ids = [
+    "type:client::particles::PositionSource",
+    "type:PositionSource",
+    "type:ParticleOptions.vibration",
+    "handle:ParticleOptions::vibration",
+]
+why = "PositionSource (`net.minecraft.world.level.gameevent.PositionSource`) moved from `client::particles` to `world::particles` alongside `ParticleOptions` and is now re-exported at the API root (`mod_api::PositionSource`) instead of only through the hidden `client::particles` module. `ParticleOptions::vibration` and its `vibration` field now name `PositionSource` at the root."
+migrate = "Import `mod_api::PositionSource` instead of `mod_api::client::particles::PositionSource`."

@@ -66,9 +66,10 @@ fn items_past_the_simulation_distance_enter_no_end_gateway() {
     // The player in chunk (0, 0); chunk (2, 0) is inside the simulation
     // distance, chunk (8, 0) loaded and in view but past it. In each, an item
     // lies in an End gateway block.
-    game.player = Some(
-        sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(8.5, 65.0, 8.5)).unwrap(),
-    );
+    game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+        game.motion,
+        Vec3::new(8.5, 65.0, 8.5),
+    ));
     for (id, cx, x) in [(1, 2, 40), (2, 8, 136)] {
         game.world
             .chunks
@@ -111,9 +112,10 @@ fn a_ticking_gateway_counts_its_age_in_its_block_entity() {
     game.build_registries();
     game.set_allow_commands(true);
     game.dim = Dim::End;
-    game.player = Some(
-        sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(8.5, 65.0, 8.5)).unwrap(),
-    );
+    game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+        game.motion,
+        Vec3::new(8.5, 65.0, 8.5),
+    ));
     game.world
         .chunks
         .insert((2, 0), Arc::new(Chunk::empty(2, 0)));

@@ -78,7 +78,7 @@ anchored to vanilla 26.3 and NeoForge:
   `NewMinecartBehavior` rider branch. The resulting rotation orients rendering, projection and
   the listener's forward/up basis (`SoundEngine.updateSource`), but not the entity eye or player aim.
 - `camera_position` follows vanilla `Camera.update` / `Camera.setPosition`: it sees the final placed
-  world position, including the minecart path or the selected studio camera. It moves the render
+  world position, including the minecart path. It moves the render
   camera and its audio listener without moving the player or their eye. If a listener requests a new
   perspective, only explicitly pinned axes survive entity re-alignment, even if their value is
   unchanged. Position setters refuse non-finite writes; angle assignments are unfiltered like
@@ -97,14 +97,13 @@ migrate = """
   in degrees (no dereference); use `event.roll` for an actual camera roll. Angles are assigned
   as given, like NeoForge's setters.
   The hook runs before front-view mirroring and detached back-off, and not in the interpolating
-  minecart rider or studio camera paths.
+  minecart rider path.
 - Replace `Hooks::camera_pose` world position overrides with `Hooks::camera_position` using
   `&mut CameraPositionEvent<'_>`. Read the current `CameraPosition` with `event.position.coordinates()`
   and write with `event.position.set([Some(x), None, Some(z)])` to pin only X and Z (`None` keeps any
   earlier override). `CameraPosition::set` returns `false` on non-finite input without editing any axis.
   Call `host.set_camera_type(kind)` in `compute_camera_angles` to change perspective before the first
   detached placement, or in `camera_position` to refresh it, carrying only explicitly pinned axes.
-  These requests do not re-align the studio camera.
 - Replace `Hooks::camera_shake` and `Shake` with `Hooks::render_view_transform` using
   `&mut RenderViewTransformEvent<'_, '_>` and its borrowed `ViewTransform<'_>`. For the same
   presentation transform, let `[x, y, z]` be the old camera offset in blocks and `(roll, pitch,

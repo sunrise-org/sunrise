@@ -154,7 +154,7 @@ fn with_probe(test: impl FnOnce(&mut ServerGame<'_>, &Mutex<Vec<Seen>>)) {
             game.world
                 .chunks
                 .insert((0, 0), Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)));
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             bind_local_player(game, 7, 7);
             game.set_game_mode(GameMode::Survival);
             test(game, &seen);

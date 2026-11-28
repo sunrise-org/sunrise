@@ -23,7 +23,7 @@ pub(crate) fn heard_stone_fall(silent: bool) -> Vec<(f32, f32)> {
                 .default_state("minecraft:stone")
                 .unwrap();
             game.world.set(1, 63, 1, stone).unwrap();
-            let mut player = PlayerMotion::new(game.motion, Vec3::new(1.5, 64.1, 1.5)).unwrap();
+            let mut player = PlayerMotion::new(game.motion, Vec3::new(1.5, 64.1, 1.5));
             player.fall_distance = 5.0;
             player.velocity = Vec3::new(0.0, -0.2, 0.0);
             game.player = Some(player);

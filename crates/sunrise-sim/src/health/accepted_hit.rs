@@ -1,6 +1,7 @@
 //! The accepted DamageSource and weapon, retained only for listeners that need them.
 use super::{Attack, HurtSource};
-use crate::{items::ItemStack, mobs::Damage};
+use crate::items::ItemStack;
+use sunrise_entity_data::damage::Damage;
 
 /// The source/weapon owner shared by mob and player death continuations.
 #[derive(Clone, Debug, PartialEq)]

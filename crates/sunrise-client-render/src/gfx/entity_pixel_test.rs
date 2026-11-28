@@ -1246,6 +1246,7 @@ fn render_pack_with(
         &screen,
         &probe_frame(&hud),
         &Default::default(),
+        Default::default(),
         [SIZE; 2],
         [SIZE; 2],
         &[],
@@ -1327,7 +1328,6 @@ fn probe_frame(hud: &HudBatch) -> super::Frame<'_> {
         outline: Vec::new(),
         outline_after_terrain: false,
         outline_high_contrast: false,
-        pvp: Default::default(),
         debug_lines: &[],
         debug_lines_on_top: &[],
         debug_crosshair: &[],
@@ -1391,18 +1391,20 @@ mod scrgb {
             cpu_dark > 0.0 && gpu_dark > 0.0,
             "the unlit quad did not cover the centre: cpu {cpu_dark} gpu {gpu_dark}"
         );
-        let dark_ratio = gpu_dark / cpu_dark;
-        assert!(
-            (dark_ratio - 1.0).abs() < 0.02,
-            "light 0 should match, ratio {dark_ratio} (gpu {gpu_dark} cpu {cpu_dark})"
+        // The texel is one Rgba16Float channel, widened exactly: the two paths must
+        // write the same half-float bits.
+        assert_eq!(
+            gpu_dark.to_bits(),
+            cpu_dark.to_bits(),
+            "light 0 should match: gpu {gpu_dark} cpu {cpu_dark}"
         );
         let cpu = super::scrgb_center(false, 0x00F0).expect("cpu scRGB");
         let gpu = super::scrgb_center(true, 0x00F0).expect("instanced scRGB");
         assert!(cpu > 0.0, "the lit cpu quad did not cover the centre");
-        let ratio = gpu / cpu;
-        assert!(
-            (ratio - 1.0).abs() < 0.02,
-            "instanced scRGB {gpu} != cpu {cpu} at tint 0xFF3040 light 0x00F0 (ratio {ratio})"
+        assert_eq!(
+            gpu.to_bits(),
+            cpu.to_bits(),
+            "instanced scRGB {gpu} != cpu {cpu} at tint 0xFF3040 light 0x00F0"
         );
     }
 

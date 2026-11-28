@@ -267,19 +267,6 @@ impl OpenNativeScreen {
     }
 }
 
-/// Whether F3's debug screen, open when `debug`, covers `corner`
-/// (`DebugScreenOverlay.extractRenderState`): its left and right columns
-/// the top corners, and its charts the bottom corners `charts` (bottom left,
-/// bottom right) says they are drawn in.
-pub(in crate::game) fn debug_takes(corner: Corner, debug: bool, charts: [bool; 2]) -> bool {
-    debug
-        && match corner {
-            Corner::TopLeft | Corner::TopRight => true,
-            Corner::BottomLeft => charts[0],
-            Corner::BottomRight => charts[1],
-        }
-}
-
 /// What `mod_screen_open(mod_id)` does before running a screen transition
 /// (`unavailable`: no renderer, acting for a guest, neither a player nor a
 /// title screen, or a world/connection is loading; `owner`: the mod whose

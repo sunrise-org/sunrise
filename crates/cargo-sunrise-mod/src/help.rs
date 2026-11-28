@@ -19,8 +19,8 @@ const COMMANDS: &[Command] = &[
     Command {
         name: "build",
         everyday: true,
-        usage: "build [--update-lock] [--with <path>]…",
-        summary: "Compiles a native mod with its required libraries and any optional libraries supplied with --with, then packs only the mod into target/sunrise-mod/<id>.smod, and its page.toml and screenshots, if it has them, into target/sunrise-mod/<id>.page.tar. Use --with for local folders or .smod files; the Sunrise mod registry supplies other required libraries. --update-lock resolves its Cargo.lock again.",
+        usage: "build [--update-lock] [--with <path>]… [--timings] [--verbose | -v]",
+        summary: "Compiles a native mod with its required libraries and any optional libraries supplied with --with, then packs only the mod into target/sunrise-mod/<id>.smod, and its page.toml and screenshots, if it has them, into target/sunrise-mod/<id>.page.tar. Use --with for local folders or .smod files; the Sunrise mod registry supplies other required libraries. --update-lock resolves its Cargo.lock again. For native mods only, --timings reports Cargo's HTML timings when Cargo builds the mod, and --verbose (or -v) shows compiler stderr live as well as keeping the build log.",
     },
     Command {
         name: "run",

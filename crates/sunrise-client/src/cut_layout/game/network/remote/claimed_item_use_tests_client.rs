@@ -215,7 +215,7 @@ fn owner_gets_release_or_reset_with_live_typed_stack() {
         });
 
         with_game(|game| {
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 65.0, 0.5)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 65.0, 0.5)));
             game.common.inventory[game.common.selected] = Some(marked(SHIELD, 1, Tag::Byte(23)));
             assert!(game.use_hand(None).unwrap());
             assert_eq!(game.using, Some((game.selected, 0)));

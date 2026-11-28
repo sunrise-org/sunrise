@@ -112,7 +112,9 @@ fn receiver_kill_stages_orb_removal_until_commit_and_kills_a_resident_knot_once(
 
         let fence = [8, 70, 8];
         game.tie_knot(fence);
-        let knot = game.entity(game.server.knot_ids[&fence]).unwrap();
+        let knot = game
+            .entity(game.server.knot_state.knot_ids[&fence])
+            .unwrap();
         let at = knot.position(game).unwrap();
         capture();
         assert_eq!(knot.kill(game), Ok(true));

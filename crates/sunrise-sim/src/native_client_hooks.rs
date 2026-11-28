@@ -1,5 +1,5 @@
 //! Callbacks into the executable for native trait mods' client-library hooks.
-use crate::{health::LivingLend, items::ItemStack, motion::FrictionLevel};
+use crate::{items::ItemStack, mobs::LivingLend, motion::FrictionLevel};
 use mod_api::{BlockSoundCause, BlockSoundType, MenuOpeningItem};
 use std::sync::OnceLock;
 use sunrise_core::position::BlockPos;

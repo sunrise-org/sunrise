@@ -1151,6 +1151,8 @@ fn a_mounted_guests_turn_publishes_its_teleport_without_dismounting() {
 #[test]
 #[ignore = "daily"]
 fn server_services_preserve_identity_and_message_delivery() {
+    // Local test binaries live outside `deps`, where the initializer does not run.
+    mod_platform::__private::test_platform::install();
     use mod_api::{ServerHost, Text};
     use sunrise_protocol::packets::play::Clientbound as C;
     use sunrise_sim::lan::announced_channels::REGISTER;
@@ -1159,6 +1161,7 @@ fn server_services_preserve_identity_and_message_delivery() {
         guests.update(0, |g| {
             g.permission = 3;
             g.game_mode = 1;
+            g.abilities.update_for_mode(1);
             g.set_address("192.0.2.12:25565".parse().unwrap());
             g.brand = "test client".into();
             assert!(
@@ -1303,7 +1306,7 @@ fn canonical_permissions_preserve_owner_and_fake_player_reads() {
         let _serving =
             sunrise_gameplay::game::server_side::integrated::tests::install_serving(game, false);
         game.level.player_uuid = Some([0, 0, 0, 99]);
-        let mut body = PlayerMotion::new(game.motion, Vec3::new(0.0, 64.0, 0.0)).unwrap();
+        let mut body = PlayerMotion::new(game.motion, Vec3::new(0.0, 64.0, 0.0));
         body.entity_id = 99;
         game.player = Some(body);
         game.set_mode(sunrise_command::args::GameMode::Creative);

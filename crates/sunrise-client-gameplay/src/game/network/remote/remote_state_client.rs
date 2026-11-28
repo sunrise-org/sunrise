@@ -91,11 +91,6 @@ impl Remote {
             });
         }
     }
-    /// How far the server sends chunks: its view distance and the ring
-    /// around (`ChunkTrackingView`), at least two.
-    pub(in crate::game::client_side) fn sent_radius(&self) -> i32 {
-        self.view_distance.max(2).saturating_add(1)
-    }
     pub(in crate::game::client_side) fn set_tracked_position(
         &mut self,
         id: i32,

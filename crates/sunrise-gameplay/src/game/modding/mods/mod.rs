@@ -1979,6 +1979,20 @@ pub mod tests {
         assert!(output.status.success() && ran_one_test(&stdout));
     }
 
+    /// The overlay's `.sunrise-cache` falls back to the working directory, so a test process
+    /// must not start in the crate's folder: `sunrise_threads::test_game_dir` moves it.
+    #[test]
+    fn the_test_process_does_not_run_in_the_crates_folder() {
+        let manifest = std::fs::canonicalize(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let cwd = std::fs::canonicalize(std::env::current_dir().unwrap()).unwrap();
+        assert!(
+            !cwd.starts_with(&manifest),
+            "{} is inside {}",
+            cwd.display(),
+            manifest.display()
+        );
+    }
+
     #[test]
     fn a_package_cannot_declare_one_type_in_both_entity_families() {
         let general = sunrise_gameplay_common::game::general::GeneralTypeCatalog::freeze(&[
@@ -2743,11 +2757,20 @@ pub mod tests {
         let mode = std::env::var(MODE).ok();
         if mode.is_none() {
             // Inventory and content registries are process-wide, as in a real startup.
+            // Each child gets an empty folder of its own as working directory and home, so
+            // the overlay's `.sunrise-cache` is neither shared nor left behind.
             for mode in ["compiled", "vanilla"] {
+                let cwd = std::env::temp_dir().join(format!(
+                    "sunrise-game-mods-cwd-{}-{mode}",
+                    std::process::id()
+                ));
+                std::fs::create_dir_all(&cwd).unwrap();
                 let status = std::process::Command::new(std::env::current_exe().unwrap())
-                    .current_dir(std::env::temp_dir())
+                    .current_dir(&cwd)
                     .args(["--include-ignored", "--exact", "game::mods::tests::native_content_follows_the_build_and_misplaced_content_follows_its_selection", "--nocapture"])
+                    .env("SUNRISE_HOME", &cwd)
                     .env(MODE, mode).status().unwrap();
+                std::fs::remove_dir_all(&cwd).unwrap();
                 assert!(status.success());
             }
             return;

@@ -225,7 +225,7 @@ mod tests {
         let (assets, binding, resources) = (&v.assets, &v.collision, &v.motion);
         let mut scene = World::test_scene_with_placements(assets, &[], 1).unwrap();
         let start = Vec3::new(20.5, 4.0, 20.5);
-        let mut player = PlayerMotion::new(resources, start).unwrap();
+        let mut player = PlayerMotion::new(resources, start);
         player.flying = true;
         player.replaying = replaying;
         player.velocity = Vec3::new(0.2, 0.5, 0.0);
@@ -313,7 +313,7 @@ mod tests {
         let v = crate::test_fixtures::vanilla().expect("prepared resources are required");
         let (assets, binding, resources) = (&v.assets, &v.collision, &v.motion);
         let mut scene = World::test_scene_with_placements(assets, &[], 1).unwrap();
-        let mut player = PlayerMotion::new(resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
+        let mut player = PlayerMotion::new(resources, Vec3::new(20.5, 4.0, 20.5));
         player.velocity = Vec3::new(0.2, 0.5, 0.0);
         let context = crate::test_resources::loop_context(side);
         let mods: mod_api::Mods = vec![mod_api::ModEntry::new("moved", Box::new(listener))].into();

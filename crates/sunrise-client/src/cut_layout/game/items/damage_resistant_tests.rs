@@ -42,7 +42,7 @@ fn prepare(game: &mut sunrise_gameplay::game::ServerGame<'_>) {
     game.world
         .chunks
         .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 70.0, 8.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 70.0, 8.5)));
     game.update_chunk_tickets();
     assert!(game.entity_ticking_area()(4, 4));
 }

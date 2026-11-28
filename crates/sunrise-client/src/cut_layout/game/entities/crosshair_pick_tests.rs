@@ -116,7 +116,7 @@ fn setup_remote_overworld(
     remote.level_load.finish();
     game.client.title.0 = None;
     let pos = Vec3::new(player_pos[0], player_pos[1], player_pos[2]);
-    game.player = Some(PlayerMotion::new(game.motion, pos).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, pos));
     game.previous_position = pos;
     game.client.camera_type = CameraType::FirstPerson;
     game.client.settings.fov = 70.0;
@@ -910,7 +910,7 @@ pub(crate) fn run_singleplayer_and_unstored_pick_share_unified_query_and_root_ex
                                     yaw: f32,
                                     pitch: f32| {
                     let v = Vec3::new(pos[0], pos[1], pos[2]);
-                    let mut p = PlayerMotion::new(game.motion, v).unwrap();
+                    let mut p = PlayerMotion::new(game.motion, v);
                     p.entity_id = 1;
                     game.player = Some(p);
                     game.previous_position = v;
@@ -1287,7 +1287,7 @@ pub(crate) fn run_singleplayer_and_unstored_pick_share_unified_query_and_root_ex
                                     yaw: f32,
                                     pitch: f32| {
                     let v = Vec3::new(pos[0], pos[1], pos[2]);
-                    let mut p = PlayerMotion::new(game.motion, v).unwrap();
+                    let mut p = PlayerMotion::new(game.motion, v);
                     p.entity_id = 1;
                     game.player = Some(p);
                     game.previous_position = v;

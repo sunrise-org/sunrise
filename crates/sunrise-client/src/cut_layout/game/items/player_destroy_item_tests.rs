@@ -328,7 +328,7 @@ fn run_isolated() {
         sunrise_gameplay_common::game::api_values::install_parts(&mods).unwrap();
         const PLAYER: u128 = 0x0000_0001_0000_0002_0000_0003_0000_0004;
         native_entity_refs::tests::with_game(|game| {
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)));
             native_entity_refs::tests::bind_local_player(game, 71, PLAYER);
             game.set_mode_id(0);
             game.selected = 0;
@@ -445,7 +445,7 @@ fn run_isolated() {
             remote.logged_in = true;
             remote.entity_id = 71;
             remote.profile = PLAYER;
-            let mut player = PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap();
+            let mut player = PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5));
             player.entity_id = 71;
             game.player = Some(player);
             game.set_local_mode(sunrise_command::args::GameMode::Survival);

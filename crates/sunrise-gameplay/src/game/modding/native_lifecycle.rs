@@ -17,6 +17,9 @@ pub(in crate::game) use mod_api::{
 impl crate::game::ServerGame<'_> {
     pub(in crate::game) fn server_lifecycle_open_at(&mut self, epoch: WorldEpoch) {
         self.server.levels.0.active_closed = false;
+        if self.server.levels.0.incarnation(self.common.dim).is_none() {
+            self.server.levels.0.open_incarnation(self.common.dim);
+        }
         self.clear_composter_randoms();
         self.reset_entity_residency();
         self.common.entity_initialization = Default::default();

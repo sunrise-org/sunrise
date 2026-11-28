@@ -18,7 +18,7 @@ fn the_attribute_packet_carries_a_given_effect_modifier_once() {
         loaded.load_effect(StoredEffect::new("minecraft:speed", -1, 1));
         let speed = game
             .motion
-            .attributes
+            .attributes()
             .id("minecraft:movement_speed")
             .unwrap()
             .registry_id();
@@ -66,7 +66,7 @@ fn a_babys_modifier_comes_before_a_given_effects_in_the_packet() {
         baby.add_effect("minecraft:speed", -1, 1);
         let speed = game
             .motion
-            .attributes
+            .attributes()
             .id("minecraft:movement_speed")
             .unwrap()
             .registry_id();
@@ -105,7 +105,7 @@ fn a_dash_after_a_given_effect_comes_after_it_in_the_packet() {
         cat.extra.sprinting = true;
         let speed = game
             .motion
-            .attributes
+            .attributes()
             .id("minecraft:movement_speed")
             .unwrap()
             .registry_id();
@@ -156,7 +156,7 @@ fn the_attribute_packet_carries_given_jump_boost_and_absorption_modifiers_once()
             given.add_effect(effect, -1, amplifier);
             loaded.load_effect(StoredEffect::new(effect, -1, amplifier));
         }
-        let id = |name: &str| game.motion.attributes.id(name).unwrap().registry_id();
+        let id = |name: &str| game.motion.attributes().id(name).unwrap().registry_id();
         let (safe_fall, max_absorption, range) = (
             id("minecraft:safe_fall_distance"),
             id("minecraft:max_absorption"),
@@ -239,7 +239,7 @@ fn a_declared_baby_modifier_replaces_the_bonus_in_the_packet() {
         assert_eq!(baby.movement_speed(), base + base * 0.1);
         let speed = game
             .motion
-            .attributes
+            .attributes()
             .id("minecraft:movement_speed")
             .unwrap()
             .registry_id();
@@ -300,7 +300,7 @@ fn an_undone_declared_baby_modifier_brings_the_bonus_back_in_the_packet() {
         assert_eq!(baby.movement_speed(), base + base * 0.5);
         let speed = game
             .motion
-            .attributes
+            .attributes()
             .id("minecraft:movement_speed")
             .unwrap()
             .registry_id();

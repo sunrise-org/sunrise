@@ -37,8 +37,7 @@ mod tests {
                 let mut player = sunrise_sim::motion::PlayerMotion::new(
                     game.motion,
                     sunrise_core::geometry::Vec3::ZERO,
-                )
-                .unwrap();
+                );
                 player.position = sunrise_core::geometry::Vec3::new(0.5, 65.0, 0.5);
                 game.player = Some(player);
 

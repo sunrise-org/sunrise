@@ -11,6 +11,8 @@ pub(super) struct FlatLayers {
     /// `layers.get(i) == null`: `getBaseHeight` skips it, `getBaseColumn` reads it as air, and
     /// `buildTerrain` leaves it for the `FillLayerFeature` that runs after the structures.
     pub(super) null: Vec<bool>,
+    /// The fixed biome every column is, resolved once: the surface sample reads it per column.
+    pub(super) biome: Option<BiomeId>,
 }
 /// A superflat world's generator settings (`FlatLevelGeneratorSettings`).
 #[derive(Clone, Debug)]
@@ -111,10 +113,16 @@ impl OverworldGenerator {
             .filter(|(_, (hole, _))| **hole)
             .map(|(i, (_, &state))| (level_min_y + i as i32, state))
             .collect();
+        let biome_id = pipeline
+            .source
+            .possible_biomes()
+            .into_iter()
+            .find_map(|name| pipeline.data.biome_id(name));
         pipeline.flat = Some(FlatLayers {
             min_y: level_min_y,
             states,
             null,
+            biome: biome_id,
         });
         // `FlatLevelSource` decorates with `adjustGenerationSettings` of the biome.
         let adjust = super::super::generator_decoration::FlatDecoration::new(

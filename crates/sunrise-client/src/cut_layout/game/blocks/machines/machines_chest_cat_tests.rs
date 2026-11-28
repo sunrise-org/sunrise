@@ -36,9 +36,10 @@ fn game<'a>(
                 .unwrap();
         }
     }
-    game.player = Some(
-        sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(8.5, 64.0, 8.5)).unwrap(),
-    );
+    game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+        game.motion,
+        Vec3::new(8.5, 64.0, 8.5),
+    ));
     for command in [
         "forceload add 0 0",
         "fill 0 63 0 15 63 15 stone",
@@ -49,7 +50,13 @@ fn game<'a>(
         assert!(game.run_command(command), "{command}");
     }
     game.update_chunk_tickets();
-    assert!(game.server.tickets.0.levels().block_ticking(0, 0));
+    assert!(
+        game.server
+            .chunk_ticking
+            .tickets
+            .levels()
+            .block_ticking(0, 0)
+    );
     game
 }
 

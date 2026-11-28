@@ -801,6 +801,7 @@ pub fn compile(
     // Each mod is its own library: told which one starts, and how far through them.
     on_mod: &dyn Fn(&str, usize, usize),
     check_only: bool,
+    diagnostics: super::BuildDiagnostics,
 ) -> Result<Option<Built>, String> {
     let sdk = identity(&package.runtime)?;
     let catalog = internals::Catalog::read(&package.api, sdk.commit())?;
@@ -841,7 +842,11 @@ pub fn compile(
             projects,
             declared,
             resolution,
-            super::api_route::Options { on_mod, check_only },
+            super::api_route::Options {
+                on_mod,
+                check_only,
+                stderr: diagnostics.stderr,
+            },
         );
         // Stamped after the route has made its folder again, failed or not.
         if out.exists() {
@@ -882,6 +887,7 @@ pub fn compile(
                 mixins: &mixins,
                 sdk: &sdk,
                 catalog: &catalog,
+                diagnostics,
             },
             check_only,
         )?;
@@ -947,9 +953,11 @@ pub fn compile(
                     ));
                 }
             }
-            super::run(
+            super::run_compiler(
                 cmd,
                 &trf("Compiling {mod}'s declared internals", &[("mod", id)]),
+                None,
+                diagnostics.stderr,
             )?;
             facades.insert(id, rlib);
         }
@@ -983,6 +991,7 @@ pub fn compile(
             &identities,
             &source,
             check_only,
+            diagnostics.stderr,
         )?;
         rlibs.insert(id, rlib);
         crate_names.insert(id, krate);
@@ -999,6 +1008,7 @@ pub fn compile(
         &mixins,
         |edition| rustc(rust, game, out, edition),
         check_only,
+        diagnostics.stderr,
     )?;
     if check_only {
         return Ok(None);
@@ -1042,7 +1052,12 @@ pub fn compile(
         }
         cmd.arg("-o").arg(&library).arg(source);
         if !unchanged {
-            super::run(cmd, tr("Compiling the patch library"))?;
+            super::run_compiler(
+                cmd,
+                tr("Compiling the patch library"),
+                None,
+                diagnostics.stderr,
+            )?;
             fs::write(saved, fingerprint).map_err(|e| e.to_string())?;
         }
         super::library_record::validate_exports(&library, "sunrise_patch")?;
@@ -1162,6 +1177,7 @@ pub fn compile_mod<'a>(
     identities: &super::library_record::Identities,
     files: &str,
     check_only: bool,
+    stderr: super::CompilerStderr,
 ) -> Result<(PathBuf, String), String> {
     let id = project.bundle.manifest.id.as_str();
     let edition = project
@@ -1181,7 +1197,7 @@ pub fn compile_mod<'a>(
     let lib_path = project.cargo.get("lib").and_then(|lib| lib.get("path"));
     let source = staged.join(stage_entry(&staged, lib_path, id, entry)?);
     let mut cmd = rustc(edition);
-    // Diagnostics as JSON, which `run_diagnosed` shows at the author's files: the compiler's
+    // Diagnostics as JSON, which `run_compiler` shows at the author's files: the compiler's
     // inputs and outputs stay those of the staged copy.
     cmd.args([
         "--error-format=json",
@@ -1248,7 +1264,7 @@ pub fn compile_mod<'a>(
             cmd.arg("--out-dir").arg(out);
         }
         cmd.arg(&source);
-        super::run_diagnosed(cmd, &compiling(id), &sources)?;
+        super::run_compiler(cmd, &compiling(id), Some(&sources), stderr)?;
     }
     if !check_only {
         super::library_record::validate_exports(&library, id)?;
@@ -2053,6 +2069,7 @@ mod tests {
                 None,
                 &|_, _, _| {},
                 false,
+                super::super::BuildDiagnostics::default(),
             );
             let Err(error) = result else {
                 panic!("build accepted another build's internals catalog");
@@ -2133,6 +2150,7 @@ mod tests {
                 None,
                 &|_, _, _| {},
                 false,
+                super::super::BuildDiagnostics::default(),
             )
             .err()
             .expect("the fixture has no SDK mod_api library to compile against")

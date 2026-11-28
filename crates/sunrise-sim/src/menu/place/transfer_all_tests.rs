@@ -10,6 +10,7 @@ use crate::menu::{
 /// largest count every grid slot can take, one item kind per slot, capped
 /// at that item's stack size, the rest left where it was.
 #[test]
+#[ignore = "daily"]
 fn a_transfer_of_all_fills_as_many_sets_as_the_items_allow() {
     let grid = |m: &Menu, slots: std::ops::Range<usize>| {
         slots
@@ -130,6 +131,7 @@ fn a_transfer_of_all_fills_as_many_sets_as_the_items_allow() {
 /// A quick-moved crafting result counts only the items that moved, not the
 /// whole result stack (`ResultSlot.onQuickCraft`).
 #[test]
+#[ignore = "daily"]
 fn quick_move_crafting_records_only_items_moved() {
     for kind in [Kind::Crafting, Kind::Inventory] {
         with_menu(kind, |env, menu| {
@@ -154,6 +156,7 @@ fn quick_move_crafting_records_only_items_moved() {
 /// "+"), while the recipe book's placement keeps vanilla's
 /// `isUsableForCrafting` and leaves it.
 #[test]
+#[ignore = "daily"]
 fn a_transfer_takes_a_worn_tool() {
     let worn = || {
         let mut rod = stack("fishing_rod", 1).unwrap();

@@ -268,7 +268,16 @@ impl ClientGame<'_> {
         self.client.mod_gpu.as_ref()
     }
 
-    pub fn set_renderer(&mut self, renderer: Box<Renderer>) {
+    /// Installs `renderer`. On another device than the last renderer's (`Renderer::device_id`: a
+    /// device recovery, any newly opened device), a pack refused before is tried again
+    /// (`native_shaders::follow_device`).
+    pub fn set_renderer(&mut self, mut renderer: Box<Renderer>) {
+        // The old renderer's pack builds still running: the new one waits for them, so the swap
+        // doesn't.
+        if let Some(old) = &mut self.client.renderer.0 {
+            renderer.adopt_pack_builds(old.take_pack_builds());
+        }
+        client_side::native_shaders::follow_device(renderer.device_id());
         let gpu = renderer.mod_gpu();
         if let Some(previous) = &self.client.mod_gpu {
             gpu.continue_ids_from(previous);
@@ -317,9 +326,6 @@ pub(in crate::game) use client_side::composter_client;
 pub(in crate::game) use client_side::extras;
 #[cfg(feature = "client")]
 #[allow(unused_imports)]
-pub(in crate::game) use client_side::far_terrain_edits;
-#[cfg(feature = "client")]
-#[allow(unused_imports)]
 pub(in crate::game) use client_side::focused_text_field;
 #[cfg(feature = "client")]
 #[allow(unused_imports)]
@@ -351,9 +357,6 @@ pub(in crate::game) use client_side::hand;
 #[cfg(feature = "client")]
 #[allow(unused_imports)]
 pub(in crate::game) use client_side::headless;
-#[cfg(feature = "client")]
-#[allow(unused_imports)]
-pub(in crate::game) use client_side::hud_editor;
 #[cfg(feature = "client")]
 #[allow(unused_imports)]
 pub(in crate::game) use client_side::hud_room;
@@ -757,9 +760,6 @@ pub(in crate::game) use client_side::potions;
 pub(in crate::game) use client_side::profile_capture;
 #[cfg(feature = "client")]
 #[allow(unused_imports)]
-pub(in crate::game) use client_side::pvp;
-#[cfg(feature = "client")]
-#[allow(unused_imports)]
 pub(in crate::game) use client_side::quick_actions;
 #[cfg(feature = "client")]
 #[allow(unused_imports)]
@@ -810,8 +810,6 @@ pub(in crate::game) use client_side::render_control;
 pub(in crate::game) use client_side::render_settings;
 #[allow(unused_imports)]
 pub(in crate::game) use client_side::render_tick;
-#[allow(unused_imports)]
-pub(in crate::game) use client_side::replay;
 #[cfg(feature = "client")]
 #[allow(unused_imports)]
 pub(in crate::game) use client_side::repro;
@@ -896,9 +894,6 @@ pub(in crate::game) use client_side::storage;
 #[cfg(feature = "client")]
 #[allow(unused_imports)]
 pub(in crate::game) use client_side::structure_edit;
-#[cfg(feature = "client")]
-#[allow(unused_imports)]
-pub(in crate::game) use client_side::studio;
 #[cfg(feature = "client")]
 #[allow(unused_imports)]
 pub(in crate::game) use client_side::subtitle_hud;
@@ -1149,8 +1144,6 @@ pub(in crate::game) struct WrappedClientInit {
     pending_initial_models:
         client_side::ClientOnly<Option<Box<initial_client_models::PendingClientStart>>>,
     stitching_block_atlas: client_side::ClientOnly<Option<Arc<RenderAssets>>>,
-    lod: client_side::ClientOnly<Option<sunrise_client::lod::Lod>>,
-    lod_blue_map: client_side::ClientOnly<Option<Arc<sunrise_client::bluemap::BlueMap>>>,
     video_modes: client_side::ClientOnly<sunrise_client::window::VideoModeList>,
     screen_state: client_side::ClientOnly<screen_build::ScreenState>,
     window: client_side::ClientShared<Option<Arc<Window>>>,
@@ -1216,8 +1209,6 @@ impl<const NO_SLOT: bool> ConstructInit<NO_SLOT> {
             dialogs: client_side::ClientOnly::new(Default::default()),
             pending_initial_models: client_side::ClientOnly::new(None),
             stitching_block_atlas: client_side::ClientOnly::new(None),
-            lod: client_side::ClientOnly::new(None),
-            lod_blue_map: client_side::ClientOnly::new(None),
             video_modes: client_side::ClientOnly::new(Default::default()),
             screen_state: client_side::ClientOnly::new(screen_build::ScreenState::default()),
             window: client_side::ClientShared::new(None),

@@ -353,8 +353,7 @@ pub(crate) mod tests {
                     }
                     "rider" => {
                         let mut local =
-                            sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::ZERO)
-                                .unwrap();
+                            sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::ZERO);
                         local.entity_id = 7;
                         local.position = Vec3::new(15.5, 65.5, 3.0);
                         game.player = Some(local);

@@ -503,7 +503,7 @@ impl ServerGame<'_> {
         else {
             return;
         };
-        let allowed = g.creative() && g.permission >= 2;
+        let allowed = g.abilities.instabuild && g.permission >= 2;
         self.as_guest_messaged(conn, |game| {
             if allowed {
                 game.apply_set_structure_block(&p);

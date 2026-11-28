@@ -108,7 +108,7 @@ impl ClientGame<'_> {
         let max_health = self
             .common
             .motion
-            .attributes
+            .attributes()
             .id("minecraft:max_health")
             .and_then(|attr| self.remote_attribute(id as i32, attr))
             .map_or(default_max, |v| v as f32);
@@ -178,7 +178,7 @@ impl ClientGame<'_> {
                 let max_health = self
                     .common
                     .motion
-                    .attributes
+                    .attributes()
                     .id("minecraft:max_health")
                     .and_then(|attr| self.remote_attribute(mob_id, attr))
                     .map_or(default_max, |v| v as f32);
@@ -279,7 +279,7 @@ impl ClientGame<'_> {
                 Some(
                     self.common
                         .motion
-                        .attributes
+                        .attributes()
                         .id("minecraft:armor")
                         .and_then(|attr| self.remote_attribute(mob_id, attr))
                         .map_or(fallback, |v| v.floor() as i32),

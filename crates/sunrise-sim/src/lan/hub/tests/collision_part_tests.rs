@@ -78,7 +78,7 @@ fn a_client_and_a_server_that_disagree_about_a_parts_state_get_a_correction() {
         }));
     });
     let resources = &fixture.motion;
-    let mut client = PlayerMotion::new(resources, Vec3::new(20.5, 5.0, 20.5)).unwrap();
+    let mut client = PlayerMotion::new(resources, Vec3::new(20.5, 5.0, 20.5));
     client.client_side = true;
     client.entity_id = GUEST_ENTITY;
     client.main_hand = Some("minecraft:stick".into());

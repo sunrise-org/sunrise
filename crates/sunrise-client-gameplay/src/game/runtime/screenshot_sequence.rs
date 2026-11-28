@@ -91,9 +91,6 @@ impl crate::game::ClientGame<'_> {
             || !self.common.world.dirty_sections.is_empty()
         {
             Some("screenshot-sequence needs a loaded world in play, with nothing left to load")
-        } else if self.client.lod.0.is_some() || self.far_terrain_choice().0 > 0 {
-            // Far tiles load and fade in on the wall clock.
-            Some("screenshot-sequence needs far terrain off (LOD Distance 0)")
         } else if self.client.settings.chunk_fade != 0.0 || g.shadow_cache {
             Some("screenshot-sequence needs chunk fade 0 and the shadow cache off")
         } else if g.taa || g.frame_generation != sunrise_client::graphics::FrameGeneration::Off {
@@ -413,7 +410,6 @@ mod tests {
                 game.client.view.fov_modifier = 1.0;
                 game.client.view.old_fov_modifier = 1.0;
                 game.client.settings.chunk_fade = 0.0;
-                game.client.settings.sunrise.lod_distance = 0;
                 game.client.settings.sunrise.taa = false;
                 game.client.settings.sunrise.shadow_cache = false;
                 game.client.settings.sunrise.frame_generation =

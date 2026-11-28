@@ -162,7 +162,7 @@ impl crate::game::ClientGame<'_> {
                     }
                     // DATA_ATTACHED_TO_TARGET (OptionalInt: the id plus 1).
                     (9, Value::Id(v)) => {
-                        let v = (*v > 0).then(|| (*v - 1) as u32);
+                        let v = (*v != 0).then(|| v.wrapping_sub(1) as u32);
                         if let Some(r) = self.common.rockets.iter_mut().find(|r| r.id == id) {
                             r.attached_to = v;
                         }
@@ -340,10 +340,7 @@ impl crate::game::ClientGame<'_> {
 
     /// This client's own player's entity id on the server.
     pub(in crate::game::client_side) fn remote_player_id(&self) -> Option<u32> {
-        self.client
-            .remote
-            .as_ref()
-            .and_then(|r| u32::try_from(r.entity_id).ok())
+        self.client.remote.as_ref().map(|r| r.entity_id as u32)
     }
 
     /// `FireworkRocketEntity.tick` for the rockets attached to this client's
@@ -1557,10 +1554,10 @@ pub(in crate::game) mod nested_spawn_tests {
             let (client, _server) = sunrise_protocol::connection::Pipe::pair();
             game.connect_local(client, "NestedRocket").unwrap();
             game.client.remote.as_mut().unwrap().entity_id = 99;
-            game.player = Some(
-                sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(20.0, 80.0, 20.0))
-                    .unwrap(),
-            );
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                Vec3::new(20.0, 80.0, 20.0),
+            ));
             game.common.world.chunks.insert(
                 (0, 0),
                 std::sync::Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)),
@@ -1644,6 +1641,69 @@ pub(in crate::game) mod nested_spawn_tests {
                     (Kind::Projectile, Change::Restored),
                     (Kind::Trident, Change::Restored),
                 ]
+            );
+        });
+    }
+}
+
+#[cfg(test)]
+mod firework_attach_high_bit_tests {
+    use super::*;
+    use sunrise_protocol::entity_data::serializer;
+
+    /// A player id above `i32::MAX` as the wire's unsigned int holds it.
+    const ME: u32 = 0x8000_0002;
+    const ROCKET: u32 = 7;
+
+    fn set_attachment(game: &mut crate::game::ClientGame<'_>, value: i32) {
+        game.remote_projectile_data(
+            ROCKET as i32,
+            &[(9, serializer::OPTIONAL_UNSIGNED_INT, Value::Id(value))],
+        );
+    }
+
+    fn attached(game: &crate::game::ClientGame<'_>) -> Option<u32> {
+        game.common
+            .rockets
+            .iter()
+            .find(|rocket| rocket.id == ROCKET)
+            .unwrap()
+            .attached_to
+    }
+
+    /// `handleSetEntityData`'s `DATA_ATTACHED_TO_TARGET` (the stored id plus one, 0 for
+    /// none) keeps the whole unsigned id: `i32::MIN` is `0x7fff_ffff` plus one, and a
+    /// rocket attached to `0x8000_0002` is the local player's.
+    #[test]
+    #[ignore = "daily"]
+    fn attached_rocket_metadata_keeps_high_bit_ids() {
+        // The platform's init array only installs under `deps/`; a test binary elsewhere in
+        // the target tree (and `--exact` runs) needs it explicitly, as `install` is idempotent.
+        mod_platform::__private::test_platform::install();
+        crate::game::native_entity_refs::tests::with_client_game(|game| {
+            let (client, _server) = sunrise_protocol::connection::Pipe::pair();
+            game.connect_local(client, "HighBitRocket").unwrap();
+            game.client.remote.as_mut().unwrap().entity_id = ME as i32;
+            game.common
+                .rockets
+                .push(sunrise_gameplay_common::game::fireworks::Rocket::remote(
+                    ROCKET,
+                    Vec3::ZERO,
+                    Vec3::ZERO,
+                ));
+
+            set_attachment(game, 0);
+            assert_eq!(attached(game), None, "0 clears the attachment");
+
+            set_attachment(game, i32::MIN);
+            assert_eq!(attached(game), Some(0x7fff_ffff));
+
+            set_attachment(game, ME.wrapping_add(1) as i32);
+            assert_eq!(attached(game), Some(ME));
+            assert_eq!(
+                attached(game),
+                Some(game.client.remote.as_ref().unwrap().entity_id as u32),
+                "the rocket attached to 0x8000_0002 is the local player's"
             );
         });
     }

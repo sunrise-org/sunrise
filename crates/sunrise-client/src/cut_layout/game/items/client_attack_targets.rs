@@ -57,8 +57,7 @@ pub(crate) mod tests {
                 finish_login(game, &mut server);
                 game.native_lifecycle.begin_open(None);
                 game.client.title.0 = None;
-                game.player =
-                    Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 1.0, 0.5)).unwrap());
+                game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 1.0, 0.5)));
                 game.entity_reach = 3.0;
                 game.world
                     .chunks

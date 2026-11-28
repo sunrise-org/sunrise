@@ -5,7 +5,7 @@ use std::{
     ops::Range,
 };
 
-use super::{anonymous_structs, atomic_vectors, interface_blocks, scan::is_ident};
+use super::{Error, anonymous_structs, atomic_vectors, interface_blocks, scan::is_ident};
 use crate::{Preprocessed, macros::lex};
 
 struct Token<'a> {
@@ -179,16 +179,22 @@ fn prune(code: &str) -> Option<String> {
     Some(String::from_utf8(out).expect("whole token spans replaced by spaces"))
 }
 
-/// Stage preparation before compatibility analysis. Extracted from translate so its
-/// already oversized module does not grow when reachability is added.
-pub(super) fn prepare(pp: &Preprocessed) -> Option<Preprocessed> {
-    let pruned = prune(pp.code()).map(|code| pp.with_code(code));
+/// Stage preparation before compatibility analysis, or `None` if no rewrite changes it.
+/// Refuses rewrites that change the line count, and returns any refusal from the atomic vector
+/// rewrite at its pack file and line.
+pub(super) fn prepare(pp: &Preprocessed) -> Result<Option<Preprocessed>, Error> {
+    let pruned = prune(pp.code())
+        .map(|code| pp.with_code("reachability pruning", code))
+        .transpose()?;
     let pp = pruned.as_ref().unwrap_or(pp);
     let named = anonymous_structs::name(pp.code());
     let code = named.as_deref().unwrap_or(pp.code());
-    let flat = interface_blocks::flatten(code)
-        .or(named)
-        .map(|code| pp.with_code(code));
-    let split = atomic_vectors::rewrite(flat.as_ref().unwrap_or(pp));
-    split.or(flat).or(pruned)
+    let flat = match interface_blocks::flatten(code) {
+        Some(code) => Some(pp.with_code("interface block flattening", code)?),
+        None => named
+            .map(|code| pp.with_code("anonymous struct naming", code))
+            .transpose()?,
+    };
+    let split = atomic_vectors::rewrite(flat.as_ref().unwrap_or(pp))?;
+    Ok(split.or(flat).or(pruned))
 }

@@ -208,7 +208,6 @@ pub struct World {
     /// drained, kept while `block_log` is: sent to the players whole.
     pub bulk_log: FxHashSet<(i32, i32)>,
     /// Explicit resends with their light-completion markers (`ChunkResend`). Unlike bulk edits,
-    /// these do not refresh far terrain for a client that hasn't received the chunk.
     pub chunk_resends: FxHashMap<(i32, i32), ChunkResend>,
     /// The sections whose light changed since the log was last drained, as
     /// a bit per section of each column, kept while `block_log` is

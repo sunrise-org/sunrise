@@ -12,7 +12,7 @@ pub(crate) mod tests {
 
     use sunrise_sim::mobs::stuck::Stuck;
 
-    use mod_api::client::first_person::Hand;
+    use mod_api::Hand;
 
     use mod_api::{EntityRef, Identifier, WorldEpoch};
 
@@ -146,7 +146,7 @@ pub(crate) mod tests {
             // The bits above the colour are dropped.
             assert!(game.living_set_waypoint_color(zombie, Some(0xAB12_34CD)));
             let icon = game.waypoint_icon(Target::Mob(12));
-            assert_eq!(icon.style, "example:flag");
+            assert_eq!(icon.style.as_str(), "example:flag");
             assert_eq!(icon.color, Some(0x12_34CD));
             // The other zombie keeps the default icon, and a colour of none
             // gives the colour back.
@@ -180,7 +180,7 @@ pub(crate) mod tests {
             let waypoints = |sent: &[C]| -> Vec<(i32, String, Option<i32>)> {
                 sent.iter()
                     .filter_map(|p| match p {
-                        C::TrackedWaypoint(w) => Some((w.operation, w.style.clone(), w.color)),
+                        C::TrackedWaypoint(w) => Some((w.operation, w.style.to_string(), w.color)),
                         _ => None,
                     })
                     .collect()
@@ -265,7 +265,6 @@ pub(crate) mod tests {
             let net = NetConfig {
                 listen: false,
                 announce: false,
-                lod_distance: 0,
                 ..NetConfig::lan(0, String::new(), 2)
             };
             let config = HubConfig {
@@ -381,7 +380,6 @@ pub(crate) mod tests {
             let net = NetConfig {
                 listen: false,
                 announce: false,
-                lod_distance: 0,
                 ..NetConfig::lan(0, String::new(), 2)
             };
             let config = HubConfig {

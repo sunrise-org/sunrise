@@ -474,7 +474,7 @@ fn minecart_keeps_its_general_passenger_after_the_rider_tick() {
         // Keep the chunk loaded but outside simulation range so the pass refreshes
         // the adjacency without rider movement invalidating it again.
         use sunrise_sim::ticket_levels::{Sources, ViewedTicket};
-        game.server.tickets.0.update(Some(Sources {
+        game.server.chunk_ticking.tickets.update(Some(Sources {
             viewed: vec![ViewedTicket {
                 center: (0, 0),
                 radius: 0,
@@ -564,7 +564,7 @@ fn mixed_passengers_sit_and_unload_with_their_actual_root() {
             game.entity_start_riding(root_ref, leaf_ref, true),
             Err(StartRidingRefusal::Cycle)
         );
-        game.server.tickets.0.update(None);
+        game.server.chunk_ticking.tickets.update(None);
         game.begin_ordered_ticks();
         // The mobs' pass first, as tick_mobs runs it: it names the general vehicles mobs ride.
         game.position_riders();
@@ -1844,7 +1844,7 @@ fn a_general_rider_keeps_minecart_drag_and_pickup_occupied() {
         // The pig touches the moving cart, but the coincident starting positions
         // mean it applies no initial push to the cart.
         game.mobs.push(Mob::new(pig_id, pig, at, 0.0));
-        game.server.tickets.0.update(None);
+        game.server.chunk_ticking.tickets.update(None);
         game.tick_carts();
         // The unpowered rail halves the speed. The occupied cart moves at
         // three quarters of that speed, then uses 0.997 rather than 0.96 drag.

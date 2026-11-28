@@ -221,10 +221,10 @@ pub fn enchant_offers(
 ) -> EnchantOffers {
     enchant_offers_leveled(e, items, seed, bookcases, stack, |_, cost| cost)
 }
-/// [`enchant_offers`], with `level_set` given each row and its cost as
-/// `getEnchantmentCost` drew it, before a cost below the row is cleared:
-/// what it returns is the row's cost (NeoForge's `EnchantmentLevelSetEvent`).
-/// It is not asked for an item the table can't enchant.
+/// [`enchant_offers`], with `level_set` given each row and its cost once
+/// `slotsChanged` has cleared a cost below the row to 0: what it returns is the
+/// row's cost as it is, as NeoForge stores `EnchantmentLevelSetEvent`'s answer
+/// (#6712). It is not asked for an item the table can't enchant.
 pub fn enchant_offers_leveled(
     e: &Enchantments,
     items: &Items,
@@ -240,11 +240,11 @@ pub fn enchant_offers_leveled(
     }
     let mut random = LegacyRandom::new(i64::from(seed));
     for i in 0..3 {
-        let cost = e.enchantment_cost_of(&mut random, i, bookcases, stack);
-        offers.costs[i] = level_set(i, cost);
-        if offers.costs[i] < i as i32 + 1 {
-            offers.costs[i] = 0;
+        let mut cost = e.enchantment_cost_of(&mut random, i, bookcases, stack);
+        if cost < i as i32 + 1 {
+            cost = 0;
         }
+        offers.costs[i] = level_set(i, cost);
     }
     for i in 0..3 {
         offers.clues[i] = enchant_clue(e, items, seed, i, offers.costs[i], stack);
@@ -1559,8 +1559,9 @@ mod tests {
     }
 
     /// `EnchantmentLevelSetEvent`: each row is asked once, in order, with the
-    /// level `getEnchantmentCost` drew; a level below the row offers nothing,
-    /// and a changed level shows the clue of the list it gives.
+    /// level `slotsChanged` keeps (a level below the row already cleared to 0),
+    /// and the answer is the row's cost as it is; a changed level shows the
+    /// clue of the list it gives.
     #[test]
     fn a_set_enchantment_level_makes_the_offer() {
         let e = sample();
@@ -1570,7 +1571,7 @@ mod tests {
         let mut asked = Vec::new();
         let set = enchant_offers_leveled(&e, &items, 1234, 15, Some(&s), |row, cost| {
             asked.push((row, cost));
-            [cost, 1, 10][row]
+            [cost, 0, 10][row]
         });
         assert_eq!(asked.iter().map(|a| a.0).collect::<Vec<_>>(), [0, 1, 2]);
         assert_eq!(asked[2].1, plain.costs[2]);
@@ -1585,6 +1586,29 @@ mod tests {
         enchant_offers_leveled(&e, &items, 1234, 15, Some(&enchanted), |_, _| {
             panic!("asked about an item the table can't enchant")
         });
+    }
+
+    /// #6712: `slotsChanged` clears a cost below its row before
+    /// `EnchantmentLevelSetEvent`, so the listener is told 0 for that row, and the level it
+    /// answers is the row's cost as it is, a level below the row included.
+    #[test]
+    fn a_row_below_its_minimum_is_offered_to_the_listener_as_cleared() {
+        let e = sample();
+        let items = sample_items();
+        let s = ItemStack::new("minecraft:diamond_sword", 1);
+        // Seed 1 with no bookshelves draws costs [2, 3, 2] through Java's legacy random
+        // and vanilla's cost formula; the third row's 2 is below its minimum of 3.
+        let mut told = Vec::new();
+        let set = enchant_offers_leveled(&e, &items, 1, 0, Some(&s), |row, cost| {
+            told.push(cost);
+            if row == 2 { 1 } else { cost }
+        });
+        assert_eq!(
+            told,
+            [2, 3, 0],
+            "the third row is cleared before the listener"
+        );
+        assert_eq!(set.costs, [2, 3, 1], "the listener's level stands");
     }
 
     #[test]

@@ -35,7 +35,7 @@ impl Hooks for Native {
 }
 
 pub(crate) fn reset_player(game: &mut sunrise_client_gameplay::game::ClientGame<'_>, food: i32) {
-    let mut player = PlayerMotion::new(game.motion, Vec3::new(8.0, 64.0, 8.0)).unwrap();
+    let mut player = PlayerMotion::new(game.motion, Vec3::new(8.0, 64.0, 8.0));
     player.client_side = true;
     player.health.food.food = food;
     player.ground.on_ground = true;

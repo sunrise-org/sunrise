@@ -118,10 +118,28 @@ fn a_0_2_pack_without_the_hud_layer_finishes_on_the_swapchains_8_bits() {
 #[test]
 fn one_tone_curve_runs_on_the_layered_world() {
     use super::sunrise_tone_curve;
-    assert!(sunrise_tone_curve(true, true));
+    assert!(sunrise_tone_curve(true, true, false));
     // No world (the title screen), or no layered frame (SDR, the compatibility frames).
-    assert!(!sunrise_tone_curve(true, false));
-    assert!(!sunrise_tone_curve(false, true));
+    assert!(!sunrise_tone_curve(true, false, false));
+    assert!(!sunrise_tone_curve(false, true, false));
+    // A pack served Sunrise's HDR that owns the curve: its `final` mapped the light already.
+    assert!(!sunrise_tone_curve(true, true, true));
+    assert!(!sunrise_tone_curve(false, true, true));
+}
+
+/// The curve's owner is the pack whose post passes drew the frame: one served with its own curve
+/// owns it; one served with Sunrise's, or not served, doesn't; and a frame no pack's passes drew
+/// (none runs, or the world was drawn without them) gets Sunrise's curve, whatever pack is
+/// installed.
+#[test]
+fn only_a_pack_that_drew_with_its_own_curve_owns_it() {
+    use super::{pack_owns_tone_curve, sunrise_tone_curve};
+    use sunrise_shaders::Tonemap;
+    let curve = |drawn| sunrise_tone_curve(true, true, pack_owns_tone_curve(drawn));
+    assert!(!curve(Some(Some(Tonemap::Pack))));
+    assert!(curve(Some(Some(Tonemap::Sunrise))));
+    assert!(curve(Some(None)));
+    assert!(curve(None));
 }
 
 #[test]

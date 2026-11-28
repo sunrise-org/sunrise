@@ -171,13 +171,10 @@ pub(crate) fn with_game_of(
 ) {
     with_mods(mods, || {
         crate::game::server_side::native_entity_refs::tests::with_client_game(|game| {
-            game.player = Some(
-                sunrise_sim::motion::PlayerMotion::new(
-                    game.motion,
-                    sunrise_core::geometry::Vec3::ZERO,
-                )
-                .unwrap(),
-            );
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                sunrise_core::geometry::Vec3::ZERO,
+            ));
             test(game);
         });
     });
@@ -458,13 +455,10 @@ fn mod_screen_open_replaces_vanilla_screens_overlays_and_mod_screens() {
             let renderer = game.new_renderer(window).unwrap();
             game.test_set_renderer(renderer);
             *game.test_title_mut() = None;
-            game.player = Some(
-                sunrise_sim::motion::PlayerMotion::new(
-                    game.motion,
-                    sunrise_core::geometry::Vec3::ZERO,
-                )
-                .unwrap(),
-            );
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                sunrise_core::geometry::Vec3::ZERO,
+            ));
             game.client.focused = true;
 
             // 2) Opens over `Screen::Paused`, fires opening/closing/init_post.

@@ -15,6 +15,14 @@ out, and carry old-style PRs across a switch. Standard library Python and git on
 The nightly schedule of `dyna-checks` runs `measure.py --days 3 --report` and rewrites the issue
 "Conflict hotspots: churn report" (files with 3 or more rollup conflicts or 15 or more PRs in 3 days). It is never a gate.
 
+`watched/` holds one descriptor per file whose monolith a split PR broke up (`realms.rs`, `lan/hub.rs`,
+`entity_nbt.rs`), so two split PRs never edit the same watch list. Each `<name>.toml` names its `path`, the
+`split` PR and the `landing` commit the split landed in; the baseline is the line count at that commit, not a
+number that can drift from the file. When a later crate split moved the monolith, `landing_path` names where
+it was at `landing`, so the growth follows the file to its new `path`. `measure.py --report` puts a "Watched splits" section before the
+conflict details, with the count at `main` and the growth since; it is a report, not a gate, so the PRs
+already in flight on those files are not blocked.
+
 ## Measuring
 
 ```sh

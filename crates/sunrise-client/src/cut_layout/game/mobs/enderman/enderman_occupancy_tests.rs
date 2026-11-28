@@ -71,7 +71,7 @@ fn a_carried_block_is_not_placed_into_an_entity() {
         game.dropped.clear();
         game.armor_stands.clear();
         game.player = (what == "the player")
-            .then(|| PlayerMotion::new(game.motion, Vec3::new(5.5, 100.0, 5.5)).unwrap());
+            .then(|| PlayerMotion::new(game.motion, Vec3::new(5.5, 100.0, 5.5)));
         if let Some(command) = summon {
             assert!(game.run_command(command), "{what}");
         }

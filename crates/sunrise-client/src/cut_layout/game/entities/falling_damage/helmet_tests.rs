@@ -91,7 +91,7 @@ pub(crate) fn run_falling_impacts_wear_the_helmet_before_normal_armor_and_reduct
         // that same hit, while one that survives still does (#11696).
         for path in 0..2 {
             let index = case_index * 2 + path;
-            game.player = Some(PlayerMotion::new(game.motion, position).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, position));
             game.armor = [None, None, None, None];
             if let Some(item) = case["head"].as_str() {
                 let mut stack = ItemStack::new(&format!("minecraft:{item}"), 1);
@@ -169,7 +169,7 @@ pub(crate) fn run_falling_impacts_wear_the_helmet_before_normal_armor_and_reduct
     // LivingEntity.hurtServer wears the helmet even when the cooldown then
     // rejects an equal hit: the second hit has no ordinary armor wear.
     for (initial, expected) in [(0, Some(5)), (160, None)] {
-        game.player = Some(PlayerMotion::new(game.motion, position).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, position));
         let mut helmet = ItemStack::new("minecraft:iron_helmet", 1);
         helmet.damage = initial;
         game.armor = [Some(helmet), None, None, None];
@@ -209,7 +209,7 @@ pub(crate) fn run_falling_impacts_wear_the_helmet_before_normal_armor_and_reduct
     }
     // Refreshing equipment protection during a hit must preserve absorption
     // that the damage pipeline has not consumed yet.
-    game.player = Some(PlayerMotion::new(game.motion, position).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, position));
     game.armor = [
         Some(ItemStack::new("minecraft:iron_helmet", 1)),
         None,

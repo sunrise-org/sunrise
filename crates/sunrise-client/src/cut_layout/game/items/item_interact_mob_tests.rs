@@ -158,7 +158,7 @@ fn actual_item_interact_mob_fallback_priority_and_filters_isolated() {
         game.world
             .chunks
             .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)));
         game.yaw = 0.0;
         game.pitch = 0.0;
         game.selected = 0;

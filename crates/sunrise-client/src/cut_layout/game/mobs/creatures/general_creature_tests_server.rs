@@ -87,7 +87,7 @@ fn ender_pearl_clears_impulse_before_next_fall() {
         crate::game::profile_resolver,
     )
     .unwrap();
-    let mut player = PlayerMotion::new(game.motion, Vec3::new(0.0, 64.0, 0.0)).unwrap();
+    let mut player = PlayerMotion::new(game.motion, Vec3::new(0.0, 64.0, 0.0));
     player
         .impulse
         .set_ignore_fall_damage(true, Some(player.position));

@@ -6,12 +6,9 @@ use sunrise_sim::{
     motion::{MotionResources, PlayerMotion},
 };
 
-pub fn initialize(resources: &MotionResources, guest: &mut Guest) -> bool {
+pub fn initialize(resources: &MotionResources, guest: &mut Guest) {
     let p = Vec3::new(guest.position[0], guest.position[1], guest.position[2]);
-    let Ok(motion) = PlayerMotion::new(resources, p) else {
-        return false;
-    };
-    let mut motion = motion;
+    let mut motion = PlayerMotion::new(resources, p);
     motion.body_yaw = guest.carried_body_yaw.take().unwrap_or_else(|| {
         // Entity.load initializes the joining player's body yaw from its saved view.
         if guest.saved.is_some() {
@@ -65,5 +62,4 @@ pub fn initialize(resources: &MotionResources, guest: &mut Guest) -> bool {
         m.hurt_log = hurts;
         m.attack_log = attacks;
     }
-    true
 }

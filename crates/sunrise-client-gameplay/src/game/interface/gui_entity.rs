@@ -122,6 +122,19 @@ impl ClientGame<'_> {
         entity: &GuiEntity,
         view: GuiEntityView,
     ) -> Result<(), GuiEntityError> {
+        self.native_draw_entity_clipped(batch, entity, view, view.rect)
+    }
+
+    /// [`Self::native_draw_entity`] with its own depth pass cut at `clip` (`[x0, y0, x1, y1]`,
+    /// screen GUI pixels) in place of `view.rect`: a `GuiCanvas` poses the vertices afterwards,
+    /// so it passes the posed box's bounds.
+    pub(in crate::game) fn native_draw_entity_clipped(
+        &self,
+        batch: &mut HudBatch,
+        entity: &GuiEntity,
+        view: GuiEntityView,
+        clip: [f32; 4],
+    ) -> Result<(), GuiEntityError> {
         // A client's call: a logical server (the integrated server thread too) has no screen.
         if self.common.is_logical_server() {
             return Err(GuiEntityError::Unavailable);
@@ -130,7 +143,7 @@ impl ClientGame<'_> {
             return Err(GuiEntityError::BadView);
         }
         let mut scratch = SCRATCH.with_borrow_mut(std::mem::take);
-        let result = self.draw_entity_with(batch, entity, view, &mut scratch);
+        let result = self.draw_entity_with(batch, entity, view, clip, &mut scratch);
         SCRATCH.with_borrow_mut(|kept| *kept = scratch);
         result
     }
@@ -140,6 +153,7 @@ impl ClientGame<'_> {
         batch: &mut HudBatch,
         entity: &GuiEntity,
         view: GuiEntityView,
+        clip: [f32; 4],
         scratch: &mut Scratch,
     ) -> Result<(), GuiEntityError> {
         let rect = view.rect;
@@ -220,7 +234,7 @@ impl ClientGame<'_> {
         for &(_, p, uv, color, _) in &scratch.eye_quads {
             batch.quad_3d(p, uv, color);
         }
-        batch.depth_glint_since(start, additive, rect);
+        batch.depth_glint_since(start, additive, clip);
         Ok(())
     }
 
@@ -815,9 +829,10 @@ mod tests {
             remote.logged_in = true;
             remote.entity_id = 7;
             remote.profile = 42;
-            game.common.player = Some(
-                sunrise_sim::motion::PlayerMotion::new(game.common.motion, Position::ZERO).unwrap(),
-            );
+            game.common.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.common.motion,
+                Position::ZERO,
+            ));
             game.spawn_entity(15, DRAGON, [0.0; 3], [0.0; 3]);
             let tracked = game.entity(15).expect("tracked dragon handle");
             let part = game.entity(16).expect("dragon part handle");

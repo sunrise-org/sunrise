@@ -120,10 +120,10 @@ pub mod tests {
     use sunrise_gameplay_common::game::held_items::HeldItemsGameExt1 as _;
 
     pub fn stand_in_first_person(game: &mut crate::game::ClientGame<'_>) {
-        game.player = Some(
-            sunrise_sim::motion::PlayerMotion::new(game.motion, sunrise_core::geometry::Vec3::ZERO)
-                .unwrap(),
-        );
+        game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+            game.motion,
+            sunrise_core::geometry::Vec3::ZERO,
+        ));
         game.tick_player_model();
     }
 
@@ -178,13 +178,10 @@ pub mod tests {
             }
         }
         fn hold_a_sword(game: &mut crate::game::ClientGame<'_>) {
-            game.player = Some(
-                sunrise_sim::motion::PlayerMotion::new(
-                    game.motion,
-                    sunrise_core::geometry::Vec3::ZERO,
-                )
-                .unwrap(),
-            );
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                sunrise_core::geometry::Vec3::ZERO,
+            ));
             game.common.inventory[game.common.selected] = Some(
                 sunrise_items::items::ItemStack::new("minecraft:iron_sword", 1),
             );
@@ -374,13 +371,10 @@ pub mod tests {
                 );
                 assert_eq!(game.item_use_animation(&removed), UseAnimation::None);
                 assert_eq!(calls.load(Ordering::Relaxed), 9);
-                game.player = Some(
-                    sunrise_sim::motion::PlayerMotion::new(
-                        game.motion,
-                        sunrise_core::geometry::Vec3::ZERO,
-                    )
-                    .unwrap(),
-                );
+                game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                    game.motion,
+                    sunrise_core::geometry::Vec3::ZERO,
+                ));
                 game.common.inventory[game.common.selected] =
                     Some(sunrise_items::items::ItemStack::new("minecraft:bow", 1));
                 game.using = Some((game.selected, 0));
@@ -411,13 +405,10 @@ pub mod tests {
         // The unmodified comparison owns a new resource graph and Parts snapshot.
         sunrise_gameplay_common::game::api_values::install_parts(&[]).unwrap();
         super::super::native_entity_refs::tests::with_client_game(|game| {
-            game.player = Some(
-                sunrise_sim::motion::PlayerMotion::new(
-                    game.motion,
-                    sunrise_core::geometry::Vec3::ZERO,
-                )
-                .unwrap(),
-            );
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                sunrise_core::geometry::Vec3::ZERO,
+            ));
             game.common.inventory[game.common.selected] =
                 Some(sunrise_items::items::ItemStack::new("minecraft:bow", 1));
             game.using = Some((game.selected, 0));

@@ -7,7 +7,7 @@ pub trait Hooks {
     /// sends itself (keep-alives, chunk batch acknowledgements, configuration pongs, cookies, the
     /// configuration phase), the answers the
     /// connection sends in whichever phase it is in (a resource pack's status, a dialog's custom
-    /// click action), and far terrain requests. Cancel drops the packet: the game goes on as if
+    /// click action). Cancel drops the packet: the game goes on as if
     /// it had been sent, so the server never hears of it. Client-side, on any server, single
     /// player's own included. Every packet exposes its protocol type id; custom payloads also
     /// expose their channel and raw bytes, as `client_packet` does for the packets that arrive.

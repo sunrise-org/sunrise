@@ -34,7 +34,7 @@ Everything below is in the current release.
 
 - **The game.** Survival, creative, hardcore and spectator; vanilla world generation in all three dimensions, mobs, villagers, raids, redstone, every command, the HUD and the recipe book. Vanilla saves open as they are, and worlds from 1.8 to 26.2 are upgraded.
 - **Multiplayer.** Join vanilla and Sunrise servers (online mode included), open a world to LAN, or invite friends with a code from the launcher's Home page.
-- **Graphics.** Distant terrain up to 1,024 chunks, graphics presets, HDR and controllers, all off by default where they would change the vanilla look ([settings](https://playsunrise.net/docs/settings)).
+- **Graphics.** Graphics presets, HDR and controllers, all off by default where they would change the vanilla look ([settings](https://playsunrise.net/docs/settings)).
 - **Packs.** Resource packs, data packs and shader packs ([below](#mods-and-shader-packs)).
 - **Mods.** Content mods and native Rust mods, installed from the launcher ([below](#mods-and-shader-packs)).
 - **Servers.** Host one from the launcher, or run `sunrise-server` on a VPS ([below](#host-a-server)).

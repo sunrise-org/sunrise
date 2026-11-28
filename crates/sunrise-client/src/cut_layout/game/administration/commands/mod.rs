@@ -402,7 +402,7 @@ pub(crate) mod fill_note_instrument_tests {
         game.block_ticks
             .add_empty_chunk(ChunkPos::new(0, 0))
             .unwrap();
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)));
         game.creative = true;
         assert!(game.run_command("forceload add 0 0"));
         assert!(game.run_command("tick freeze"));

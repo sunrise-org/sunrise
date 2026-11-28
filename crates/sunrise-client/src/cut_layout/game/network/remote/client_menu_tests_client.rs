@@ -481,3 +481,102 @@ fn client_menu_reads_follow_packets_and_lifetimes() {
 use sunrise_gameplay_common::game::native_menu_refs_common::NativeMenuRefsCommonGameExt1 as _;
 
 use sunrise_gameplay_common::game::player_identity::PlayerIdentityGameExt1 as _;
+
+/// Open server menu `menu` as window `container` by packet, with no clicked block tracked, and
+/// return the local player's `MenuRef` for it.
+fn open_menu_by_packet(
+    game: &mut sunrise_client_gameplay::game::ClientGame<'_>,
+    container: i32,
+    menu: &str,
+) -> mod_api::MenuRef {
+    use mod_api::ClientHost;
+    use sunrise_core::nbt::Tag;
+    use sunrise_protocol::packets::play::{self, Clientbound as C};
+    let id = game
+        .client
+        .remote
+        .as_ref()
+        .unwrap()
+        .builtin
+        .get("minecraft:menu")
+        .unwrap()
+        .id(menu)
+        .unwrap();
+    game.handle_packet(C::OpenScreen(play::OpenScreen {
+        container,
+        menu: id,
+        title: Tag::String(menu.into()),
+    }))
+    .unwrap();
+    let host: &dyn ClientHost = game;
+    host.local_player().unwrap().container_menu(host).unwrap()
+}
+
+/// A crafter's client slot rules follow vanilla `CrafterMenu`'s whole layout: nine
+/// `CrafterSlot`s (a disabled one refuses placement, `CrafterSlot.mayPlace`), the inventory, then
+/// the `NonInteractiveResultSlot` at 45, which neither takes nor gives.
+#[test]
+#[ignore = "daily"]
+fn client_crafter_slot_rules_use_the_crafter_layout() {
+    use crate::game::server_side::native_entity_refs::tests::with_client_game;
+    use sunrise_gameplay_common::game::api_values::TryIntoApi;
+    use sunrise_protocol::packets::play::{self, Clientbound as C};
+
+    with_client_game(|game| {
+        let (_reader, _writer) = connect_menu_test(game);
+        spawn_menu_test(game);
+        let crafter = open_menu_by_packet(game, 5, "minecraft:crafter_3x3");
+        game.handle_packet(C::ContainerSetData(play::ContainerSetData {
+            container: 5,
+            id: 0,
+            value: 1,
+        }))
+        .unwrap();
+        let stone = sunrise_items::items::ItemStack::new("minecraft:stone", 1)
+            .try_into_api()
+            .unwrap();
+        assert_eq!(crafter.slot_holds(game, 0, &stone), Some(0));
+        assert_eq!(crafter.slot_holds(game, 1, &stone), Some(64));
+        assert_eq!(crafter.slot_holds(game, 9, &stone), Some(64));
+        assert_eq!(crafter.slot_holds(game, 45, &stone), Some(0));
+        assert_eq!(crafter.slot_gives(game, 45), Some(false));
+        assert_eq!(crafter.slot_holds(game, 46, &stone), None);
+    });
+}
+
+/// A shulker box window opened by packet with no clicked block tracked still answers with
+/// `ShulkerBoxSlot.mayPlace`: no shulker box goes inside, other items do.
+#[test]
+#[ignore = "daily"]
+fn client_packet_opened_shulker_box_refuses_shulker_boxes() {
+    use crate::game::server_side::native_entity_refs::tests::with_client_game;
+    use sunrise_gameplay_common::game::api_values::TryIntoApi;
+
+    with_client_game(|game| {
+        let (_reader, _writer) = connect_menu_test(game);
+        spawn_menu_test(game);
+        let shulker = open_menu_by_packet(game, 6, "minecraft:shulker_box");
+        let api = |item| {
+            sunrise_items::items::ItemStack::new(item, 1)
+                .try_into_api()
+                .unwrap()
+        };
+        assert_eq!(
+            shulker.slot_holds(game, 0, &api("minecraft:shulker_box")),
+            Some(0)
+        );
+        assert_eq!(
+            shulker.slot_holds(game, 26, &api("minecraft:red_shulker_box")),
+            Some(0)
+        );
+        assert_eq!(
+            shulker.slot_holds(game, 0, &api("minecraft:stone")),
+            Some(64)
+        );
+        // The player's inventory slots in it take a shulker box.
+        assert_eq!(
+            shulker.slot_holds(game, 27, &api("minecraft:shulker_box")),
+            Some(1)
+        );
+    });
+}

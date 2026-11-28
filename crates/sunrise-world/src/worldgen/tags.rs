@@ -1,6 +1,6 @@
 //! Version-pinned tag codecs, resource-stack merging and dependency resolution.
 use super::{DecodeError, Object, optional, required};
-use crate::tag_layers::dependency_order;
+use crate::tag_layers::{convention, dependency_order};
 use serde_json::value::RawValue;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -114,19 +114,17 @@ pub struct BuiltTags<T> {
     pub tags: BTreeMap<String, Vec<T>>,
     pub missing: BTreeMap<String, Vec<TagEntryWithSource>>,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TagBuildError {
-    TooManyTags,
-}
-impl std::fmt::Display for TagBuildError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::TooManyTags => "tag definitions exceed 8192 entries",
-        })
-    }
-}
-impl std::error::Error for TagBuildError {}
 impl TagDefinitions {
+    /// Start a registry's definitions with its built-in convention tags, before
+    /// applying prepared resources and higher-priority pack layers.
+    pub fn with_conventions(kind: &str) -> Result<Self, DecodeError> {
+        let mut definitions = Self::default();
+        for (id, json) in convention::json_entries(kind) {
+            definitions.apply_json(id, "sunrise:convention", json)?;
+        }
+        Ok(definitions)
+    }
+
     /// Apply resources in their pack priority order. A successfully decoded
     /// replace file clears earlier entries; a rejected file changes nothing.
     pub fn add(&mut self, name: &str, source: &str, file: TagFile) -> Result<(), DecodeError> {
@@ -175,20 +173,10 @@ impl TagDefinitions {
     pub fn definitions(&self) -> &BTreeMap<String, Vec<TagEntryWithSource>> {
         &self.entries
     }
-    /// Build the bounded worldgen table. Missing required references
-    /// invalidate their own tags, not unrelated tags.
-    pub fn build<T: Clone + Ord>(
-        &self,
-        lookup: impl FnMut(&str, bool) -> Option<T>,
-    ) -> Result<BuiltTags<T>, TagBuildError> {
-        if self.entries.len() > 8192 {
-            return Err(TagBuildError::TooManyTags);
-        }
-        Ok(self.bind(lookup))
-    }
-
-    /// Bind the tags of a registry without a worldgen table size limit.
-    /// Element lookup receives the entry's required flag, as in vanilla.
+    /// Bind a registry's merged tag definitions in dependency order.
+    /// Element lookup receives the entry's required flag. Missing optional
+    /// entries are ignored; tags with missing required entries are omitted
+    /// from `BuiltTags::tags` and reported in `BuiltTags::missing`.
     pub fn bind<T: Clone + Ord>(
         &self,
         mut lookup: impl FnMut(&str, bool) -> Option<T>,
@@ -263,7 +251,7 @@ mod tests {
         );
         assert!(definitions.apply_json("empty", "bad", "{}").is_err());
         assert!(definitions.apply_json("syntax", "bad", "{").is_err());
-        let built = definitions.build(|id, _| Some(id.to_owned())).unwrap();
+        let built = definitions.bind(|id, _| Some(id.to_owned()));
         assert_eq!(
             built.tags["minecraft:a"],
             vec!["minecraft:one", "minecraft:two"]
@@ -277,7 +265,7 @@ mod tests {
                 r##"{"replace":true,"values":["three"]}"##,
             )
             .unwrap();
-        let built = definitions.build(|id, _| Some(id.to_owned())).unwrap();
+        let built = definitions.bind(|id, _| Some(id.to_owned()));
         assert_eq!(built.tags["minecraft:a"], vec!["minecraft:three"]);
     }
     #[test]
@@ -294,9 +282,7 @@ mod tests {
         ] {
             definitions.apply_json(name, source, json).unwrap();
         }
-        let built = definitions
-            .build(|id, _| (!id.ends_with("absent")).then(|| id.to_owned()))
-            .unwrap();
+        let built = definitions.bind(|id, _| (!id.ends_with("absent")).then(|| id.to_owned()));
         assert_eq!(built.tags["minecraft:things"], vec!["minecraft:stone"]);
         assert!(built.missing.is_empty());
     }
@@ -304,9 +290,7 @@ mod tests {
     fn ordered_removal_objects_survive_the_worldgen_codec() {
         let mut definitions = TagDefinitions::default();
         definitions.apply_json("things", "fixture", r##"{"values":["stone", {"id":"stone","remove":true}, "stone", {"id":"stone","remove":true}, {"id":"absent","remove":true}]}"##).unwrap();
-        let built = definitions
-            .build(|id, _| (!id.ends_with("absent")).then(|| id.to_owned()))
-            .unwrap();
+        let built = definitions.bind(|id, _| (!id.ends_with("absent")).then(|| id.to_owned()));
         assert!(built.tags["minecraft:things"].is_empty());
         assert!(built.missing.is_empty());
     }
@@ -325,9 +309,7 @@ mod tests {
         ] {
             definitions.apply_json(name, "fixture", json).unwrap();
         }
-        let built = definitions
-            .build(|id, _| (!id.ends_with("absent")).then(|| id.to_owned()))
-            .unwrap();
+        let built = definitions.bind(|id, _| (!id.ends_with("absent")).then(|| id.to_owned()));
         assert_eq!(built.tags["minecraft:a"], vec!["minecraft:one"]);
         assert_eq!(
             built.tags["minecraft:b"],

@@ -75,7 +75,7 @@ pub(crate) fn run_a_mob_saves_its_live_portal_cooldown() {
     let expected = &witness.expected;
     with_game(|game| {
         // A player's tickets make the chunks around the origin entity-ticking.
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
         game.update_chunk_tickets();
         let initial = witness.inputs.initial_cooldown;
         let pig = game

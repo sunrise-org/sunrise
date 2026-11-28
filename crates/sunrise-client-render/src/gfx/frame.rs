@@ -27,6 +27,7 @@ pub(super) struct Globals {
     /// Sunrise Extras' dynamic lights: camera-relative position and level (`dynamic_light`).
     pub(super) dynamic_lights: [[f32; 4]; crate::dynamic_light::MAX],
     pub(super) colored_lights: [crate::dynamic_light::Colored; crate::dynamic_light::MAX],
+    /// x: coloured light count; yzw: padding.
     pub(super) colored_count: [u32; 4],
     pub(super) emissive_layers: [[u32; 4]; crate::native_emissive::MAX],
     pub(super) emissive_count: [u32; 4],
@@ -130,7 +131,7 @@ pub struct Frame<'a> {
     pub shadow_cache: bool,
     /// Render distance in blocks (fog end).
     pub distance: f32,
-    /// Full-detail terrain distance in blocks; distant LODs bypass the cave graph.
+    /// Terrain render distance in blocks.
     pub detail_distance: f32,
     /// Shadow caster selection distance in blocks; defaults to the effective eye distance
     /// (`detail_distance`) when `None`.
@@ -170,8 +171,6 @@ pub struct Frame<'a> {
     pub outline_after_terrain: bool,
     /// `BlockOutlineRenderState.highContrast`: a thick black outline under a bright one.
     pub outline_high_contrast: bool,
-    /// The PvP & HUD page's outline and hit colour (`pvp::Frame`; default: vanilla's).
-    pub pvp: crate::pvp::Frame,
     /// `lines` with a colour and pixel width (`gizmos::camera_relative`):
     /// the fishing line and debug gizmos, depth tested, then gizmos drawn
     /// over everything.

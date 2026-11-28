@@ -49,13 +49,10 @@ fn frame_adoption(glow_first: bool) {
     )
     .unwrap();
     game.build_registries();
-    game.player = Some(
-        sunrise_sim::motion::PlayerMotion::new(
-            game.motion,
-            sunrise_core::geometry::Vec3::new(4.5, 100.0, 4.5),
-        )
-        .unwrap(),
-    );
+    game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+        game.motion,
+        sunrise_core::geometry::Vec3::new(4.5, 100.0, 4.5),
+    ));
     game.creative = false;
     let empty = ItemStack::new("minecraft:map", 1);
     *game.held_mut() = Some(empty.clone());

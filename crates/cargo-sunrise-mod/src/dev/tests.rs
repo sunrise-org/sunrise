@@ -205,7 +205,9 @@ fn a_retained_sdk_builds_a_lower_mixin_with_its_signed_tool() {
         used: Vec::new(),
     };
     let script = format!(
-        "#!/bin/sh\n[ \"$1\" = native-build ] || exit 2\nIFS= read -r plan || exit 2\n\
+        "#!/bin/sh\n[ \"$#\" = 1 ] && [ \"$1\" = native-build ] || exit 2\n\
+         [ \"$SUNRISE_NATIVE_CARGO_TIMINGS\" = 1 ] && [ -z \"$SUNRISE_NATIVE_BUILD_VERBOSE\" ] || exit 2\n\
+         IFS= read -r plan || exit 2\n\
          case \"$plan\" in *'\"contract\":2'*'\"registry\":true'*) ;; *) exit 2;; esac\n\
          printf '%s\\n' '{}'\n",
         serde_json::to_string(&result).unwrap(),
@@ -273,14 +275,41 @@ fn a_retained_sdk_builds_a_lower_mixin_with_its_signed_tool() {
     let good = fs::read(&tool).unwrap();
     fs::write(&tool, b"not the signed asset").unwrap();
     let mut events = Events::default();
+    let verbose = BuildDiagnostics {
+        timings: Timings::Html,
+        stderr: sunrise_native_build::CompilerStderr::Mirror,
+    };
+    let error = sdk
+        .compile(std::slice::from_ref(&bundle), &plan, &mut events, verbose)
+        .unwrap_err();
     assert!(
-        sdk.compile(std::slice::from_ref(&bundle), &plan, &mut events)
-            .is_err()
+        error.contains(BUILD) && error.contains("pinned tool") && error.contains("--verbose"),
+        "{error}"
+    );
+    assert!(events.built.is_none());
+
+    let diagnostics = BuildDiagnostics {
+        timings: Timings::Html,
+        stderr: sunrise_native_build::CompilerStderr::LogOnly,
+    };
+    assert!(
+        sdk.compile(
+            std::slice::from_ref(&bundle),
+            &plan,
+            &mut events,
+            diagnostics
+        )
+        .is_err()
     );
     assert!(events.built.is_none());
     fs::write(&tool, good).unwrap();
-    sdk.compile(std::slice::from_ref(&bundle), &plan, &mut events)
-        .unwrap();
+    sdk.compile(
+        std::slice::from_ref(&bundle),
+        &plan,
+        &mut events,
+        diagnostics,
+    )
+    .unwrap();
     assert_eq!(events.built, Some(result));
 
     // An explicitly empty map is still this tool's schema, not an older one. A missing
@@ -505,7 +534,15 @@ fn two_callers_initialize_an_empty_sdk_cache_concurrently() {
                         )
                         .unwrap();
                         assert_eq!(sdk.index.build.commit, BUILD);
-                        assert_eq!(fs::read(sdk.surface()).unwrap(), SURFACE_BYTES);
+                        assert_eq!(
+                            fs::read(
+                                sdk.dir
+                                    .join(sdk_fetch::METADATA_DIR)
+                                    .join(sdk_fetch::SURFACE)
+                            )
+                            .unwrap(),
+                            SURFACE_BYTES
+                        );
                         sdk
                     })
                 })
@@ -566,7 +603,11 @@ fn two_callers_initialize_an_empty_sdk_cache_concurrently() {
         assert_eq!(lock_count, 2);
 
         // Refreshing metadata must not remove unpacked slices in use.
-        fs::write(sdk.surface(), b"{}").unwrap();
+        let surface = sdk
+            .dir
+            .join(sdk_fetch::METADATA_DIR)
+            .join(sdk_fetch::SURFACE);
+        fs::write(&surface, b"{}").unwrap();
         let refreshed = native_sdk_from(
             &cache,
             Base::Folder(base_dir.clone()),
@@ -576,7 +617,8 @@ fn two_callers_initialize_an_empty_sdk_cache_concurrently() {
             stub_rust,
         )
         .unwrap();
-        assert_eq!(fs::read(refreshed.surface()).unwrap(), SURFACE_BYTES);
+        assert_eq!(refreshed.dir, sdk.dir);
+        assert_eq!(fs::read(surface).unwrap(), SURFACE_BYTES);
         assert_eq!(
             fs::read(slices.runtime.join("sunrise-prebuilt.json")).unwrap(),
             RUNTIME_BYTES

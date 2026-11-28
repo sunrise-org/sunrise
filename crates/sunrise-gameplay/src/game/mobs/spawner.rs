@@ -111,8 +111,9 @@ impl crate::game::ServerGame<'_> {
         let pos = [key.0, key.1, key.2];
         let mut random = std::mem::replace(
             &mut self.common.world.random,
-            LevelRandom::for_level(LegacyRandom::new(0)),
+            crate::rng_count::placeholder_level(LegacyRandom::new(0)),
         );
+        let lent = crate::game::server_side::native_level_spawning::LevelRandomLent::start();
         let mut sequences = std::mem::take(&mut self.server.rand_sequences);
         let mut events = Vec::new();
         let mut planned: Vec<Planned> = Vec::new();
@@ -141,6 +142,7 @@ impl crate::game::ServerGame<'_> {
         } else {
             plan(self)
         };
+        drop(lent);
         self.common.world.random = random;
         self.server.rand_sequences = sequences;
         let ids = self.add_planned(planned, created, rides);
@@ -473,14 +475,16 @@ impl crate::game::ServerGame<'_> {
             let mut events = Vec::new();
             let mut random = std::mem::replace(
                 &mut self.common.world.random,
-                LevelRandom::for_level(LegacyRandom::new(0)),
+                crate::rng_count::placeholder_level(LegacyRandom::new(0)),
             );
+            let lent = crate::game::server_side::native_level_spawning::LevelRandomLent::start();
             if let Some(BlockEntity::Spawner(s)) = self.common.world.block_entities.get_mut(&key) {
                 match data {
                     Some(data) => s.set_entity_data(kind, data, &mut random, &mut events),
                     None => s.set_entity_id(kind, &mut random, &mut events),
                 }
             }
+            drop(lent);
             self.common.world.random = random;
             let _ = self.apply_spawner_events(key, events, &HashMap::new(), None);
         }

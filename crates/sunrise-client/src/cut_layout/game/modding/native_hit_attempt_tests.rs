@@ -84,7 +84,7 @@ fn base_allow_does_not_override_worn_immunity() {
 
 #[cfg(any())]
 fn fresh_player(game: &mut sunrise_gameplay::game::ServerGame<'_>, mode: GameMode) {
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
     bind_local_player(game, 7, 7);
     // A replacement player starts with survival abilities even when Game was
     // already creative; force the mode transition to apply them to the new body.
@@ -485,7 +485,9 @@ fn hit_attempts_reach_the_listener_once_including_refusals() {
             let mut wither = Mob::new(47, kind, Vec3::ZERO, 0.0);
             let health = wither.health;
             let mut blast = Damage::of(DamageKind::Explosion);
-            blast.attacker_species = Some(sunrise_sim::mobs::Species::Wither);
+            blast.attacker_species = Some(sunrise_sim::mobs::species::vanilla_id(
+                sunrise_sim::mobs::Species::Wither,
+            ));
             assert!(!wither.damage(
                 damage_level_of!(game, &sunrise_sim::health::NO_ATTACK, no_push, None),
                 2.0,

@@ -175,7 +175,7 @@ fn the_merge_keeps_the_live_orb_and_its_portal_process() {
             time: 5,
             inside: true,
         };
-        game.server.portals.entities.insert(
+        game.server.portals.level.entities.insert(
             id,
             PortalState {
                 cooldown: 300,
@@ -189,7 +189,7 @@ fn the_merge_keeps_the_live_orb_and_its_portal_process() {
             )
             .0
         );
-        let state = game.server.portals.entities.get(&id).unwrap();
+        let state = game.server.portals.level.entities.get(&id).unwrap();
         let kept = state.process.map(|p| (p.entry, p.time, p.inside));
         assert_eq!(
             (state.cooldown, kept),
@@ -201,7 +201,7 @@ fn the_merge_keeps_the_live_orb_and_its_portal_process() {
             "{Pos:[8.5d,100d,8.5d],Value:1s,Age:0s,Health:5s,Count:1}",
             2,
         );
-        assert!(!game.server.portals.entities.contains_key(&other));
+        assert!(!game.server.portals.level.entities.contains_key(&other));
         assert!(
             run(
                 game,
@@ -209,7 +209,7 @@ fn the_merge_keeps_the_live_orb_and_its_portal_process() {
             )
             .0
         );
-        let state = game.server.portals.entities.get(&other).unwrap();
+        let state = game.server.portals.level.entities.get(&other).unwrap();
         assert_eq!((state.cooldown, state.process.is_none()), (120, true));
         assert_eq!(game.orbs.len(), 2);
     });

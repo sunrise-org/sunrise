@@ -161,12 +161,9 @@ impl crate::game::ServerGame<'_> {
                 .unwrap_or(0) as i32
         });
         if fresh {
-            let initialized = host.hub.guests.update(i, |guest| {
+            host.hub.guests.update(i, |guest| {
                 super::guest_body::initialize(self.common.motion, guest)
             });
-            if !initialized {
-                return Err(TurnRefused::Gone);
-            }
         }
         // Refusal must leave canonical records and loan state untouched.
         let Some(mut motion) = host.hub.guests.update(i, |g| g.motion.take()) else {
@@ -1019,6 +1016,19 @@ impl crate::game::ServerGame<'_> {
     pub fn as_guest<R>(&mut self, conn: u32, f: impl FnOnce(&mut Self) -> R) -> Option<R> {
         let gi = self.guest_index(conn)?;
         self.as_guest_at(gi, conn, f).ok()
+    }
+
+    /// `as_guest`, except that a guest whose turn this already is runs `f` where it stands:
+    /// the pickups a mod asks for in a guest's own turn reach the same code the pass uses.
+    pub(in crate::game) fn as_guest_here<R>(
+        &mut self,
+        conn: u32,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> Option<R> {
+        if self.server.lan_acting == Some(conn) {
+            return Some(f(self));
+        }
+        self.as_guest(conn, f)
     }
 
     /// `as_guest` for the guest at `gi` in the hub's list, which a caller that already found it

@@ -28,7 +28,6 @@ const GAMEPLAY: &str = "sunrise.settings.tab.gameplay";
 const TOOLS: &str = "sunrise.settings.tab.tools";
 const TOOLS_ABOUT: &str = "sunrise.settings.tab.tools.about";
 const EXTRAS: &str = "sunrise.settings.tab.extras";
-const EXTRAS_ABOUT: &str = "sunrise.settings.tab.extras.about";
 /// The Shaders page's row to the picked pack's own settings (that page's name).
 const SHADER_OPTIONS: &str = "sunrise.pages.shader_options";
 
@@ -40,9 +39,9 @@ pub enum Tab {
     PackOptions,
     /// The extras (`extras_ui`): what changes how the game plays, all off by default.
     Gameplay,
-    /// Replay Studio and the AI agent.
+    /// The AI agent.
     Tools,
-    /// PvP & HUD, and the pages crates register for Sunrise Settings.
+    /// The pages crates register for Sunrise Settings.
     Extras,
 }
 
@@ -164,22 +163,15 @@ impl SunriseScreen {
     }
     /// Tools: a row for each of its pages.
     fn tools() -> Vec<Row<SunriseRow>> {
-        [
-            (Page::Studio, "sunrise.pages.open.studio"),
-            (Page::Agent, "sunrise.pages.open.agent"),
-        ]
-        .into_iter()
-        .map(|(page, key)| open_row(page, lang::get(key)))
-        .collect()
+        vec![open_row(Page::Agent, lang::get("sunrise.pages.open.agent"))]
     }
-    /// Extras: PvP & HUD, then each page registered for Sunrise Settings.
+    /// Extras: the pages registered for Sunrise Settings.
     fn extras() -> Vec<Row<SunriseRow>> {
-        let pvp = open_row(Page::Pvp, lang::get("sunrise.pages.open.pvp"));
         let pages = crate::options_ui::registered_pages().iter().enumerate();
-        let added = pages
+        pages
             .filter(|(_, page)| page.place() == added::Place::SunriseSettings)
-            .map(|(i, page)| open_row(Page::Added(i), lang::get(page.title())));
-        std::iter::once(pvp).chain(added).collect()
+            .map(|(i, page)| open_row(Page::Added(i), lang::get(page.title())))
+            .collect()
     }
 }
 
@@ -268,8 +260,11 @@ impl Screen for SunriseScreen {
                     sheet(tab, lang::get(TOOLS), about, vec![group(Self::tools())])
                 }
                 Tab::Extras => {
-                    let about = lang::get(EXTRAS_ABOUT);
-                    sheet(tab, lang::get(EXTRAS), about, vec![group(Self::extras())])
+                    let rows = Self::extras();
+                    if rows.is_empty() {
+                        continue;
+                    }
+                    sheet(tab, lang::get(EXTRAS), String::new(), vec![group(rows)])
                 }
             };
             sheets.push(made);

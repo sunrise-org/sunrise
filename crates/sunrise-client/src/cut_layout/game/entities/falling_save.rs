@@ -139,7 +139,7 @@ mod tests {
                             });
                             game.add_primed_tnt(BlockPos::new(8, 70, 0), 0.0, 1, None, None);
                             game.server.ordered.announced = JoinSeq::MAX;
-                            game.server.tickets.0.update(None);
+                            game.server.chunk_ticking.tickets.update(None);
                             game.begin_ordered_ticks();
                             game.run_ordered_ticks(JoinSeq::MAX, false).unwrap();
                             assert!(game.tnts.is_empty());

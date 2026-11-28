@@ -26,7 +26,7 @@ pub(crate) mod tests {
             let effects = &mut *event.effects;
             match self.0 {
                 1 => effects.set_keep_contents(true),
-                2 => effects.spawn_item(stack(), at).unwrap(),
+                2 => effects.spawn_item(stack(), at, None).unwrap(),
                 3 => effects.award_experience(10, at).unwrap(),
                 4 => {
                     effects.drop_slot(None).unwrap();
@@ -40,7 +40,7 @@ pub(crate) mod tests {
                         // extra scatter slots, positioned items, then XP.
                         let pos = [at[0] + f64::from(index), at[1], at[2]];
                         effects.award_experience(1, pos).unwrap();
-                        effects.spawn_item(stack(), pos).unwrap();
+                        effects.spawn_item(stack(), pos, None).unwrap();
                         let count = 1 + index % 2;
                         effects
                             .drop_slot(Some(mod_api::ItemStack::new(self.1, count).unwrap()))
@@ -56,7 +56,7 @@ pub(crate) mod tests {
                                 ))
                             );
                             assert_eq!(
-                                effects.spawn_item(air, pos),
+                                effects.spawn_item(air, pos, None),
                                 Err(BlockRemovalEffectError::Stack(
                                     StackWriteError::EmptyEngineStack
                                 ))
@@ -69,13 +69,13 @@ pub(crate) mod tests {
                                 ))
                             ));
                             assert!(matches!(
-                                effects.spawn_item(invalid, pos),
+                                effects.spawn_item(invalid, pos, None),
                                 Err(BlockRemovalEffectError::Stack(
                                     StackWriteError::CountExceeded { .. }
                                 ))
                             ));
                             assert_eq!(
-                                effects.spawn_item(stack(), [f64::NAN, 0.0, 0.0]),
+                                effects.spawn_item(stack(), [f64::NAN, 0.0, 0.0], None),
                                 Err(BlockRemovalEffectError::NonFinitePosition)
                             );
                             assert_eq!(
@@ -84,6 +84,41 @@ pub(crate) mod tests {
                             );
                         }
                     }
+                }
+                6 => {
+                    use mod_api::{BlockRemovalEffectError, StackWriteError};
+                    let first = [1.25, 65.75, 2.5];
+                    let last = [2.25, 65.75, 2.5];
+                    effects
+                        .spawn_item(stack(), first, Some([0.375, -0.25, 0.125]))
+                        .unwrap();
+                    for motion in [
+                        [f64::NAN, 0.0, 0.0],
+                        [0.0, f64::INFINITY, 0.0],
+                        [0.0, 0.0, f64::NEG_INFINITY],
+                    ] {
+                        assert_eq!(
+                            effects.spawn_item(stack(), first, Some(motion)),
+                            Err(BlockRemovalEffectError::NonFiniteMotion)
+                        );
+                    }
+                    let invalid = mod_api::ItemStack::new(self.1, u32::MAX).unwrap();
+                    let bad_motion = Some([f64::NAN, 0.0, 0.0]);
+                    assert_eq!(
+                        effects.spawn_item(invalid.clone(), [f64::NAN, 0.0, 0.0], bad_motion),
+                        Err(BlockRemovalEffectError::NonFinitePosition)
+                    );
+                    assert_eq!(
+                        effects.spawn_item(invalid.clone(), last, bad_motion),
+                        Err(BlockRemovalEffectError::NonFiniteMotion)
+                    );
+                    assert!(matches!(
+                        effects.spawn_item(invalid, last, Some([0.0; 3])),
+                        Err(BlockRemovalEffectError::Stack(
+                            StackWriteError::CountExceeded { .. }
+                        ))
+                    ));
+                    effects.spawn_item(stack(), last, None).unwrap();
                 }
                 _ => {}
             }
@@ -103,7 +138,7 @@ pub(crate) mod tests {
             event.effects.drop_slot(None).unwrap();
             event
                 .effects
-                .spawn_item(mod_api::ItemStack::of(self.0), [0.0; 3])
+                .spawn_item(mod_api::ItemStack::of(self.0), [0.0; 3], None)
                 .unwrap();
             event.effects.award_experience(1, [0.0; 3]).unwrap();
             REMOVAL_PANICKED.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -152,9 +187,13 @@ pub(crate) mod tests {
 
     use sunrise_world::level::removal;
 
-    fn removal_outputs(
+    fn with_removal_entity(
         mode: u8,
-        check: impl FnOnce(&mut GameLevel<'_>, &mut sunrise_core::random::LevelRandom),
+        check: impl FnOnce(
+            &mut sunrise_gameplay::game::ServerGame<'_>,
+            BlockPos,
+            sunrise_world::registry::BlockStateId,
+        ),
     ) {
         use std::sync::Arc;
         use sunrise_level::containers::{ModBlockEntity, ModBlockEntityFields, ModContainer};
@@ -201,14 +240,24 @@ pub(crate) mod tests {
                         .collect(),
                     );
                 }
+                let pos = BlockPos::new(1, 64, 2);
                 game.world
                     .block_entities
-                    .insert((1, 64, 2), BlockEntity::Mod(Box::new(entity)));
-                game.with_level(|_, level, _| {
-                    let mut reference = level.world.random.clone();
-                    level.remove_entity(BlockPos::new(1, 64, 2), state, true);
-                    check(level, &mut reference);
-                });
+                    .insert((pos.x, pos.y, pos.z), BlockEntity::Mod(Box::new(entity)));
+                check(game, pos, state);
+            });
+        });
+    }
+
+    fn removal_outputs(
+        mode: u8,
+        check: impl FnOnce(&mut GameLevel<'_>, &mut sunrise_core::random::LevelRandom),
+    ) {
+        with_removal_entity(mode, |game, pos, state| {
+            game.with_level(|_, level, _| {
+                let mut reference = level.world.random.clone();
+                level.remove_entity(pos, state, true);
+                check(level, &mut reference);
             });
         });
     }
@@ -285,6 +334,91 @@ pub(crate) mod tests {
             assert_eq!(&*spawn.stack.item, "minecraft:diamond");
             assert_eq!(spawn.stack.count, 1);
             assert!(spawn.motion.is_none());
+        });
+    }
+    #[test]
+    #[ignore = "daily"]
+    fn removal_publishes_explicit_and_default_motion_without_disturbing_level_random() {
+        use sunrise_core::geometry::Vec3;
+        use sunrise_core::random::LegacyRandom;
+        use sunrise_level::random_source::{record_seeds, replay_seeds, unique_seed};
+
+        if sunrise_gameplay::game::native_entity_refs::tests::run_fresh_cases(
+            "cut_layout::game::server_side::spill::tests::removal_publishes_explicit_and_default_motion_without_disturbing_level_random",
+            "SUNRISE_REMOVAL_MOTION_CHILD",
+            &["motion"],
+        ) {
+            return;
+        }
+        with_removal_entity(6, |game, pos, stone| {
+            let air = game
+                .pack
+                .assets
+                .registry
+                .default_state("minecraft:air")
+                .unwrap();
+            let key = (pos.x, pos.y, pos.z);
+            let entity = game.world.block_entities.remove(&key).unwrap();
+            let start = game.dropped.len();
+            // Control: the same block write without a Part to contribute any spawns.
+            game.world.set(pos.x, pos.y, pos.z, stone).unwrap();
+            game.world.random.set_seed(7);
+            assert!(game.set_block_live([pos.x, pos.y, pos.z], air, 0, false));
+            let baseline = game.world.random.next_int();
+            assert_eq!(game.dropped.len(), start);
+
+            game.world.set(pos.x, pos.y, pos.z, stone).unwrap();
+            game.world.block_entities.insert(key, entity.clone());
+            game.world.random.set_seed(7);
+            let (seeds, tape) = record_seeds(|| [unique_seed(), unique_seed()]);
+            replay_seeds(tape.clone(), || {
+                assert!(game.set_block_live([pos.x, pos.y, pos.z], air, 0, false));
+            });
+            assert!(
+                tape.complete(),
+                "only the two accepted calls construct entities"
+            );
+            assert_eq!(game.world.random.next_int(), baseline);
+            let [explicit, default] = &game.dropped[start..] else {
+                panic!("expected two items, in submission order");
+            };
+            assert_eq!(explicit.position, Vec3::new(1.25, 65.75, 2.5));
+            assert_eq!(explicit.velocity, Vec3::new(0.375, -0.25, 0.125));
+            assert_eq!(default.position, Vec3::new(2.25, 65.75, 2.5));
+            for (item, seed, has_default_motion) in
+                [(explicit, seeds[0], false), (default, seeds[1], true)]
+            {
+                assert_eq!(
+                    (&*item.stack.item, item.stack.count),
+                    ("minecraft:diamond", 1)
+                );
+                assert_eq!(item.pickup_delay, 10);
+                let mut random = LegacyRandom::new(seed);
+                // The constructor takes UUID, bob offset and yaw before any motion draws.
+                random.next_long();
+                random.next_long();
+                random.next_float();
+                random.next_float();
+                if has_default_motion {
+                    let x = random.next_double() * 0.2 - 0.1;
+                    let z = random.next_double() * 0.2 - 0.1;
+                    assert_eq!(item.velocity, Vec3::new(x, 0.2, z));
+                }
+                assert_eq!(item.random.state(), random.state());
+            }
+
+            // The same removal with the side effects skipped retires the row and publishes no item.
+            let published = game.dropped.len();
+            game.world.set(pos.x, pos.y, pos.z, stone).unwrap();
+            game.world.block_entities.insert(key, entity);
+            assert!(game.set_block_live(
+                [pos.x, pos.y, pos.z],
+                air,
+                sunrise_world::level::flags::UPDATE_SKIP_BLOCK_ENTITY_SIDEEFFECTS,
+                false
+            ));
+            assert!(game.world.block_entities.get(&key).is_none());
+            assert_eq!(game.dropped.len(), published);
         });
     }
     #[test]
@@ -998,3 +1132,71 @@ mod crafter_drop_name_tests {
     }
 }
 use sunrise_gameplay_common::game::chat_common::ChatCommonGameExt1 as _;
+
+#[cfg(all(test, feature = "client"))]
+mod ominous_banner_tests {
+    use sunrise_core::nbt::Tag;
+    use sunrise_gameplay_common::game::spill_common::Pending;
+    use sunrise_items::item_data;
+    use sunrise_level::containers::BlockEntity;
+    use sunrise_sim::{block_entity_item, mobs::raider, save};
+
+    #[test]
+    fn ominous_banner_survives_placement_save_and_drop() {
+        let original = raider::ominous_banner();
+        let Tag::Compound(components) = item_data::component_snapshot(&original).unwrap() else {
+            panic!("banner components");
+        };
+        for block in ["minecraft:white_banner", "minecraft:white_wall_banner"] {
+            let pos = (1, 64, 2);
+            let fresh = BlockEntity::for_block(block).unwrap();
+            let fresh = save::block_entity_encode::encode(pos, &fresh, block, &Default::default());
+            let placed = block_entity_item::place(&fresh, &components, false);
+            let (_, placed) = save::decode_block_entity(&placed).unwrap();
+            let saved = save::block_entity_encode::encode(pos, &placed, block, &Default::default());
+            let (_, loaded) = save::decode_block_entity(&saved).unwrap();
+            let BlockEntity::Banner(banner) = &loaded else {
+                panic!("placed banner");
+            };
+            // Raid.getBannerComponentPatch: eight layers; the count is a fixture outcome, not a cap.
+            assert_eq!(banner.layers.len(), 8);
+            let mut pending = Pending::default();
+            pending.record_saved([pos.0, pos.1, pos.2], &saved);
+            let mut items = sunrise_items::items::Items::for_tests(Default::default());
+            items.set_loot_tables(std::sync::Arc::new([(
+                "test:banner".to_owned(),
+                serde_json::json!({"type":"minecraft:empty","pools":[{"rolls":1,"entries":[{
+                    "type":"minecraft:item","name":"minecraft:white_banner",
+                    "modifier":{"type":"minecraft:copy_components","source":"block_entity",
+                        "include":["minecraft:banner_patterns","minecraft:custom_name",
+                            "minecraft:item_name","minecraft:rarity","minecraft:tooltip_display"]}
+                }]}]}),
+            )].into_iter().collect()));
+            let source = pending.source([pos.0, pos.1, pos.2]);
+            let dropped = sunrise_world::loot::copy::with_block_source(source.as_deref(), || {
+                items
+                    .loot_table(
+                        "test:banner",
+                        false,
+                        None,
+                        &mut sunrise_core::random::LegacyRandom::new(0),
+                    )
+                    .remove(0)
+            });
+            assert!(dropped.data().unwrap().ominous_banner);
+            assert!(sunrise_sim::banner::tooltip_layers(&dropped).is_empty());
+            assert_eq!(
+                crate::item_tooltip::name_line(&dropped, &|_| None),
+                "Ominous Banner"
+            );
+            assert_eq!(
+                sunrise_sim::stations::rarity(&dropped, "common"),
+                "uncommon"
+            );
+            assert_eq!(
+                item_data::component_snapshot(&dropped),
+                Some(Tag::Compound(components.clone()))
+            );
+        }
+    }
+}

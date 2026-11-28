@@ -26,8 +26,9 @@ from tools.ci.rust_changes import changed_paths  # noqa: E402
 # tests/test_ci_test_scope.py scans crates/ and xtask/ and fails on a read missing here. Entries outside every package
 # directory only document the read: a change there selects the whole workspace.
 SUNRISE_CLIENT = [
-    # The build script and the native hook tests read the hook targets' sources.
-    "crates/sunrise-client-render/src", "crates/sunrise-world/src", "crates/sunrise-items/src",
+    # The build script and the native hook tests read the hook targets' sources; prepared-data tests include the shared boundary.
+    "crates/sunrise-client-render/src", "crates/sunrise-core/src/prepared_test_root.rs",
+    "crates/sunrise-world/src", "crates/sunrise-items/src",
     "docs/api/launch-reference.md", "docs/sunrise-ctl-commands.md", "docs/modding/examples/src/worldgen.rs",
     "docs/parity/block-entity-client-ticks.jsonl", "docs/parity/random-chance-seeded.jsonl",
     "research-lock.json", "tests/fixture_support/item_resource_properties.rs", "tests/fixtures",
@@ -48,6 +49,8 @@ MOD_API_GEN = [
 READERS = {
     "cargo-sunrise-mod": [
         "Cargo.lock", "crates/sunrise-attestation/tests/fixtures", "crates/sunrise-mod-api",
+        # The cold-discovery test copies the generator's inputs into a scratch tree.
+        "crates/sunrise-mod-api-gen/internals.txt", "crates/sunrise-mod-api-gen/source-layout",
         "crates/sunrise-mod-package/src/sdk/fixture.tar.xz",
         # The page checks read the package crate's screenshot fixtures.
         "crates/sunrise-mod-package/tests/fixtures",
@@ -67,21 +70,29 @@ READERS = {
     # Shares sunrise-client's sources, so its unit tests run the same reads.
     "sunrise-client-lib": SUNRISE_CLIENT,
     "sunrise-gameplay-common": [
+        "crates/sunrise-core/src/prepared_test_root.rs",
         "crates/sunrise-gameplay/src", "crates/sunrise-mod-vocab/src/hooks", "crates/sunrise-world/src",
         "docs/api/launch-reference.md", "docs/modding/examples/src/worldgen.rs",
     ],
-    "sunrise-gameplay": ["crates/sunrise-mod-vocab/src/hooks", "tests/fixtures"],
-    "sunrise-client-gameplay": ["crates/sunrise-mod-vocab/src/hooks"],
+    "sunrise-gameplay": [
+        "crates/sunrise-core/src/prepared_test_root.rs", "crates/sunrise-mod-vocab/src/hooks", "tests/fixtures",
+    ],
+    # Its prepared-data dailies include the shared prepared-root boundary.
+    "sunrise-client-gameplay": [
+        "crates/sunrise-core/src/prepared_test_root.rs", "crates/sunrise-mod-vocab/src/hooks",
+    ],
     "sunrise-parity-fixtures": [*SUNRISE_CLIENT, "crates/sunrise-gameplay-common/src/game/parity_fixtures.rs"],
     "sunrise-sim": [
         "crates/sunrise-client/tests/fixtures/advancement-icons/data",
         "crates/sunrise-client/tests/fixtures/dialog_codec_cases.json",
+        "crates/sunrise-core/src/prepared_test_root.rs",
         "docs/parity/random-chance-seeded.jsonl",
     ],
     # lang.rs embeds the bundled language files.
     "sunrise-game-data": ["crates/sunrise-client/assets/sunrise/lang"],
     "sunrise-client-render": [
         "crates/sunrise-client/assets/sunrise/lang", "crates/sunrise-client/assets/sunrise/textures/gui",
+        "crates/sunrise-core/src/prepared_test_root.rs",
         # Its WGSL validation compiles the shader pack crate's shaders too.
         "crates/sunrise-render-shaderpack/src",
         "tools/light_storage_scenario.txt", "tools/light_storage_witness.txt",
@@ -100,6 +111,8 @@ READERS = {
         "crates/sunrise-mod-surface/tests/fixtures/occultism-0.9.0-alpha.1/uses.json",
         "crates/sunrise-mod-vocab/changes",
         "crates/sunrise-mod-vocab/extension-tags",
+        # The generator's build test lays out the vocabulary-state file in a scratch tree.
+        "tools/layering",
     ],
     "sunrise-mod-api-gen-tests": MOD_API_GEN,
     # content_keys' source guard searches these crates' sources for the files that define declaration types.
@@ -119,6 +132,8 @@ READERS = {
     "sunrise-release-sign": [
         "tests/install_ps1_signature.ps1", "tools/ci/sign_native_build.sh", "tools/ci/sign_release.sh",
     ],
+    # The HDR extension's fixture pack, read and translated as the game loads it.
+    "sunrise-shaders": ["tools/fixtures/shaderpacks/hdr_extension"],
     "sunrise-server": [
         "crates/sunrise-theme/fonts", "crates/sunrise-theme/icons", "docs/api/server-reference.md",
     ],
@@ -127,6 +142,8 @@ READERS = {
         "tests/stable_mod_api_integration.py", "tests/test_stable_mod_api.py", "tools/ci/nightly.py",
         "tools/release_train.py",
     ],
+    # Worldgen prepared-data tests include the shared prepared-root boundary.
+    "sunrise-world": ["crates/sunrise-core/src/prepared_test_root.rs"],
     # Commands (tokens, icons, package), not tests: listed so the scan finds nothing unexplained.
     "xtask": [
         "crates/sunrise-client/src", "crates/sunrise-mod-vocab/src/hooks", "crates/sunrise-perf/web",

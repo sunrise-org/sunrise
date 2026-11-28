@@ -1276,7 +1276,7 @@ fn a_client_collider_turning_before_the_tick_carries_the_local_player() {
                     .unwrap();
 
                     let mut player =
-                        PlayerMotion::new(game.motion, Vec3::new(8.0 + RADIUS, 70.0, 8.0)).unwrap();
+                        PlayerMotion::new(game.motion, Vec3::new(8.0 + RADIUS, 70.0, 8.0));
                     player.entity_id = PLAYER as i32;
                     player.client_side = true;
                     game.player = Some(player);
@@ -1417,8 +1417,7 @@ fn a_client_descending_collider_carries_the_local_player_without_sideways_drift(
                         }))
                         .unwrap();
 
-                        let mut player =
-                            PlayerMotion::new(game.motion, Vec3::new(9.0, 70.0, 8.0)).unwrap();
+                        let mut player = PlayerMotion::new(game.motion, Vec3::new(9.0, 70.0, 8.0));
                         player.entity_id = PLAYER as i32;
                         player.client_side = true;
                         game.player = Some(player);
@@ -1476,8 +1475,7 @@ fn a_client_descending_collider_carries_the_local_player_without_sideways_drift(
                         // server position update), `LocalPlayer.suffocatesAt` only checks
                         // suffocating blocks and never nudges sideways out of collider boxes.
                         let mut dipped =
-                            PlayerMotion::new(game.motion, Vec3::new(9.0, deck_y - 0.05, 8.0))
-                                .unwrap();
+                            PlayerMotion::new(game.motion, Vec3::new(9.0, deck_y - 0.05, 8.0));
                         dipped.entity_id = PLAYER as i32;
                         let placed = game.client_placed_moving_colliders();
                         let nudge = sunrise_world::moving_colliders::in_level(placed, || {

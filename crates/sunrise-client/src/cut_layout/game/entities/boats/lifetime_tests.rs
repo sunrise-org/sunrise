@@ -75,7 +75,7 @@ fn a_bound_ridden_boat_commits_the_server_leash_tick() {
 
 fn bound_boat_server_case(tick: impl Fn(&mut sunrise_gameplay::game::ServerGame<'_>, i32)) {
     sunrise_gameplay::game::native_entity_refs::tests::with_resident_game(|game| {
-        game.server.tickets.0.update(None);
+        game.server.chunk_ticking.tickets.update(None);
         game.boats
             .push(Boat::new(71, "oak".into(), Vec3::new(0.5, 70.0, 0.5), 0.0));
         game.boats.update(0, |boat| boat.hurt_time = 6);

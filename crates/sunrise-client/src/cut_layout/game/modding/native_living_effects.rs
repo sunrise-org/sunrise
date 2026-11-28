@@ -108,7 +108,7 @@ pub(crate) mod tests {
             fixture_resident_column(&mut game.world, (0, 0));
             let kind = game.res.mob_types().get("minecraft:cow").unwrap().clone();
             game.mobs.push(Mob::new(23, kind, Vec3::ZERO, 0.0));
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             game.player.as_mut().unwrap().entity_id = 20;
             sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
             let key = mod_platform::__private::part_tests::effect_key("minecraft:speed");

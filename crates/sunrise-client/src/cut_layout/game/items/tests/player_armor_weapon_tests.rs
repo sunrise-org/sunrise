@@ -25,7 +25,7 @@ fn mace(breach: u32) -> ItemStack {
 fn taken(hand: Option<ItemStack>) -> f32 {
     let mut taken = 0.0;
     with_game(|g| {
-        g.player = Some(PlayerMotion::new(g.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+        g.player = Some(PlayerMotion::new(g.motion, Vec3::new(0.5, 64.0, 0.5)));
         g.player.as_mut().unwrap().entity_id = 77;
         g.armor = [
             Some(ItemStack::new("minecraft:diamond_helmet", 1)),

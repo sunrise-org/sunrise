@@ -109,7 +109,7 @@ pub(crate) fn run_fangs_and_an_ominous_item_spawner_outside_the_ticking_chunks_d
         game.server.settings.render_distance = witness.view_distance;
         game.server.settings.simulation_distance = witness.simulation_distance;
         let [px, py, pz] = witness.player_pos;
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(px, py, pz)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(px, py, pz)));
 
         for case in &witness.cases {
             game.fangs.list.clear();
@@ -227,7 +227,7 @@ pub(crate) fn run_fangs_and_an_ominous_item_spawner_pause_on_scheduled_ticket_re
         game.server.settings.render_distance = witness.view_distance;
         game.server.settings.simulation_distance = witness.simulation_distance;
         let [px, py, pz] = witness.player_pos;
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(px, py, pz)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(px, py, pz)));
 
         let [tcx, tcz] = pause.target_chunk;
         let [ccx, ccz] = pause.control_chunk;

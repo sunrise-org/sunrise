@@ -43,15 +43,10 @@ import time
 import urllib.request
 from pathlib import Path
 
-if __package__:
-    from .ci.surface_report import source_layout
-else:
-    from ci.surface_report import source_layout
-
-
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from tools import file_lock, lab
+from tools.ci.surface_report import source_layout
 PROFILE = "release"
 # What rustc writes for a dylib or proc macro on each OS, plus metadata and the MinGW import libraries.
 SUFFIXES = (".rmeta", ".so", ".dll", ".dll.a", ".dylib")

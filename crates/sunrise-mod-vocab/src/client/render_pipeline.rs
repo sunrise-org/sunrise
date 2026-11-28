@@ -708,16 +708,18 @@ pub struct PackBinding {
     /// Optional pass slot override; defaults to [`PipelineGeometryClass::default_slot`].
     pub slot: Option<PackPassSlot>,
     /// Preprocessor defines exposed while compiling the active shader pack when this pipeline
-    /// is active: `(name, optional_value)`. `name` must be a valid GLSL identifier (not
-    /// `GL_`-prefixed) and `value`, when present, must be a non-empty single-line token.
+    /// is active: `(name, optional_value)`. `name` must be a valid GLSL identifier, neither
+    /// `GL_`-prefixed nor `IRIS_FEATURE_`-prefixed (those answer the feature flags a pack lists,
+    /// and only the engine defines them), nor `IS_IRIS` or `IRIS_VERSION` (the engine defines
+    /// those for a pack whose Iris compatibility is on), and `value`, when present, must be a
+    /// non-empty single-line token.
     /// Toggling active defines triggers at most one shader-pack reload.
     pub defines: Vec<(String, Option<String>)>,
     /// Optional depth target for non-shadow slots. See [`PackDepthTarget`] for attachment
     /// selection and write rules.
     pub depth_target: Option<PackDepthTarget>,
-    /// Per-frame pack uniforms supplied by the mod under pack-side GLSL names. If a pack
-    /// declares a uniform with a different GLSL type, the engine leaves it unbound and logs
-    /// once without panicking.
+    /// Per-frame pack uniforms supplied by the mod under pack-side GLSL names. See
+    /// [`PackUniformDecl`] for type mismatches.
     pub frame_uniforms: Vec<PackUniformDecl>,
     /// Mapping from the pipeline's vertex or per-draw inputs to pack-side GLSL names.
     pub glsl_bindings: Vec<PackGlslInput>,
@@ -744,13 +746,18 @@ impl PackBinding {
         self
     }
 
-    /// Declare a preprocessor define `#define NAME` (no value) while this pipeline is active.
+    /// Declare a preprocessor define `#define NAME` (no value) for the active shader pack while
+    /// this pipeline is active. `NAME` follows [`PackBinding::defines`]: an `IRIS_FEATURE_*`
+    /// name, a `GL_` name, and the names only Sunrise's HDR extension defines (`SUNRISE_HDR`,
+    /// `SUNRISE_HDR_TONEMAP_PACK`: set when the game serves it to the pack) are refused at
+    /// registration ([`PackBinding::validate_syntax`]).
     pub fn define(mut self, name: impl Into<String>) -> Self {
         self.defines.push((name.into(), None));
         self
     }
 
-    /// Declare a preprocessor define `#define NAME VALUE` while this pipeline is active.
+    /// Declare a preprocessor define `#define NAME VALUE` for the active shader pack while this
+    /// pipeline is active, with the same name rules as [`PackBinding::define`].
     pub fn define_value(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         self.defines.push((name.into(), Some(value.into())));
         self
@@ -781,7 +788,8 @@ impl PackBinding {
     }
 
     /// Validate GLSL identifier syntax and single-line define token rules on all declared
-    /// entries. Called by the engine during pipeline registration freeze.
+    /// entries, and refuse the define names the engine owns (`GL_`, `IRIS_FEATURE_`, `IS_IRIS`,
+    /// `IRIS_VERSION`). Called by the engine during pipeline registration freeze.
     pub fn validate_syntax(&self) -> Result<(), String> {
         for program in &self.programs {
             if !is_valid_pack_program_name(program) {
@@ -794,6 +802,24 @@ impl PackBinding {
             if !is_valid_glsl_identifier(name) || name.starts_with("GL_") {
                 return Err(format!(
                     "invalid pack define name {name:?}: expected a valid non-GL_ GLSL identifier"
+                ));
+            }
+            if SUNRISE_HDR_DEFINES.contains(&name.as_str()) {
+                return Err(format!(
+                    "reserved pack define name {name:?}: only the game defines it, when it serves \
+                     Sunrise's HDR to the pack"
+                ));
+            }
+            if name.starts_with("IRIS_FEATURE_") {
+                return Err(format!(
+                    "invalid pack define name {name:?}: IRIS_FEATURE_ names answer the feature \
+                     flags a pack lists, and only the engine defines them"
+                ));
+            }
+            if name == "IS_IRIS" || name == "IRIS_VERSION" {
+                return Err(format!(
+                    "invalid pack define name {name:?}: the engine defines it for a pack whose \
+                     Iris compatibility is on"
                 ));
             }
             if let Some(val) = value
@@ -979,6 +1005,11 @@ impl PackDepthTarget {
 }
 
 /// A per-frame pack uniform declared by a [`PackBinding`].
+///
+/// If the pack program declares the name (or its previous-frame alias) with an incompatible
+/// GLSL type, that uniform is left unwritten and reads zero. The engine does not convert the
+/// value. It logs the program, uniform name, and both types once per program and uniform; the
+/// pipeline stays bound.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 // no wire: local client shader-pack frame uniform declaration.
@@ -1183,6 +1214,10 @@ impl PackGlslInput {
         }
     }
 }
+
+/// The macros only the game defines for a `shaders/` pack, when it serves Sunrise's HDR extension
+/// to it (`sunrise_shaders::Macros::define_sunrise_hdr`): a mod's pack define can't set them.
+const SUNRISE_HDR_DEFINES: [&str; 2] = ["SUNRISE_HDR", "SUNRISE_HDR_TONEMAP_PACK"];
 
 /// Whether `name` is a valid ASCII GLSL identifier (`[A-Za-z_][A-Za-z0-9_]*`).
 pub(crate) fn is_valid_glsl_identifier(name: &str) -> bool {
@@ -1866,7 +1901,8 @@ pub enum MeshError {
     InvalidAlignment,
     /// Buffer length is zero, or `byte_offset + data.len()` exceeds the buffer capacity.
     OutOfRange,
-    /// Requested buffer size exceeds `device.limits().max_buffer_size`.
+    /// Requested buffer size exceeds `device.limits().max_buffer_size`
+    /// ([`RenderLimits::max_buffer_size`]).
     ExceedsDeviceLimit,
 }
 
@@ -2783,6 +2819,36 @@ pub struct RenderCapabilities {
     /// adapter lacks `MULTI_DRAW_INDIRECT_COUNT`, and on DirectX 12, whose count draws leave an
     /// indexed command's `base_vertex` out of the vertex fetch.
     pub multi_draw_indirect_count: bool,
+    /// The device's own size limits, the numbers the buffer, binding, dispatch and render target
+    /// refusals are checked against.
+    pub limits: RenderLimits,
+}
+
+/// The device's numeric limits that mod GPU calls are checked against
+/// ([`RenderCapabilities::limits`]), as the adapter reports them (vanilla's
+/// `GpuDevice.getDeviceInfo().limits()`). All zero where no GPU renderer is available. A mod
+/// sizes its buffers, dispatches and targets from these rather than trying an allocation and
+/// reading the refusal.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+// no wire: local client device limits.
+pub struct RenderLimits {
+    /// The largest GPU buffer in bytes (`max_buffer_size`): a [`crate::StorageBuffer`], a mesh
+    /// buffer, a uniform buffer.
+    pub max_buffer_size: u64,
+    /// The longest range one storage binding may take, in bytes
+    /// (`max_storage_buffer_binding_size`, at most `max_buffer_size`). Also the largest inline
+    /// texel payload a draw may bind.
+    pub max_storage_buffer_binding_size: u64,
+    /// The largest inline uniform payload a draw may bind, in bytes
+    /// (`max_uniform_buffer_binding_size`, at most `max_buffer_size`).
+    pub max_uniform_buffer_binding_size: u64,
+    /// The most workgroups a compute dispatch may run along each axis
+    /// (`max_compute_workgroups_per_dimension`).
+    pub max_compute_workgroups_per_dimension: u32,
+    /// The longest side of a 2D texture in pixels (`max_texture_dimension_2d`): render targets
+    /// and dynamic textures.
+    pub max_texture_dimension_2d: u32,
 }
 
 /// Why a mod-owned offscreen [`RenderTargetRef`] operation was refused.
@@ -2797,7 +2863,8 @@ pub enum RenderTargetError {
     Stale,
     /// The calling mod does not own this render target.
     NotOwned,
-    /// Width or height was zero or exceeded `device.limits().max_texture_dimension_2d`.
+    /// Width or height was zero or exceeded `device.limits().max_texture_dimension_2d`
+    /// ([`RenderLimits::max_texture_dimension_2d`]).
     InvalidSize,
     /// `color_targets.len()` exceeded [`MAX_COLOR_TARGETS`] (`8`).
     TooManyColorTargets,
@@ -4165,6 +4232,19 @@ pub enum PipelineDrawError {
     /// Set-1 [`DrawBindings`] is missing a declared entry, supplies an unknown/duplicate entry,
     /// mismatches kind or `min_size`, references an unknown/unavailable texture, or provides an
     /// invalid push-constant payload.
+    ///
+    /// A draw or compute dispatch that samples a transient colour or depth attachment must
+    /// declare `.reads(FrameTarget::Transient(id))` on a consumer pass that does not write that
+    /// transient; the graph computes the target's lifetime from declared uses, as vanilla's
+    /// `FramePass.reads` does. An undeclared sample is refused at submit, with this error for a
+    /// draw and [`crate::ComputeDispatchError::InvalidBinding`] for a dispatch, even when the
+    /// pass lists the transient in `.writes(...)`. The renderer logs the refusal once per pass
+    /// label and transient id, not once per command, and only when the id names a transient of
+    /// the graph and the draw is not sampling its own attachment. A draw sampling its own
+    /// transient attachment returns [`Self::TargetReadWriteHazard`] instead. Declaring the read
+    /// on a pass that also writes the transient is refused before recording with
+    /// [`crate::FrameGraphError::SelfDependency`]: split the producer and the consumer. A
+    /// refused command records nothing.
     InvalidBinding,
     /// An active shader pack links this world draw to a translated pack program, whose fixed
     /// sampler layout cannot bind one of the draw's textures. Direct mod draws, including those
@@ -4190,6 +4270,9 @@ pub enum PipelineDrawError {
     /// [`DrawBindings`] binds a mip level of a [`RenderTargetRef`] both as a storage image and
     /// as something else the draw reads or writes (a sampled view, or a storage image of another
     /// access), which one render pass cannot do.
+    ///
+    /// A draw that samples the transient attachment it renders into also returns this error,
+    /// before the undeclared-read refusal documented on [`Self::InvalidBinding`] applies.
     TargetReadWriteHazard,
 }
 
@@ -4741,7 +4824,20 @@ mod tests {
             ));
         assert_eq!(valid.validate_syntax(), Ok(()));
 
-        for bad_define in ["", "1BAD", "BAD-NAME", "GL_RESERVED", "has space"] {
+        for bad_define in [
+            "",
+            "1BAD",
+            "BAD-NAME",
+            "GL_RESERVED",
+            "has space",
+            "SUNRISE_HDR",
+            "SUNRISE_HDR_TONEMAP_PACK",
+            "IRIS_FEATURE_SSBO",
+            "IRIS_FEATURE_PER_BUFFER_BLENDING",
+            "IRIS_FEATURE_",
+            "IS_IRIS",
+            "IRIS_VERSION",
+        ] {
             assert!(
                 PackBinding::new()
                     .define(bad_define)
@@ -4749,6 +4845,27 @@ mod tests {
                     .is_err(),
                 "expected invalid define name {bad_define:?} to fail"
             );
+        }
+        // Engine-owned names with a value too; a longer name that starts with an HDR one is the
+        // mod's.
+        for reserved in [
+            "SUNRISE_HDR",
+            "SUNRISE_HDR_TONEMAP_PACK",
+            "IRIS_FEATURE_SSBO",
+            "IS_IRIS",
+            "IRIS_VERSION",
+        ] {
+            assert!(
+                PackBinding::new()
+                    .define_value(reserved, "1")
+                    .validate_syntax()
+                    .is_err(),
+                "{reserved}"
+            );
+        }
+        // A longer name of the mod's own stays its.
+        for own in ["SUNRISE_HDR_MOD", "IS_IRIS_LIKE", "MY_IRIS_VERSION"] {
+            assert_eq!(PackBinding::new().define(own).validate_syntax(), Ok(()));
         }
         for bad_val in [
             "",

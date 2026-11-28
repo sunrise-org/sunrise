@@ -50,7 +50,7 @@ pub(crate) fn with_spectator(
         let remote = game.client.remote.as_mut().unwrap();
         remote.logged_in = true;
         remote.entity_id = OWN;
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)));
         add(game, ZOMBIE, "minecraft:zombie", [10.0, 64.0, 12.0]);
         add(game, BOAT, "minecraft:oak_boat", [-6.5, 64.0, 3.5]);
         assert_eq!(game.mobs.len(), 1);

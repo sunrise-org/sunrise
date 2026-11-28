@@ -1260,6 +1260,7 @@ mod tests {
             for asks_animal_tame in [false, true] {
                 let world = crate::mobs::MobWorld {
                     side: crate::motion::dry_side(),
+                    variant_tables: None,
                     goal_host: None,
                     asks_animal_tame,
                     ..world.clone()

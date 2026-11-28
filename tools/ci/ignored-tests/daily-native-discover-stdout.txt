@@ -1,0 +1,2 @@
+# Checks that cold native discovery keeps stdout pure JSON without Cargo directives.
+cargo-sunrise-mod native_discover_cold_catalog_stdout_is_pure_json test:bounded_reads daily child-process

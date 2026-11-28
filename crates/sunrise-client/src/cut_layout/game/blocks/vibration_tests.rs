@@ -205,7 +205,7 @@ fn a_landing_posts_the_block_game_event_its_rule_posts() {
     // `Entity.checkFallDamage` from 3 blocks up, landed as the player, with the
     // rule's block effects applied and what it posts going out.
     let land = |game: &mut sunrise_gameplay::game::ServerGame<'_>, state| {
-        let mut player = PlayerMotion::new(game.motion, Vec3::new(2.5, 5.0, 3.5)).unwrap();
+        let mut player = PlayerMotion::new(game.motion, Vec3::new(2.5, 5.0, 3.5));
         {
             let (player_uuid, level, session_lock) =
                 sunrise_gameplay_common::game::side_ops::world::WorldSideGameExt::side_game_side_meta(game);

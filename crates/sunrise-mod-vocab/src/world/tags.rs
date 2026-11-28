@@ -274,6 +274,64 @@ pub trait Tags {
     fn world_clocks(&self, _tag: TagKey<WorldClockKey>) -> TagMembers<WorldClockKey> {
         TagMembers::Unavailable
     }
+    // hidden: typed custom-registry tag reads live on `dyn Tags`; this object-safe method is plumbing.
+    #[doc(hidden)]
+    fn custom_tag_entries(&self, _registry: &str, _tag: TagKey) -> TagMembers<Identifier> {
+        TagMembers::Unavailable
+    }
+    // hidden: typed custom-registry tag reads live on `dyn Tags`; this object-safe method is plumbing.
+    #[doc(hidden)]
+    fn custom_tag_contains(
+        &self,
+        _registry: &str,
+        _tag: TagKey,
+        _entry: &Identifier,
+    ) -> Option<bool> {
+        None
+    }
+}
+
+impl dyn Tags + '_ {
+    /// Read the bound members of `tag` in custom static registry `registry`, in tag order.
+    ///
+    /// Returns [`TagMembers::Unavailable`] if the registry is not declared, authoritative
+    /// tags are not loaded, or any member ID fails to resolve in the frozen registry.
+    pub fn entries<T: Send + Sync + 'static>(
+        &self,
+        registry: crate::RegistryKey<T>,
+        tag: TagKey,
+    ) -> TagMembers<crate::EntryKey<T>> {
+        let Some(frozen) = crate::parts::custom_registry::<T>(registry.id()) else {
+            return TagMembers::Unavailable;
+        };
+        match self.custom_tag_entries(registry.id(), tag) {
+            TagMembers::Missing => TagMembers::Missing,
+            TagMembers::Unavailable => TagMembers::Unavailable,
+            TagMembers::Members(ids) => ids
+                .iter()
+                .map(|id| frozen.by_id(id.as_str()).map(|(key, _)| key))
+                .collect::<Option<Vec<_>>>()
+                .map_or(TagMembers::Unavailable, TagMembers::Members),
+        }
+    }
+
+    /// Whether `entry` is in `tag` of custom static registry `registry`.
+    ///
+    /// Returns `Some(false)` for a missing tag or a nonmember when authoritative tags are loaded.
+    /// Returns `None` when the registry or authoritative tags are unavailable, `entry` does not
+    /// belong to `registry`, or a received tag member ID cannot be resolved.
+    ///
+    /// The server uses a set lookup. The client scans the received tag once without building
+    /// a member list; cost grows with the tag's size on every call, including per-entity tick calls.
+    pub fn is_in_custom_tag<T: Send + Sync + 'static>(
+        &self,
+        registry: crate::RegistryKey<T>,
+        entry: crate::EntryKey<T>,
+        tag: TagKey,
+    ) -> Option<bool> {
+        let frozen = crate::parts::custom_registry::<T>(registry.id())?;
+        self.custom_tag_contains(registry.id(), tag, frozen.id_of(entry)?)
+    }
 }
 
 /// Resolve a tag name at the game boundary.

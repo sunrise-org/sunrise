@@ -113,6 +113,12 @@ pub enum BlockClass {
     Wall,
     /// `FenceBlock`, which includes the nether brick fence; not `FenceGateBlock`.
     Fence,
+    /// `Fallable`: the `instanceof Fallable` check, not a claim about whether a block will fall at
+    /// a particular position. It covers `FallingBlock` and its subclasses (sand, gravel,
+    /// concrete powder, anvils, the dragon egg), suspicious sand and gravel, and the
+    /// speleothems, pointed dripstone and sulfur spikes, which are `Fallable` without being a
+    /// `FallingBlock`.
+    Fallable,
 }
 
 /// An invalid constraint, identifying its index in the supplied list.
@@ -337,6 +343,15 @@ macro_rules! impl_block_states_without_tables {
                 fn block_state_is_redstone_conductor(&self, _: BlockState) -> Option<bool> {
                     None
                 }
+                fn block_state_light_dampening(&self, _: BlockState) -> Option<u8> {
+                    None
+                }
+                fn block_state_is_suffocating(&self, _: BlockState) -> Option<bool> {
+                    None
+                }
+                fn block_state_is_valid_spawn(&self, _: BlockState, _: &str) -> Option<bool> {
+                    None
+                }
                 fn block_state_class(
                     &self,
                     _: BlockState,
@@ -535,9 +550,13 @@ impl BlockStates<'_> {
     }
     /// `ItemStack.isCorrectToolForDrops(state)`: whether `stack`'s `minecraft:tool` rules call it
     /// the correct tool for `state`'s block (the first rule that sets `correct_for_drops` and
-    /// names the block decides; no component or no such rule is false). Reads only the stack: for
-    /// the answer the game uses for a player, see `PlayerRef::has_correct_tool_for_drops`. None
-    /// as for `replaceable`.
+    /// names the block decides; no component or no such rule is false). The rules' block tags are,
+    /// on the server, the open world's as its data packs bind them, through a host and inside a
+    /// block callback's level alike (the tags the game's own harvest reads); in a friction
+    /// part's level, the game's built-in tags (#6626); on the client, the
+    /// game's built-in tags until the client receives the world's tables (#6597). Reads only
+    /// the stack: for the answer the game uses for a player, see
+    /// `PlayerRef::has_correct_tool_for_drops`. None as for `replaceable`.
     pub fn is_correct_tool_for_drops(
         &self,
         stack: &crate::ItemStack,
@@ -715,6 +734,36 @@ impl BlockStates<'_> {
     /// For a placed block see [`LevelRef::is_redstone_conductor`](crate::LevelRef::is_redstone_conductor).
     pub fn is_redstone_conductor(&self, state: BlockState) -> Option<bool> {
         self.backend.block_state_is_redstone_conductor(state)
+    }
+    /// `BlockStateBase.getLightDampening()`: how much light `state` stops, 0 to 15 (stone 15,
+    /// water and leaves 1, air and glass 0). None as for `replaceable`.
+    pub fn light_dampening(&self, state: BlockState) -> Option<u8> {
+        self.backend.block_state_light_dampening(state)
+    }
+    /// `BlockState.isSuffocating(level, pos)` when the block's own predicate decides from `state`
+    /// alone: stone yes, glass and leaves no, a piston unless extended. It reads the suffocation
+    /// rules [`LevelRef::state_is_suffocating`](crate::LevelRef::state_is_suffocating) reads. On
+    /// the server those are the open world's, whose data packs' `#minecraft:causes_suffocation`
+    /// decides the default predicate, through a host and inside a block callback's level alike;
+    /// in a friction part's level they are the game's built-in rules (#6626);
+    /// on the client they are the game's built-in rules until the client receives the world's
+    /// tables (#6597). None as for `replaceable`, and for a state whose answer
+    /// needs a position or a block entity (a closed shulker box, a shape a block entity publishes
+    /// or an offset moves). For those, ask `LevelRef::state_is_suffocating` at a position, which
+    /// also takes a state that is not placed there.
+    pub fn is_suffocating(&self, state: BlockState) -> Option<bool> {
+        self.backend.block_state_is_suffocating(state)
+    }
+    /// `BlockState.isValidSpawn(level, pos, entityType)`: whether a mob of `entity_type` (an
+    /// identifier such as `minecraft:zombie`) may spawn on top of `state`, as natural spawning
+    /// decides it from the state alone: the game's spawning reads no position for it, so the
+    /// answer holds wherever the state stands. The default rule
+    /// (`BlockBehaviour.Properties.isValidSpawn`) is a sturdy top face and a light emission below
+    /// 14; a block's declared `spawn_rule` replaces it, leaves admit ocelots and parrots, ice
+    /// polar bears, and magma blocks only fire immune types. None as for `replaceable`, and for
+    /// an entity type the game has no spawn species for.
+    pub fn is_valid_spawn(&self, state: BlockState, entity_type: &str) -> Option<bool> {
+        self.backend.block_state_is_valid_spawn(state, entity_type)
     }
     /// Match a state against a block and partial property constraints. Unknown properties and
     /// values are errors even when the state belongs to a different block. None means the

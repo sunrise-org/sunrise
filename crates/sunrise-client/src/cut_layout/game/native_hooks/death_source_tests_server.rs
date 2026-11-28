@@ -68,7 +68,7 @@ fn guest_player_bow_death_keeps_the_connected_shooter_without_a_local_player() {
 }
 
 pub(crate) fn player(game: &mut sunrise_gameplay::game::ServerGame<'_>) {
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 80.0, 4.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 80.0, 4.5)));
     bind_local_player(game, 11, 123);
     game.set_mode_id(0);
     game.server.next_entity = 100;
@@ -87,7 +87,13 @@ fn zombie_ai_melee_armor_hurt_retains_the_real_source() {
                 assert!(game.run_command("difficulty normal"));
                 assert!(game.run_command("forceload add 0 0"));
                 game.update_chunk_tickets();
-                assert!(game.server.tickets.0.levels().entity_ticking_at(5, 4));
+                assert!(
+                    game.server
+                        .chunk_ticking
+                        .tickets
+                        .levels()
+                        .entity_ticking_at(5, 4)
+                );
                 assert!(game.player.as_ref().unwrap().client_loaded);
                 game.armor[1] = Some(ItemStack::new("minecraft:iron_chestplate", 1));
                 game.apply_equipment();

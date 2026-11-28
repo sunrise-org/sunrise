@@ -419,7 +419,8 @@ impl PackPost {
     /// Runs the pack over the world drawn into `world` (colour) and `world_depth`, then draws
     /// the result onto `screen`. Notifies after the sky if the frame assigned the stage to this
     /// pack, and after the last pack world pass, before composition. A pack's hand is still part
-    /// of its world passes for the depth snapshots.
+    /// of its world passes for the depth snapshots. `display`: the display the frame is shown on,
+    /// which a pack served Sunrise's HDR extension reads (`pack_uniforms::DISPLAY`).
     #[allow(clippy::too_many_arguments)]
     pub fn run_frame(
         &mut self,
@@ -433,6 +434,7 @@ impl PackPost {
         sky: &SkyInputs<'_>,
         hand: &HandInputs<'_>,
         inputs: &PackInputs,
+        display: pack_uniforms::Display,
         size: [u32; 2],
         window: [u32; 2],
         pages: &[TerrainPage],
@@ -552,6 +554,7 @@ impl PackPost {
             .center_depth
             .get_or_insert_with(|| crate::pack_center_depth::CenterDepth::new(device))
             .collect();
+        self.uniforms.display = display;
         self.uniforms.update(frame_view, inputs, size);
         self.mod_uniforms.advance_frame();
         // `smooth` starts on the first frame that knows the camera's biome.
@@ -1032,28 +1035,38 @@ impl PackPost {
         };
         // Without `final`, colortex0 holds floats (`new` refuses an integer one).
         if !shown {
+            // Served Sunrise's HDR at the window's size, each pixel its own texel.
+            let copy = match &self.copy_texel {
+                Some(texel) if size == window => texel,
+                _ => &self.copy,
+            };
+            let colortex0 = wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(
+                    view(self.main, 0, false).expect("colortex0"),
+                ),
+            };
+            let sampler = wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(&self.linear),
+            };
+            // Served Sunrise's HDR, the copy loads texels and binds no sampler.
+            let entries = if self.hdr.is_some() {
+                &[colortex0][..]
+            } else {
+                &[colortex0, sampler][..]
+            };
             let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Shader pack colortex0"),
-                layout: &self.copy.1,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(
-                            view(self.main, 0, false).expect("colortex0"),
-                        ),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::Sampler(&self.linear),
-                    },
-                ],
+                layout: &copy.1,
+                entries,
             });
             let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Shader pack colortex0"),
                 color_attachments: &[attach(screen, overwrite)],
                 ..Default::default()
             });
-            rp.set_pipeline(&self.copy.0);
+            rp.set_pipeline(&copy.0);
             rp.set_bind_group(0, &group, &[]);
             rp.draw(0..3, 0..1);
         } else if let Some(picture) = &final_view {

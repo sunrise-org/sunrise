@@ -28,10 +28,40 @@ impl crate::game::ServerGame<'_> {
         strip_finalize_tree(&mut tag);
         // `Entity.load`'s `setPos` moves the entity in its section storage like any other write.
         let before = self.target_position(t);
-        // Entity.load does not read Passengers: the riders stay, and so do the
-        // passengers the load kept raw (none, when it kept none).
+        // Entity.load does not read Passengers: the live riders stay, and the
+        // merged compound keeps the raw key of the saved entity it loads into
+        // (or its absence), whatever the entity family. A `/data merge` reads
+        // the live tree first, so storing that tree would save a copy of the
+        // riders and the next read would append them again. Players and the
+        // unsaved targets have no compound to write here.
         let kept_passengers = match t {
-            Target::Mob(id) | Target::Boat(id) | Target::Cart(id) | Target::Tnt(id) => Some(
+            Target::Player
+            | Target::Guest(_)
+            | Target::Hook(_)
+            | Target::DragonPart(_)
+            | Target::General(_) => None,
+            Target::Mob(id)
+            | Target::Item(id)
+            | Target::Orb(id)
+            | Target::Projectile(id)
+            | Target::Stand(id)
+            | Target::Frame(id)
+            | Target::Painting(id)
+            | Target::Boat(id)
+            | Target::Cart(id)
+            | Target::Other(id)
+            | Target::Fangs(id)
+            | Target::Crystal(id)
+            | Target::Dragon(id)
+            | Target::Tnt(id)
+            | Target::Cushion(id)
+            | Target::Falling(id)
+            | Target::Rocket(id)
+            | Target::Trident(id)
+            | Target::Spawner(id)
+            | Target::Cloud(id)
+            | Target::Bolt(id)
+            | Target::Knot(id) => Some(
                 self.common
                     .persist
                     .raw
@@ -39,7 +69,6 @@ impl crate::game::ServerGame<'_> {
                     .and_then(|raw| raw.get("Passengers"))
                     .cloned(),
             ),
-            _ => None,
         };
         match t {
             // EntityDataAccessor.setData: players can't be modified, guests neither.
@@ -66,7 +95,7 @@ impl crate::game::ServerGame<'_> {
                     Some(self.common.pack.assets.registry),
                 )
                 .ok_or_else(stale)?;
-                sunrise_sim::mobs::armor::prepare(&new, &self.common.motion.attributes);
+                sunrise_sim::mobs::armor::prepare(&new, self.common.motion.attributes());
                 self.resolve_loaded_profession(&mut new);
                 entity_nbt::read_mob_variants(&mut new, &tag, self.world_variants());
                 let unresolved = self
@@ -385,7 +414,7 @@ impl crate::game::ServerGame<'_> {
                 orb.air = new.air;
                 // Entity.load reads portalCooldown and leaves the portal
                 // process as it is.
-                if let Some(portal) = self.server.portals.entities.get_mut(&id) {
+                if let Some(portal) = self.server.portals.level.entities.get_mut(&id) {
                     portal.cooldown = match tag.get("PortalCooldown") {
                         Some(Tag::Int(cooldown)) => *cooldown,
                         _ => 0,
@@ -583,8 +612,24 @@ impl crate::game::ServerGame<'_> {
             Target::Hook(_) | Target::DragonPart(_) => return None,
             // Stage 3's save owns the general record; none is saved here.
             Target::General(_) => return None,
-            Target::Guest(_) => self.for_player(t, |g| g.player_nbt()).flatten()?,
-            Target::Player => self.player_nbt()?,
+            Target::Guest(_) => {
+                let mut tag = self.for_player(t, |g| g.player_nbt()).flatten()?;
+                // A mob a mod seated on the guest rides it; the player file
+                // holds no passenger list, so only this read adds one.
+                if let Some(id) = self.player_vehicle_id(t) {
+                    self.put_passengers(&mut tag, id);
+                }
+                tag
+            }
+            Target::Player => {
+                let mut tag = self.player_nbt()?;
+                // A mob a mod seated on the local player rides it; the player
+                // file holds no passenger list, so only this read adds one.
+                if let Some(id) = self.player_vehicle_id(t) {
+                    self.put_passengers(&mut tag, id);
+                }
+                tag
+            }
             Target::Mob(id) => {
                 // `saveWithoutId` writes the entity as saved, riders under
                 // `Passengers`: `/data get` reads the same tree persistence does (#1519).
@@ -741,11 +786,13 @@ impl crate::game::ServerGame<'_> {
                     .map(|s| self.common.state_to_nbt(s));
                 let raw = self.common.persist.raw.get(&id);
                 // Projectile.addAdditionalSaveData stores the retained EntityReference,
-                // including an owner that is not currently resolved to a live entity.
+                // including an owner that is not currently resolved to a live entity,
+                // for every subclass, as chunk persistence already passes it (#6768).
+                let owner = p.owner_uuid.or(owner);
                 let mut tag = entity_nbt::arrow_to_nbt(
                     p,
                     uuid,
-                    p.owner_uuid.or(owner),
+                    owner,
                     in_block,
                     raw,
                     self.common.res.items(),
@@ -965,6 +1012,41 @@ impl crate::game::ServerGame<'_> {
                 tag
             }
         };
+        // `Entity.saveWithoutId` writes `Passengers` when the entity is a vehicle,
+        // whatever its family. The mob tree carries its riders already and the boat
+        // and cart arms above write them; every other saved entity uses the same
+        // runtime writer here (#6772).
+        if let Some(id) = match t {
+            Target::Mob(_)
+            | Target::Boat(_)
+            | Target::Cart(_)
+            | Target::Player
+            | Target::Guest(_)
+            | Target::Hook(_)
+            | Target::DragonPart(_)
+            | Target::General(_) => None,
+            Target::Item(id)
+            | Target::Orb(id)
+            | Target::Projectile(id)
+            | Target::Stand(id)
+            | Target::Frame(id)
+            | Target::Painting(id)
+            | Target::Other(id)
+            | Target::Fangs(id)
+            | Target::Crystal(id)
+            | Target::Dragon(id)
+            | Target::Tnt(id)
+            | Target::Cushion(id)
+            | Target::Falling(id)
+            | Target::Rocket(id)
+            | Target::Trident(id)
+            | Target::Spawner(id)
+            | Target::Cloud(id)
+            | Target::Bolt(id)
+            | Target::Knot(id) => Some(id),
+        } {
+            self.put_passengers(&mut tag, id);
+        }
         if !include_id
             && !matches!(t, Target::Mob(_) | Target::Stand(_) | Target::Other(_))
             && let Tag::Compound(c) = &mut tag

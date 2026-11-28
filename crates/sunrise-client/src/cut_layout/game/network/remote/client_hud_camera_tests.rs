@@ -174,7 +174,7 @@ pub(in crate::game) fn attributes(
     let values = values
         .iter()
         .map(|(name, base)| play::AttributeSnapshot {
-            attribute: game.motion.attributes.id(name).unwrap().registry_id(),
+            attribute: game.motion.attributes().id(name).unwrap().registry_id(),
             base: *base,
             modifiers: vec![],
         })

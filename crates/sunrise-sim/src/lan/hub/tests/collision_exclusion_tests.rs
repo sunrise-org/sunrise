@@ -35,7 +35,7 @@ fn walk(
     exclusions: &[[f64; 6]],
 ) -> Vec<([f64; 3], bool)> {
     let resources = &fixture.motion;
-    let mut client = PlayerMotion::new(resources, Vec3::new(20.5, 5.0, 20.5)).unwrap();
+    let mut client = PlayerMotion::new(resources, Vec3::new(20.5, 5.0, 20.5));
     client.client_side = true;
     client.yaw = -90.0;
     client.collision_exclusions.set(exclusions).unwrap();

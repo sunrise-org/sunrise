@@ -594,8 +594,7 @@ fn this_windows_player_is_told_its_own_entity_id() {
                 Some(remote) => remote.entity_id = 4321,
                 None => {
                     let at = sunrise_core::geometry::Vec3::ZERO;
-                    let mut player =
-                        sunrise_sim::motion::PlayerMotion::new(game.motion, at).unwrap();
+                    let mut player = sunrise_sim::motion::PlayerMotion::new(game.motion, at);
                     player.entity_id = 4321;
                     game.player = Some(player);
                 }

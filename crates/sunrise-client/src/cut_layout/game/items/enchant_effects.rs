@@ -53,7 +53,7 @@ pub(crate) mod tests {
                     ProjectileKind::BreezeWindCharge,
                     ProjectileKind::WitherSkull { dangerous: false },
                 ] {
-                    game.player = Some(PlayerMotion::new(game.motion, victim).unwrap());
+                    game.player = Some(PlayerMotion::new(game.motion, victim));
                     bind_local_player(game, 77, 77);
                     game.set_mode(GameMode::Survival);
                     let mut chest = ItemStack::new("minecraft:diamond_chestplate", 1);
@@ -165,7 +165,7 @@ pub(crate) mod tests {
             )]);
             mod_platform::testing::with_mods(mods, || {
                 with_game(|game| {
-                    game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+                    game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
                     bind_local_player(game, 77, 77);
                     game.apply_post_attack(
                         &serde_json::json!({
@@ -234,7 +234,7 @@ pub(crate) mod tests {
         use sunrise_items::items::ItemStack;
         use sunrise_sim::motion::PlayerMotion;
         super::super::native_entity_refs::tests::with_game(|game| {
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             let mut chest = ItemStack::new("minecraft:diamond_chestplate", 1);
             chest.damage = game.items().get(&chest.item).unwrap().max_damage - 1;
             chest.data_mut().enchantments = vec![("minecraft:thorns".into(), 255)];

@@ -549,13 +549,13 @@ pub(in crate::game) fn run_spectated_rider_mount_attributes_26_3() {
         let _server = setup_remote_overworld(game, 1, [0.5, 64.0, 0.5], true);
         let scale_id = game
             .motion
-            .attributes
+            .attributes()
             .id("minecraft:scale")
             .unwrap()
             .registry_id();
         let dist_id = game
             .motion
-            .attributes
+            .attributes()
             .id("minecraft:camera_distance")
             .unwrap()
             .registry_id();

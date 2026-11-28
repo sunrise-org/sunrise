@@ -49,7 +49,7 @@ pub(crate) fn game<'a>(
         crate::game::profile_resolver,
     )
     .unwrap();
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)));
     game.build_registries();
     game.set_allow_commands(true);
     game.world

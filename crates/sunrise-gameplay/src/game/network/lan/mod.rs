@@ -80,9 +80,6 @@ pub struct LanHost {
     pub commands: Vec<sunrise_gameplay_common::game::lan_actions::GuestCommand>,
     /// Mods' quiet commands waiting to run a few a tick (game/network/lan_quiet.rs).
     pub(in crate::game) quiet: std::collections::VecDeque<super::lan_quiet::QuietBatch>,
-    /// Far terrain sampled for Sunrise clients (game/network/lan_far.rs); None when
-    /// `sunrise-lod-distance` is 0.
-    pub far: Option<sunrise_sim::lod_net::Service>,
     /// Native mods' commands and the level each needs, once asked (game/modding/native_server.rs).
     /// The generation of the session's mod commands the hub was given.
     pub(in crate::game) native_commands_sent: Option<u64>,
@@ -389,9 +386,9 @@ impl crate::game::ServerGame<'_> {
                 .clone(),
         );
         self.lan_update_tag_sources(&mut encoder);
-        let far = (net.lod_distance > 0)
-            .then(|| sunrise_sim::lod_net::Service::new(net.lod_distance, biome_names.clone()));
         let lan = super::lan_configuration_tasks::start(sync.clone(), net)?;
+        #[cfg(feature = "net-trace")]
+        lan.shared.set_capture_tick(self.common.world.game_time);
         let mut hub = Hub::new(lan, sync, encoder, config, self.common.loop_context.clone());
         hub.allow_commands = self.allow_commands();
         hub.dispatch_move_effects = true;
@@ -421,7 +418,6 @@ impl crate::game::ServerGame<'_> {
             waypoint_dead: Default::default(),
             commands: Vec::new(),
             quiet: std::collections::VecDeque::new(),
-            far,
             native_commands_sent: None,
             sleep_ignored: Default::default(),
             states: Default::default(),
@@ -463,7 +459,7 @@ impl crate::game::ServerGame<'_> {
         self.server.bound_sounds.clear();
         self.server.lan_events.clear();
         self.server.lan_songs.clear();
-        self.server.lan_critical_hits.clear();
+        self.server.lan_queues.critical_hits.clear();
         self.server.lan_cushion_breaks.clear();
         self.server.streaming.extra.clear();
         if announce {
@@ -979,6 +975,7 @@ impl crate::game::ServerGame<'_> {
         after: u32,
         mut kept: Option<&mut super::lan_idle::IdlePass<'_>>,
     ) {
+        let mut laps = sunrise_level::spans::laps();
         out.clear();
         let mut speeds = super::lan_attributes::SpeedByType::default();
         if mod_api::__private::listened(mod_api::HookId::EffectParticleModification) {
@@ -986,7 +983,7 @@ impl crate::game::ServerGame<'_> {
         }
         // ChunkMap.tick sends the changes of an entity outside the
         // entity-ticking range only when it changed section or needs sync.
-        let levels = self.server.tickets.0.levels();
+        let levels = self.server.chunk_ticking.tickets.levels();
         let idle_at = |p: sunrise_core::geometry::Vec3| {
             !levels.in_entity_ticking_range((p.x.floor() as i32) >> 4, (p.z.floor() as i32) >> 4)
         };
@@ -1017,7 +1014,7 @@ impl crate::game::ServerGame<'_> {
                     None => player_entity(),
                 },
                 Holder::Mob(id) | Holder::Boat(id) => Some(id as i32),
-                Holder::Knot(p) => self.server.knot_ids.get(&p).map(|&id| id as i32),
+                Holder::Knot(p) => self.server.knot_state.knot_ids.get(&p).map(|&id| id as i32),
             });
             let idle = idle_at(m.position);
             let place = super::lan_idle::Place {
@@ -1049,6 +1046,7 @@ impl crate::game::ServerGame<'_> {
             };
             mob_equipment(m, &mut host.hub, &mut e.equipment);
         }
+        laps.lap("lan_states_mobs");
         for d in self.common.dropped.iter().filter(|d| d.id > after) {
             let Some(host) = self.server.lan.as_ref() else {
                 return;
@@ -1112,9 +1110,11 @@ impl crate::game::ServerGame<'_> {
             // ExperienceOrb.DATA_VALUE.
             e.meta.push((8, serializer::INT, Value::Int(o.value)));
         }
+        laps.lap("lan_states_items");
         self.lan_object_states(out, drain_minecart_steps, after);
         // PersistentEntitySectionManager only tracks accessible sections.
         out.retain(|entity| self.entity_position_accessible(entity.position));
+        laps.lap("lan_states_objects");
     }
 
     /// `LivingEntity.updateSynchronizedMobEffectParticles` while a native mod
@@ -1233,9 +1233,46 @@ impl crate::game::ServerGame<'_> {
         // again on the way through.
         self.server.lan = Some(host);
         let mut timings = EventTimings::new(sunrise_level::spans::NOTE_MS);
+        #[derive(Clone, Copy)]
+        enum EventCategory {
+            Movement,
+            Gameplay,
+            Session,
+        }
+        #[derive(Default)]
+        struct EventCategorySpans {
+            movement: sunrise_level::spans::SpanTotal,
+            gameplay: sunrise_level::spans::SpanTotal,
+            session: sunrise_level::spans::SpanTotal,
+        }
+        impl EventCategorySpans {
+            fn add(
+                &mut self,
+                category: Option<EventCategory>,
+                elapsed: Option<std::time::Duration>,
+            ) {
+                if let (Some(category), Some(elapsed)) = (category, elapsed) {
+                    match category {
+                        EventCategory::Movement => self.movement.add_wall(elapsed),
+                        EventCategory::Gameplay => self.gameplay.add_wall(elapsed),
+                        EventCategory::Session => self.session.add_wall(elapsed),
+                    }
+                }
+            }
+        }
+        impl Drop for EventCategorySpans {
+            fn drop(&mut self) {
+                std::mem::take(&mut self.movement).record("lan_events_move");
+                std::mem::take(&mut self.gameplay).record("lan_events_gameplay");
+                std::mem::take(&mut self.session).record("lan_events_session");
+            }
+        }
+        let mut category_spans = EventCategorySpans::default();
+        let mut prev_category: Option<EventCategory> = None;
         for event in events {
             if timed && let Some(host) = self.server.lan.as_ref() {
-                note_event(host, previous.take(), &mut timings);
+                let elapsed = note_event(host, previous.take(), &mut timings);
+                category_spans.add(prev_category.take(), elapsed);
             }
             if timed {
                 let detail = self
@@ -1243,6 +1280,13 @@ impl crate::game::ServerGame<'_> {
                     .lan
                     .as_ref()
                     .and_then(|host| self.event_detail(host, &event));
+                prev_category = Some(match &event {
+                    HostEvent::AcceptedMove(..) | HostEvent::PlayerMove(_) => {
+                        EventCategory::Movement
+                    }
+                    HostEvent::Packet(..) | HostEvent::RawPayload(_) => EventCategory::Gameplay,
+                    _ => EventCategory::Session,
+                });
                 previous = Some((Instant::now(), event_kind(&event), detail));
             }
             match event {
@@ -1756,7 +1800,8 @@ impl crate::game::ServerGame<'_> {
             }
         }
         if timed && let Some(host) = self.server.lan.as_ref() {
-            note_event(host, previous, &mut timings);
+            let elapsed = note_event(host, previous, &mut timings);
+            category_spans.add(prev_category.take(), elapsed);
             for burst in timings.bursts() {
                 sunrise_level::spans::note(burst.ms, || describe_burst(host, &burst));
             }
@@ -1770,6 +1815,7 @@ impl crate::game::ServerGame<'_> {
     /// sees the support (#4510). `tick_lan` then syncs the level; a paused
     /// tick that never calls this still drains inside `tick_lan`.
     pub fn tick_lan_packets(&mut self) {
+        let _rng = crate::rng_count::guard_consumer(crate::rng_count::Consumer::LanPackets);
         if self.server.level_pass.packets_drained {
             return;
         }
@@ -1800,7 +1846,9 @@ impl crate::game::ServerGame<'_> {
         let entities = std::mem::take(&mut host.states);
         let spawn = self.world_spawn_position();
         let mut solids = std::mem::take(&mut host.hub.move_solids);
-        self.fill_move_solids(&mut solids, !host.hub.guests.is_empty());
+        sunrise_level::spans::time("lan_move_solids", || {
+            self.fill_move_solids(&mut solids, !host.hub.guests.is_empty());
+        });
         host.hub.move_solids = solids;
         let events = {
             let clock_rate = self.network_clock_rate();
@@ -2148,10 +2196,17 @@ impl crate::game::ServerGame<'_> {
         // level tick (e.g. a fixture) has no outer server pass.
         let defer_connections = self.server.level_pass.running.is_some();
         if !paused {
-            sunrise_level::spans::time("lan_guests", || self.tick_level_guests());
+            sunrise_level::spans::time("lan_guests", || {
+                crate::rng_count::in_consumer(crate::rng_count::Consumer::LanGuests, || {
+                    self.tick_level_guests()
+                })
+            });
             if !defer_connections {
-                self.tick_guest_connections(false)
-                    .expect("the current-level connection pass does not switch levels");
+                crate::rng_count::in_consumer(
+                    crate::rng_count::Consumer::LanGuestConnections,
+                    || self.tick_guest_connections(false),
+                )
+                .expect("the current-level connection pass does not switch levels");
             }
             // Ridden vehicles enter their portals on the level path.
             let Some(host) = self.server.lan.as_ref() else {
@@ -2261,7 +2316,7 @@ impl crate::game::ServerGame<'_> {
             // before them (`lan_broadcast_changes`): the guest re-runs a
             // piston's `triggerEvent` on the blocks as they were before the
             // move, a base the last tick restored included.
-            for (pos, b0, b1, state) in std::mem::take(&mut self.server.lan_block_events) {
+            for (pos, b0, b1, state) in std::mem::take(&mut self.server.lan_queues.block_events) {
                 host.hub.block_event(pos, b0, b1, state);
             }
             let entities = states.as_slice();
@@ -2273,10 +2328,10 @@ impl crate::game::ServerGame<'_> {
             // that hit) is dropped by the tracker below: its event goes out
             // first, as `Level.broadcastEntityEvent` precedes the discard.
             let (gone, later) = partition_lan_entity_events(
-                std::mem::take(&mut self.server.lan_entity_events),
+                std::mem::take(&mut self.server.lan_queues.entity_events),
                 entities.iter().map(|entity| entity.id),
             );
-            self.server.lan_entity_events = later;
+            self.server.lan_queues.entity_events = later;
             for (id, event) in gone {
                 host.hub.entity_event(id, event);
             }
@@ -2392,7 +2447,9 @@ impl crate::game::ServerGame<'_> {
                 return;
             };
             let processed = sunrise_level::spans::time("lan_process_events", || {
-                self.lan_process_events(host, events, entities, spawn)
+                crate::rng_count::in_consumer(crate::rng_count::Consumer::LanEvents, || {
+                    self.lan_process_events(host, events, entities, spawn)
+                })
             });
             let Some(back) = processed else {
                 return;
@@ -2440,19 +2497,22 @@ impl crate::game::ServerGame<'_> {
         {
             self.run_native_tracking();
         }
-        self.flush_guest_connection_effects();
-        self.lan_stuck(paused);
-        self.tick_server_travel();
-        self.lan_swings();
-        self.lan_update_streaming();
-        self.lan_guest_poses();
-        self.lan_update_waypoints();
-        self.lan_sync_scoreboard();
+        sunrise_level::spans::time("lan_post_sync", || {
+            self.flush_guest_connection_effects();
+            self.lan_stuck(paused);
+            self.tick_server_travel();
+            self.lan_swings();
+            self.lan_update_streaming();
+            self.lan_guest_poses();
+            self.lan_update_waypoints();
+            self.lan_sync_scoreboard();
+        });
         drop(holding);
         self.flush_attachment_sync();
-        self.flush_far_terrain();
         if let Some(host) = self.server.lan.as_ref() {
-            lan::flush_all(host.hub.guests.iter().map(|g| &g.sender));
+            sunrise_level::spans::time("lan_handoff", || {
+                lan::flush_all(host.hub.guests.iter().map(|g| &g.sender));
+            });
         }
         self.flush_native_sounds();
         // `tick_server` resets the pass after all dimensions; outside a pass
@@ -2499,7 +2559,7 @@ impl crate::game::ServerGame<'_> {
                 log::error!("could not open {}: {e}", level.id());
                 return;
             }
-            self.server.tickets.0.add_spawn(
+            self.server.chunk_ticking.tickets.add_spawn(
                 prepared.chunk(),
                 sunrise_sim::ticket_levels::SpawnTicketKind::Player,
             );
@@ -2693,9 +2753,12 @@ impl crate::game::ServerGame<'_> {
                 // what animates the move there. `state` is the block the
                 // event named, read before it ran (the packet's `block`).
                 sunrise_world::level::LevelEvent::BlockEntityEvent { pos, state, a, b } => {
-                    self.server
-                        .lan_block_events
-                        .push(([pos.x, pos.y, pos.z], *a, *b, state.0));
+                    self.server.lan_queues.block_events.push((
+                        [pos.x, pos.y, pos.z],
+                        *a,
+                        *b,
+                        state.0,
+                    ));
                 }
                 _ => {}
             }
@@ -2706,17 +2769,20 @@ impl crate::game::ServerGame<'_> {
     pub(in crate::game) fn lan_block_event(&mut self, pos: [i32; 3], b0: i32, b1: i32) {
         if self.server.audio_capture_active {
             let state = self.common.world.block(pos[0], pos[1], pos[2]).0;
-            self.server.lan_block_events.push((pos, b0, b1, state));
+            self.server
+                .lan_queues
+                .block_events
+                .push((pos, b0, b1, state));
         }
     }
     /// `Level.broadcastEntityEvent` for the guests.
     pub(in crate::game) fn lan_entity_event(&mut self, id: i32, event: i8, _at: [f64; 3]) {
         if self.server.audio_capture_active {
-            self.server.lan_entity_events.push((id, event));
+            self.server.lan_queues.entity_events.push((id, event));
         }
     }
     /// Deliver one committed entity event immediately to tracking guests and the entity itself,
-    /// without touching unrelated entries in `self.lan_entity_events`.
+    /// without touching unrelated entries in `server.lan_queues.entity_events`.
     pub(in crate::game::server_side) fn deliver_entity_event(
         &mut self,
         id: i32,
@@ -2726,7 +2792,7 @@ impl crate::game::ServerGame<'_> {
         if let Some(host) = self.server.lan.as_ref() {
             host.hub.entity_event(id, event);
         } else if self.server.audio_capture_active {
-            self.server.lan_entity_events.push((id, event));
+            self.server.lan_queues.entity_events.push((id, event));
         }
     }
     /// `ServerPlayer.onEquippedItemBroken` for the acting player (the guest whose turn it
@@ -2769,7 +2835,10 @@ impl crate::game::ServerGame<'_> {
         magic: bool,
     ) {
         if self.server.audio_capture_active {
-            self.server.lan_critical_hits.push((attacker, id, magic));
+            self.server
+                .lan_queues
+                .critical_hits
+                .push((attacker, id, magic));
         }
     }
 
@@ -2778,7 +2847,7 @@ impl crate::game::ServerGame<'_> {
         let Some(host) = self.server.lan.as_mut() else {
             return;
         };
-        let critical_hits = std::mem::take(&mut self.server.lan_critical_hits);
+        let critical_hits = std::mem::take(&mut self.server.lan_queues.critical_hits);
         let kinetic_hits = std::mem::take(&mut self.server.lan_kinetic_hits);
         for (state, at) in std::mem::take(&mut self.server.lan_cushion_breaks) {
             if let Some(id) = host
@@ -2837,10 +2906,10 @@ impl crate::game::ServerGame<'_> {
                 None => host.hub.level_event(1011, pos, 0, None),
             }
         }
-        for (pos, b0, b1, state) in std::mem::take(&mut self.server.lan_block_events) {
+        for (pos, b0, b1, state) in std::mem::take(&mut self.server.lan_queues.block_events) {
             host.hub.block_event(pos, b0, b1, state);
         }
-        for (id, event) in std::mem::take(&mut self.server.lan_entity_events) {
+        for (id, event) in std::mem::take(&mut self.server.lan_queues.entity_events) {
             host.hub.entity_event(id, event);
         }
         for (level, kind, pos, data) in std::mem::take(&mut self.server.lan_global_events) {
@@ -3182,7 +3251,6 @@ impl LanHost {
             waypoint_dead: Default::default(),
             commands: Default::default(),
             quiet: Default::default(),
-            far: None,
             native_commands_sent: None,
             sleep_ignored: Default::default(),
             states: Default::default(),
@@ -4629,7 +4697,6 @@ pub(in crate::game) mod tests {
                 let net = NetConfig {
                     listen: false,
                     announce: false,
-                    lod_distance: 0,
                     ..NetConfig::lan(0, String::new(), 3)
                 };
                 let config = HubConfig {
@@ -4904,7 +4971,6 @@ pub(in crate::game) mod tests {
             let net = NetConfig {
                 listen: false,
                 announce: false,
-                lod_distance: 0,
                 ..NetConfig::lan(0, String::new(), 2)
             };
             let config = HubConfig {
@@ -5251,7 +5317,6 @@ mod late_pairing_tests {
             let net = NetConfig {
                 listen: false,
                 announce: false,
-                lod_distance: 0,
                 ..NetConfig::lan(0, String::new(), 2)
             };
             let config = HubConfig {
@@ -5576,7 +5641,6 @@ pub(in crate::game) mod merchant_packet_tests {
                 waypoint_dead: Default::default(),
                 commands: Default::default(),
                 quiet: Default::default(),
-                far: None,
                 native_commands_sent: None,
                 sleep_ignored: Default::default(),
                 states: Default::default(),
@@ -5832,10 +5896,10 @@ pub(in crate::game) mod merchant_packet_tests {
             rx.try_iter().for_each(drop);
 
             let at = [0.5, 4.0, 0.5];
-            game.player = Some(
-                sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(at[0], at[1], at[2]))
-                    .unwrap(),
-            );
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                Vec3::new(at[0], at[1], at[2]),
+            ));
             bind_local_player(game, 300, 3);
             game.mobs[0].ambient_timer = 0;
             game.mobs[0].random = LegacyRandom::new(42);

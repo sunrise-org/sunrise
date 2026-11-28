@@ -10,7 +10,7 @@ use sunrise_sim::motion::PlayerMotion;
 fn a_boat_pushes_the_player_in_the_level_tick_order() {
     crate::game::server_side::native_entity_refs::tests::with_client_game(|game| {
         let (_peer, _writer) = super::tests::connect_menu_test(game);
-        let mut player = PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 3.7)).unwrap();
+        let mut player = PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 3.7));
         player.client_side = true;
         game.player = Some(player);
         game.mobs.clear();

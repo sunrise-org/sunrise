@@ -32,7 +32,7 @@ mod client_lid_tests {
                     game.world.set(x, 199, z, stone).unwrap();
                 }
             }
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)));
             let kind = game
                 .res
                 .mob_types()

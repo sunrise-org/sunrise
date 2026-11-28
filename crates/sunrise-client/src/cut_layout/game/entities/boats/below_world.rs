@@ -77,8 +77,7 @@ pub(crate) mod tests {
                 assert_eq!(g.boats.len(), 1);
                 assert_eq!(g.boats[0].position.y, -20_000_000.0);
                 assert_eq!(g.boats[0].velocity, Vec3::new(-2e-323, 0.0, -2e-323));
-                g.player =
-                    Some(PlayerMotion::new(g.motion, Vec3::new(-77.75, 64.0, -55.67)).unwrap());
+                g.player = Some(PlayerMotion::new(g.motion, Vec3::new(-77.75, 64.0, -55.67)));
                 g.world
                     .chunks
                     .insert((-5, -4), std::sync::Arc::new(Chunk::empty(-5, -4)));

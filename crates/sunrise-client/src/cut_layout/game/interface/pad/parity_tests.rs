@@ -170,7 +170,7 @@ fn pad_smooth_camera_binding_toggles_the_cinematic_camera() {
 
 /// A player at the origin: the wheel's gates ask for one.
 fn with_player(game: &mut sunrise_client_gameplay::game::ClientGame<'_>) {
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
 }
 
 #[test]

@@ -347,7 +347,7 @@ impl crate::game::CommonGame<'_> {
     pub fn init_sulfur_attribute_maps(&mut self) {
         for m in &mut self.mobs {
             if m.species() == sunrise_sim::mobs::Species::SulfurCube {
-                sunrise_sim::mobs::finalize::attribute_map(m, &self.motion.attributes);
+                sunrise_sim::mobs::finalize::attribute_map(m, self.motion.attributes());
             }
         }
     }

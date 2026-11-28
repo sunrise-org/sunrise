@@ -35,7 +35,7 @@ fn frame_pick_is_shared_ordered_and_refuses_stale_or_invalid_output() {
             finish_login(game, &mut server);
             game.native_lifecycle.begin_open(None);
             game.client.title.0 = None;
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 1.0, 0.5)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 1.0, 0.5)));
             game.yaw = -90.0;
             game.pitch = 0.0;
             game.block_reach = 4.5;
@@ -185,7 +185,7 @@ fn frame_pick_without_listeners_keeps_the_vanilla_result() {
             finish_login(game, &mut server);
             game.native_lifecycle.begin_open(None);
             game.client.title.0 = None;
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 1.0, 0.5)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 1.0, 0.5)));
             game.yaw = -90.0;
             game.pitch = 0.0;
             game.world
@@ -330,7 +330,7 @@ pub(crate) fn with_pick_game(
         finish_login(game, &mut server);
         game.native_lifecycle.begin_open(None);
         game.client.title.0 = None;
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 1.0, 0.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 1.0, 0.5)));
         game.previous_position = Vec3::new(0.5, 1.0, 0.5);
         game.yaw = -90.0;
         game.pitch = 0.0;

@@ -502,6 +502,48 @@ pub(crate) mod tests {
                         }],
                     })
                 );
+
+                // The same round trip, but the column is then replaced whole for the viewer
+                // that holds it (a bulk change, as `World::edit_runs` logs one). The whole
+                // column carries the group the block entity's load publishes from its data
+                // (the 729 merged before the save).
+                game.enter_level(Dim::Nether).unwrap();
+                game.storage_scope(|game, _| {
+                    assert_eq!(
+                        level.set_block(game, AT, air, BlockUpdateFlags::NONE),
+                        Ok(true)
+                    );
+                    assert_eq!(
+                        level.set_block(game, AT, state, BlockUpdateFlags::NONE),
+                        Ok(true)
+                    );
+                    assert_eq!(level.set_connection_group(game, AT, Some(730)), Ok(true));
+                    ((), true)
+                });
+                game.world.bulk_log.insert(COLUMN);
+                game.enter_level(Dim::Overworld).unwrap();
+                game.tick_server(false).unwrap();
+                let packets = decode_ordered(out());
+                let replaced = packets.windows(4).find_map(|packets| match packets {
+                    [
+                        Got::Plain(C::BundleDelimiter(_)),
+                        Got::Wrapped(2, C::LevelChunkWithLight(chunk)),
+                        Got::Groups(2, group),
+                        Got::Plain(C::BundleDelimiter(_)),
+                    ] if (chunk.x, chunk.z) == COLUMN => Some(group),
+                    _ => None,
+                });
+                assert_eq!(
+                    replaced,
+                    Some(&Section {
+                        pos: AT.map(|v| v >> 4),
+                        entries: vec![Entry {
+                            cell: Cell::of(AT),
+                            group: Some(729)
+                        }],
+                    }),
+                    "the replaced column was not sent with the group its block entity's load published"
+                );
             } else {
                 game.enter_level(Dim::Nether).unwrap();
                 game.options.dedicated = Some(Vec::new());

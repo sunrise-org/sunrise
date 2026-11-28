@@ -508,7 +508,6 @@ impl crate::game::ClientGame<'_> {
             Screen::Win => "win",
             Screen::DebugOptions => "debug-options",
             Screen::Mod => "mod",
-            Screen::HudEditor => "hud-editor",
         }
     }
     pub(in crate::game::client_side) fn inventory_counts(&self) -> BTreeMap<String, i64> {

@@ -71,7 +71,7 @@ fn a_riders_move_takes_the_look_of_the_tick_and_leaves_it_off_the_ground() {
 
             let mut collided = Vec::new();
             for yaw in [0.0, 180.0] {
-                let mut player = PlayerMotion::new(game.motion, Vec3::new(8.5, 5.0, 8.69)).unwrap();
+                let mut player = PlayerMotion::new(game.motion, Vec3::new(8.5, 5.0, 8.69));
                 player.client_side = true;
                 // The player's own copy of the look is the opposite one: only this tick's look,
                 // synced before the rider moves, turns it to the wall or away from it.
@@ -126,7 +126,7 @@ fn mounted_local_spectator_forces_flight_and_sends_abilities() {
                 .push(Boat::new(71, "oak".into(), Vec3::new(2.5, 64.0, 2.5), 0.0));
             game.riding = Some(71);
 
-            let mut player = PlayerMotion::new(game.motion, Vec3::new(2.5, 64.0, 2.5)).unwrap();
+            let mut player = PlayerMotion::new(game.motion, Vec3::new(2.5, 64.0, 2.5));
             player.client_side = true;
             game.player = Some(player);
 

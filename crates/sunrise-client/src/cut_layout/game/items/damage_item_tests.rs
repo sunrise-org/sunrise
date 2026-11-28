@@ -146,13 +146,10 @@ fn part_amount_boundaries_and_threshold_crossing() {
             assert_eq!(used(game, "minecraft:iron_pickaxe", 1), 0);
             assert_eq!(wear.take_asked(), [1]);
         }
-        game.player = Some(
-            sunrise_sim::motion::PlayerMotion::new(
-                game.motion,
-                sunrise_core::geometry::Vec3::new(0.0, 64.0, 0.0),
-            )
-            .unwrap(),
-        );
+        game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+            game.motion,
+            sunrise_core::geometry::Vec3::new(0.0, 64.0, 0.0),
+        ));
         game.server.lan_acting = Some(1);
         for amount in [250, i32::MAX] {
             game.server.guest_equipment_breaks.clear();
@@ -229,13 +226,10 @@ fn a_part_is_asked_after_unbreaking() {
 #[ignore = "daily"]
 fn a_part_breaks_its_tool_now() {
     with_wear_part("minecraft:iron_pickaxe", Rule::Break, |game, wear| {
-        game.player = Some(
-            sunrise_sim::motion::PlayerMotion::new(
-                game.motion,
-                sunrise_core::geometry::Vec3::new(0.0, 64.0, 0.0),
-            )
-            .unwrap(),
-        );
+        game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+            game.motion,
+            sunrise_core::geometry::Vec3::new(0.0, 64.0, 0.0),
+        ));
         game.server.lan_acting = Some(1);
         game.server.guest_equipment_breaks.clear();
         let broken_before = game.stats.get("broken", "minecraft:iron_pickaxe");
@@ -342,13 +336,10 @@ fn a_mod_wears_a_stack_nobody_holds_as_vanilla_does() {
         // A quarter of 200 points is 50: far from none and from all of them.
         assert!((20..=90).contains(&tough.damage()), "{}", tough.damage());
 
-        game.player = Some(
-            sunrise_sim::motion::PlayerMotion::new(
-                game.motion,
-                sunrise_core::geometry::Vec3::new(0.0, 64.0, 0.0),
-            )
-            .unwrap(),
-        );
+        game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+            game.motion,
+            sunrise_core::geometry::Vec3::new(0.0, 64.0, 0.0),
+        ));
         sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
         let player = game.player(123).unwrap();
         game.creative = true;

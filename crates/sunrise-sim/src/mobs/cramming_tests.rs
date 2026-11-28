@@ -55,6 +55,7 @@ fn a_ridden_horse_is_not_counted_for_cramming() {
                 .collect();
             let w = MobWorld {
                 side: crate::motion::dry_side(),
+                variant_tables: None,
                 others: &seen,
                 max_entity_cramming: 3,
                 ..base.clone()

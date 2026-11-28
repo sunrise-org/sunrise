@@ -192,10 +192,10 @@ fn exploding_driven_cart_does_not_reseat_a_player_moved_by_its_dismount_hook() {
     mod_platform::testing::with_mods(mods, || {
         sunrise_gameplay::game::native_entity_refs::tests::with_game(|game| {
             game.options.dedicated = Some(Vec::new());
-            game.player = Some(
-                sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(0.5, 200.0, 0.5))
-                    .unwrap(),
-            );
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                Vec3::new(0.5, 200.0, 0.5),
+            ));
             sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 70, 70);
             let mut cart = Minecart::new(71, CartKind::Tnt, Vec3::new(0.5, 200.0, 0.5));
             cart.no_gravity = true;
@@ -252,8 +252,10 @@ fn activator_respects_canceled_player_dismount() {
     mod_platform::testing::with_mods(mods, || {
         sunrise_gameplay::game::native_entity_refs::tests::with_game(|game| {
             game.options.dedicated = Some(Vec::new());
-            game.player =
-                Some(sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                Vec3::ZERO,
+            ));
             sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 70, 70);
             let mut cart = Minecart::new(71, CartKind::Rideable, Vec3::ZERO);
             game.carts.push(cart.clone());
@@ -285,10 +287,10 @@ fn a_bound_cart_commits_the_normal_server_tick() {
 fn a_bound_cart_commits_the_ridden_tick() {
     bound_cart_case(CartKind::Rideable, |game| {
         game.carts.update(0, |cart| cart.in_water = true);
-        game.player = Some(
-            sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(0.5, 70.0 + SEAT, 0.5))
-                .unwrap(),
-        );
+        game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+            game.motion,
+            Vec3::new(0.5, 70.0 + SEAT, 0.5),
+        ));
         game.riding = Some(71);
         assert!(game.tick_cart_riding(Keys::default()));
         assert!(!game.carts[0].in_water);

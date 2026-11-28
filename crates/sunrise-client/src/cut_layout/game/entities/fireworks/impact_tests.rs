@@ -181,7 +181,7 @@ fn rocket_impact_rechecks_subscriptions_per_impact_moment() {
             game.build_registries();
             game.set_allow_commands(true);
             assert!(game.run_command("forceload add 0 0"));
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 8.5)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 8.5)));
             bind_local_player(game, 7, 7);
             let stone = game
                 .pack

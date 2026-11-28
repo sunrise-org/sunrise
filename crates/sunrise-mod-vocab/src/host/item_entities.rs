@@ -77,4 +77,34 @@ pub trait ItemEntitiesBackendMut {
     /// `ItemEntity.setTarget`; None allows any player to pick it up.
     /// An open transaction restores the previous target on abort.
     fn item_entity_set_target(&mut self, item: ItemEntityRef, target: Option<u128>) -> bool;
+    /// Side: server.
+    /// `ItemEntity.playerTouch(player)` now: the pickup the game's own pass runs when the item
+    /// meets the player, with its pickup-delay and target checks, `item_picked_up` and
+    /// `item_picked_up_post`, `Inventory.add` (what does not fit stays on the ground), the
+    /// statistic, the advancement criterion, and the take animation and sound. `Ok` of the count
+    /// the inventory took: 0 when the delay, the target, a mod or a full inventory refused it.
+    /// `Err(Stale)` for a stale player or item handle or a dead player (the game's pickup skips
+    /// the dead), and `Err(Unavailable)` on a client.
+    ///
+    /// Not transactional: the pickup commits at once, its take packet and sound included.
+    /// Inside an open transaction it is refused with `Err(InTransaction)` and nothing is done.
+    fn player_touch_item(
+        &mut self,
+        player: PlayerRef,
+        item: ItemEntityRef,
+    ) -> Result<u32, PickupError>;
+    /// Side: server.
+    /// `ExperienceOrb.playerTouch(player)` now, wherever the orb is: refused while the player's
+    /// `takeXpDelay` runs (`Ok(false)`); else `pickup_xp` fires first and a veto, or a listener
+    /// that removes the orb, refuses it (`Ok(false)`). Otherwise the delay is set to 2, one of
+    /// the orb's count is taken with the take animation and sound, its value goes through
+    /// Mending and the rest to the player's experience, and a one-count orb is discarded.
+    /// `Ok(true)` when taken. The same for the host's own player and for a LAN guest. `Err` as
+    /// for `player_touch_item`, including `Err(InTransaction)`: the orb's take, Mending and the
+    /// experience commit at once and are refused inside an open transaction.
+    fn player_touch_orb(
+        &mut self,
+        player: PlayerRef,
+        orb: ExperienceOrbRef,
+    ) -> Result<bool, PickupError>;
 }

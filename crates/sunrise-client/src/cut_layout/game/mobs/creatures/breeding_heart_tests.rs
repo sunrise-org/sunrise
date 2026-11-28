@@ -14,7 +14,7 @@ fn a_bred_turtle_posts_no_heart_burst_but_a_bred_frog_does() {
             .push(Mob::new(1, kind.clone(), Vec3::new(8.5, 64.0, 8.5), 0.0));
         game.mobs
             .push(Mob::new(2, kind, Vec3::new(9.5, 64.0, 8.5), 0.0));
-        game.server.lan_entity_events.clear();
+        game.server.lan_queues.entity_events.clear();
         game.breed(
             1,
             2,
@@ -26,14 +26,15 @@ fn a_bred_turtle_posts_no_heart_burst_but_a_bred_frog_does() {
         );
         let burst = game
             .server
-            .lan_entity_events
+            .lan_queues
+            .entity_events
             .iter()
             .filter(|(id, event)| *id == 1 && *event == 18)
             .count();
         assert_eq!(
             burst, hearts,
             "{kind_id} heartbeat events: {:?}",
-            game.server.lan_entity_events
+            game.server.lan_queues.entity_events
         );
         game.mobs.clear();
         game.orbs.clear();

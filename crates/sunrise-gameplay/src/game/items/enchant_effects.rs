@@ -319,7 +319,7 @@ impl ServerGame<'_> {
         }
         let enchantments = self.stations().enchantments.clone();
         let mut level_random = self.common.world.random.clone();
-        let mut fallback = (*level_random).clone();
+        let mut fallback = crate::rng_count::untracked_copy(&level_random);
         let authoritative = self.common.is_logical_server();
         if authoritative && ctx.this_motion.is_none() {
             ctx.this_motion = victim

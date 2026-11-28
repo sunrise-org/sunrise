@@ -3,7 +3,7 @@ use serde::Deserialize;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    io::{BufRead, BufReader},
+    io::{BufRead, Write},
     path::{Path, PathBuf},
 };
 
@@ -29,6 +29,7 @@ enum CargoEvent {
 struct Target {
     kind: Vec<String>,
 }
+#[derive(Default)]
 pub struct Outputs {
     scripts: Vec<(String, Vec<String>)>,
     libraries: Vec<(String, Vec<PathBuf>)>,
@@ -44,34 +45,90 @@ fn dynamic(path: &Path) -> bool {
 }
 
 impl Outputs {
+    fn push_line(&mut self, line: &str) -> Result<Option<&str>, String> {
+        if line.is_empty() {
+            return Ok(None);
+        }
+        match serde_json::from_str(line).map_err(|e| format!("Cargo build messages: {e}"))? {
+            CargoEvent::BuildScriptExecuted {
+                package_id,
+                linked_paths,
+            } => {
+                self.scripts.push((package_id, linked_paths));
+                Ok(None)
+            }
+            CargoEvent::CompilerArtifact {
+                package_id,
+                filenames,
+                target,
+            } if !target.kind.iter().any(|kind| kind == "proc-macro") => {
+                self.libraries.push((package_id, filenames));
+                Ok(None)
+            }
+            CargoEvent::CompilerMessage { message } if message.rendered().is_some() => {
+                self.errors.push(message);
+                Ok(self.errors.last().and_then(|message| message.rendered()))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Reads Cargo's JSON message stream once: copies every raw line to `raw_out`, collects
+    /// runtime outputs and diagnostics, and calls `on_rendered` for each compiler message as it
+    /// arrives. Drains to EOF even after a parse error so Cargo never blocks on a closed pipe.
+    pub(crate) fn stream(
+        mut reader: impl BufRead,
+        raw_out: &mut impl Write,
+        mut on_rendered: impl FnMut(&str),
+    ) -> Result<Self, String> {
+        let mut outputs = Self::default();
+        let mut bytes = Vec::new();
+        let mut first_error: Option<String> = None;
+        loop {
+            bytes.clear();
+            match reader.read_until(b'\n', &mut bytes) {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(error) => {
+                    first_error.get_or_insert_with(|| error.to_string());
+                    break;
+                }
+            }
+            if let Err(error) = raw_out.write_all(&bytes) {
+                first_error.get_or_insert_with(|| error.to_string());
+            }
+            if first_error.is_none() {
+                let line = if let Some(line) = bytes.strip_suffix(b"\n") {
+                    line.strip_suffix(b"\r").unwrap_or(line)
+                } else {
+                    &bytes
+                };
+                match std::str::from_utf8(line)
+                    .map_err(|e| format!("Cargo build messages: {e}"))
+                    .and_then(|text| outputs.push_line(text))
+                {
+                    Ok(Some(rendered)) => on_rendered(rendered),
+                    Ok(None) => {}
+                    Err(error) => first_error = Some(error),
+                }
+            }
+        }
+        if let Err(error) = raw_out.flush() {
+            first_error.get_or_insert_with(|| error.to_string());
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(outputs),
+        }
+    }
+
+    #[cfg(test)]
     pub fn read(path: &Path) -> Result<Self, String> {
-        let mut outputs = Self {
-            scripts: Vec::new(),
-            libraries: Vec::new(),
-            errors: Vec::new(),
-        };
-        for line in BufReader::new(fs::File::open(path).map_err(|e| e.to_string())?).lines() {
-            let line = line.map_err(|e| e.to_string())?;
-            if line.is_empty() {
-                continue;
-            }
-            match serde_json::from_str(&line).map_err(|e| format!("Cargo build messages: {e}"))? {
-                CargoEvent::BuildScriptExecuted {
-                    package_id,
-                    linked_paths,
-                } => outputs.scripts.push((package_id, linked_paths)),
-                CargoEvent::CompilerArtifact {
-                    package_id,
-                    filenames,
-                    target,
-                } if !target.kind.iter().any(|kind| kind == "proc-macro") => {
-                    outputs.libraries.push((package_id, filenames))
-                }
-                CargoEvent::CompilerMessage { message } if message.rendered().is_some() => {
-                    outputs.errors.push(message)
-                }
-                _ => {}
-            }
+        let mut outputs = Self::default();
+        for line in
+            std::io::BufReader::new(fs::File::open(path).map_err(|e| e.to_string())?).lines()
+        {
+            outputs.push_line(&line.map_err(|e| e.to_string())?)?;
         }
         Ok(outputs)
     }
@@ -234,5 +291,82 @@ mod tests {
                 .unwrap_err()
                 .contains("relative")
         );
+    }
+
+    #[test]
+    fn stream_mirrors_compiler_messages_before_eof_and_preserves_raw_jsonl() {
+        use std::io::Read;
+        use std::sync::mpsc;
+
+        struct GatedReader {
+            first: Vec<u8>,
+            second: Vec<u8>,
+            stage: u8,
+            ack: mpsc::Receiver<()>,
+        }
+
+        impl Read for GatedReader {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                let source = match self.stage {
+                    0 => {
+                        self.stage = 1;
+                        &self.first
+                    }
+                    1 => {
+                        self.ack
+                            .try_recv()
+                            .expect("compiler-message must be mirrored before stream EOF");
+                        self.stage = 2;
+                        &self.second
+                    }
+                    _ => return Ok(0),
+                };
+                let n = source.len().min(buf.len());
+                buf[..n].copy_from_slice(&source[..n]);
+                Ok(n)
+            }
+        }
+
+        let first = format!(
+            "{}\n",
+            serde_json::json!({
+                "reason": "compiler-message",
+                "message": {
+                    "rendered": "warning: function `registry_probe` is never used\n",
+                    "spans": []
+                }
+            })
+        );
+        let second = format!(
+            "{}\n",
+            serde_json::json!({
+                "reason": "compiler-artifact",
+                "package_id": "greeter",
+                "filenames": ["/tmp/libgreeter.so"],
+                "target": { "kind": ["cdylib"] }
+            })
+        );
+        let (tx, rx) = mpsc::channel();
+        let reader = std::io::BufReader::new(GatedReader {
+            first: first.as_bytes().to_vec(),
+            second: second.as_bytes().to_vec(),
+            stage: 0,
+            ack: rx,
+        });
+        let mut raw = Vec::new();
+        let mut mirrored = Vec::new();
+        let outputs = Outputs::stream(reader, &mut raw, |rendered| {
+            mirrored.push(rendered.to_owned());
+            tx.send(()).unwrap();
+        })
+        .unwrap();
+
+        assert_eq!(
+            mirrored,
+            vec!["warning: function `registry_probe` is never used\n"]
+        );
+        assert_eq!(String::from_utf8(raw).unwrap(), format!("{first}{second}"));
+        assert_eq!(outputs.errors.len(), 1);
+        assert_eq!(outputs.libraries.len(), 1);
     }
 }

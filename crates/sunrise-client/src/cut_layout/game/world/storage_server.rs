@@ -56,9 +56,7 @@ pub(crate) mod reach_tests {
     fn breaking_the_other_half_closes_the_open_double_chest() {
         let mut resources = None;
         let mut game = server_game(&mut resources);
-        game.player = Some(
-            PlayerMotion::new(game.motion, Vec3::new(8.5, 64.0, 8.5)).expect("a player position"),
-        );
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 64.0, 8.5)));
         let registry = game.pack.assets.registry;
         let half = |kind: &str| {
             let mut state = registry

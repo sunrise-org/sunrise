@@ -150,6 +150,7 @@ pub fn build(
     mixins: &MixinsIdentity,
     rustc: impl Fn(&str) -> std::process::Command,
     check_only: bool,
+    stderr: super::CompilerStderr,
 ) -> Result<Option<Patch>, String> {
     let Some(prepared) = prepare(rust, game, out, projects, sdk, mixins, check_only)? else {
         return Ok(None);
@@ -211,7 +212,7 @@ pub fn build(
         let mut arg = std::ffi::OsString::from("@");
         arg.push(&argfile);
         cmd.arg(arg);
-        super::run(cmd, "Compiling the patched functions")?;
+        super::run_compiler(cmd, "Compiling the patched functions", None, stderr)?;
         fs::write(saved, fingerprint).map_err(|e| e.to_string())?;
         compiled.push((name.clone(), rlib));
     }

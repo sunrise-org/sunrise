@@ -670,13 +670,10 @@ pub(crate) mod tests {
             guest.dimension = Dim::Overworld.id().into();
             // Creative: no fall or suffocation where the teleports below land.
             guest.game_mode = sunrise_sim::lan::guest::CREATIVE;
-            guest.motion = Some(Box::new(
-                sunrise_sim::motion::PlayerMotion::new(
-                    game.motion,
-                    sunrise_core::geometry::Vec3::new(0.5, 80.0, 0.5),
-                )
-                .unwrap(),
-            ));
+            guest.motion = Some(Box::new(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                sunrise_core::geometry::Vec3::new(0.5, 80.0, 0.5),
+            )));
             guest.max_unacknowledged = 1000;
             game.server.lan.as_mut().unwrap().hub.guests.push(guest);
 

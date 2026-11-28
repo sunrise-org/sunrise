@@ -169,8 +169,10 @@ mod tests {
                 Some(mod_api::Text::literal("Shiny"))
             );
 
-            game.player =
-                Some(sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                Vec3::ZERO,
+            ));
             sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
             let player = game.entity(20).unwrap();
             assert_eq!(player.custom_name(game).unwrap(), None);

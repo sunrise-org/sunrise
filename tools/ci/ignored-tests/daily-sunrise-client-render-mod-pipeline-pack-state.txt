@@ -1,0 +1,7 @@
+# PACKAGE TEST TARGET daily REASON; exact logical libtest identities, sorted.
+# Mod pipelines hold shader-pack state only while a pack is selected (#6728): the GPU tests of the objects, uploads
+# and draws across a pack turned on, off and on again and of a refused gamma module, and the real Renderer's pack load,
+# installation, refusal and drop with its frames, re-running itself in a child process with throwaway homes (with_xvfb.py).
+sunrise-client-render gfx::mod_pipelines::tests::pack_state::a_refused_gamma_module_keeps_the_pack_group lib daily gpu
+sunrise-client-render gfx::mod_pipelines::tests::pack_state::a_renderer_builds_mod_pipeline_pack_state_only_with_a_pack lib daily child-process
+sunrise-client-render gfx::mod_pipelines::tests::pack_state::pack_state_exists_only_while_a_pack_is_selected lib daily gpu

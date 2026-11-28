@@ -69,7 +69,7 @@ fn game<'a>(
             .insert((x, 0), Arc::new(Chunk::empty(x, 0)));
     }
     assert!(game.run_command("fill 0 99 0 31 99 15 stone"));
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(28.5, 100.0, 10.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(28.5, 100.0, 10.5)));
     let net = NetConfig {
         announce: false,
         ..NetConfig::lan(0, "recipe-variants-test".into(), 2)

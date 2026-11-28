@@ -11,7 +11,7 @@ use sunrise_core::{
     position::ChunkPos,
     ticks::{ProtoChunkTicks, SavedTick, TickTypeId},
 };
-use sunrise_level::chunk_streamer::{ChunkGenerator, LodSampler, Proto};
+use sunrise_level::chunk_streamer::{ChunkGenerator, Proto};
 use {
     sunrise_core::nbt::Tag,
     sunrise_world::{
@@ -30,9 +30,7 @@ use {
         },
     },
 };
-mod lod;
 mod structure_mobs;
-use lod::VanillaLodSampler;
 pub use structure_mobs::GeneratedMob;
 use structure_mobs::StructureMobFinalizer;
 
@@ -149,7 +147,6 @@ pub struct VanillaTerrain {
     tick_states: Vec<u32>,
     /// Block state id -> the block entity type of its block, if it has one.
     block_entity_types: Vec<Option<&'static str>>,
-    seed: i64,
     /// The start chunks an exploration map pointed at, by structure name: a
     /// skip check reads the set by name, without a String per candidate.
     referenced: std::sync::Mutex<
@@ -164,25 +161,14 @@ pub struct VanillaTerrain {
     saved_checked: std::sync::Mutex<
         crate::fast_hash::FxHashMap<String, crate::fast_hash::FxHashMap<(i32, i32), i32>>,
     >,
-    /// The world preset the terrain was generated with (`minecraft:normal`
-    /// unless a saved world says otherwise); far decoration uses it too.
-    preset: String,
-    dimension: String,
     /// When the last proto chunk was generated, in milliseconds since
     /// `created`: the ring search waits for a pause in generation.
     last_proto: std::sync::atomic::AtomicU64,
     created: std::time::Instant,
     /// A superflat generator (`FlatLevelSource`).
     flat: bool,
-    /// A mod's chunk generator with vanilla stages: its terrain is no noise to draw far away.
+    /// A mod's chunk generator with vanilla stages: it has no vanilla noise surface.
     mod_terrain: bool,
-}
-/// The far ring of a mod's terrain: none, as for the mod's terrain alone.
-struct NoFarGround;
-impl LodSampler for NoFarGround {
-    fn sample(&mut self, _: i32, _: i32) -> Option<crate::columns::Surface> {
-        None
-    }
 }
 /// A proto chunk, or the position of one whose generation failed.
 enum VanillaProto {
@@ -361,7 +347,7 @@ impl VanillaTerrain {
         let generator = OverworldGenerator::for_world_with_settings(
             data, seed, preset, dimension, structures, saved_stem, regions,
         )?;
-        Self::assemble(resources, generator, seed, preset, dimension)
+        Self::assemble(resources, generator, dimension)
     }
     /// A superflat overworld with the structures its settings allow
     /// (`FlatLevelSource`: its layers, `structure_overrides` and the fixed biome).
@@ -402,8 +388,7 @@ impl VanillaTerrain {
             structures,
             shape.map(|s| (s.min_y, s.height)),
         )?;
-        let mut terrain =
-            Self::assemble(resources, generator, seed, "minecraft:normal", dimension)?;
+        let mut terrain = Self::assemble(resources, generator, dimension)?;
         terrain.flat = true;
         Ok(terrain)
     }
@@ -423,8 +408,7 @@ impl VanillaTerrain {
         let generator = OverworldGenerator::for_mod(
             data, seed, dimension, stem, generator, source, structures,
         )?;
-        let mut terrain =
-            Self::assemble(resources, generator, seed, "minecraft:normal", dimension)?;
+        let mut terrain = Self::assemble(resources, generator, dimension)?;
         terrain.mod_terrain = true;
         Ok(terrain)
     }
@@ -448,8 +432,6 @@ impl VanillaTerrain {
     fn assemble(
         resources: TerrainResources<'_>,
         generator: OverworldGenerator,
-        seed: i64,
-        preset: &str,
         dimension: &str,
     ) -> crate::Result<Self> {
         let TerrainResources {
@@ -527,13 +509,10 @@ impl VanillaTerrain {
             tick_blocks,
             tick_states,
             block_entity_types,
-            seed,
             referenced: Default::default(),
             saved_checked: Default::default(),
             reference_file: Default::default(),
             saved_references: Default::default(),
-            preset: preset.to_owned(),
-            dimension: dimension.to_owned(),
             last_proto: std::sync::atomic::AtomicU64::new(0),
             created: std::time::Instant::now(),
             flat: false,
@@ -894,7 +873,10 @@ impl VanillaTerrain {
         x: i32,
         z: i32,
     ) -> Option<crate::columns::Surface> {
-        <Self as ChunkGenerator>::lod_surface(self, worker, x, z)
+        if self.mod_terrain {
+            return None;
+        }
+        Some(self.client_surface(worker.surface_sample(x, z)?))
     }
     /// Generate one detached chunk purely in memory up to `stage` using a caller-owned worker,
     /// without touching `World`, `Streaming`, or `SaveDir`. Returns `(chunk, has_light)`.
@@ -1205,28 +1187,11 @@ impl ChunkGenerator for VanillaTerrain {
         worker.set_structure_mobs(self.structure_mobs.clone());
         worker
     }
-    fn lod_sampler(self: Arc<Self>) -> Box<dyn LodSampler> {
-        if self.mod_terrain {
-            return Box::new(NoFarGround);
-        }
-        Box::new(VanillaLodSampler::new(self))
-    }
     fn idle(&self, worker: &mut GeneratorWorker) {
         worker.release();
     }
     fn all_idle(&self) {
         self.generator.release_caches();
-    }
-    fn lod_surface(
-        &self,
-        worker: &mut GeneratorWorker,
-        x: i32,
-        z: i32,
-    ) -> Option<crate::columns::Surface> {
-        if self.mod_terrain {
-            return None;
-        }
-        Some(self.client_surface(worker.surface_sample(x, z)?))
     }
     /// The structure starts a saved chunk references, as vanilla reads them
     /// with the chunk: read from the owning chunk's save (or regenerated for

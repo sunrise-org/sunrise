@@ -1303,8 +1303,10 @@ fn fox_breeding_rejects_non_fox_and_trusts_breeders_on_replaced_fox() {
             Flow::Continue
         },
         |game| {
-            game.common.player =
-                Some(sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.common.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                Vec3::ZERO,
+            ));
             use sunrise_sim::advancements::{Advancement, Criterion, Rewards, Tree};
             let mut tree = Tree::default();
             tree.list.push(Advancement {

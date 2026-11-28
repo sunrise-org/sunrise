@@ -24,6 +24,9 @@ pub struct ShaderOptions {
     pub changed: bool,
     /// The values the pack's file holds, as read or as last saved.
     saved: BTreeMap<String, String>,
+    /// The pack was read with Iris compatibility on (`IS_IRIS`, `IRIS_VERSION`), as its load
+    /// will be with these values: what its row on the Shaders page says.
+    pub iris_compat: bool,
 }
 
 impl ShaderOptions {
@@ -43,6 +46,7 @@ impl ShaderOptions {
             path: Vec::new(),
             changed: false,
             saved: BTreeMap::new(),
+            iris_compat: false,
         };
         for (name, value) in chosen {
             out.set(&name, value);

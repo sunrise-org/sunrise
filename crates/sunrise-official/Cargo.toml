@@ -16,6 +16,8 @@ test = false
 [features]
 default = ["sunrise-extras"]
 sunrise-extras = ["dep:sunrise-reconnect", "dep:sunrise-perf-overlay", "sunrise-game/sunrise-extras"]
+rng-count = ["sunrise-game/rng-count"]
+net-trace = ["sunrise-game/net-trace"]
 
 [dependencies]
 sunrise-game = { path = "../sunrise-game", default-features = false, features = ["audio", "controllers"] }

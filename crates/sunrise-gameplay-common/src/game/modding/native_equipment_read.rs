@@ -1,5 +1,5 @@
 use crate::game::api_values::{StackReadMetadata, projected_stack, stack_read_metadata};
-use mod_api::client::first_person::Hand;
+use mod_api::Hand;
 use mod_api::{EquipmentSlot, ItemStackView};
 use sunrise_sim::mobs::finalize::EquipmentRead;
 

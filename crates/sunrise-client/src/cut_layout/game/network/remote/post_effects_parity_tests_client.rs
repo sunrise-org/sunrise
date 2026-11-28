@@ -127,13 +127,10 @@ pub(crate) fn post_effects_cleared_on_login_respawn_and_reconfigure_body() {
         // and clears any spectated entity shader effect.
         game.client.title.0 = None;
         if game.player.is_none() {
-            game.player = Some(
-                sunrise_sim::motion::PlayerMotion::new(
-                    game.motion,
-                    sunrise_core::geometry::Vec3::ZERO,
-                )
-                .unwrap(),
-            );
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                sunrise_core::geometry::Vec3::ZERO,
+            ));
         }
         let (creeper_kind, enderman_kind, spider_kind) = {
             let entity_types = game

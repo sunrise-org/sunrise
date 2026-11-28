@@ -239,6 +239,9 @@ pub enum ComputeDispatchError {
     /// The pipeline handle is from before a resource reload, or its pipeline did not build.
     Pipeline(ComputePipelineError),
     /// A binding is missing, of the wrong kind, stale, or not allowed for this dispatch.
+    ///
+    /// It is also returned for a sampled transient the pass does not declare in its reads; see
+    /// [`crate::PipelineDrawError::InvalidBinding`] for what a pass declares.
     InvalidBinding,
     /// The device refused the sampler pipeline variant in renderer preparation, after submission.
     /// The dispatch is refused and the log names the pipeline and the device error.
@@ -258,7 +261,8 @@ pub enum ComputeDispatchError {
 /// wgpu orders a dispatch's writes before later passes that read them.
 pub trait ComputeDispatchContext {
     /// Dispatch `workgroups` of `pipeline` with `bindings`. A zero on any axis is a legal no-op.
-    /// Each axis must be at most `max_compute_workgroups_per_dimension`.
+    /// Each axis must be at most `max_compute_workgroups_per_dimension`
+    /// ([`crate::RenderLimits::max_compute_workgroups_per_dimension`]).
     fn dispatch(
         &mut self,
         pipeline: ComputePipelineRef,

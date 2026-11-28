@@ -23,6 +23,8 @@ ENGINE = {
     "sunrise_world", "sunrise_client", "sunrise_client_lib",
     "sunrise_game_data", "sunrise_client_render", "sunrise_items",
     "sunrise_assets", "sunrise_mod_package", "sunrise_mods", "sunrise_core",
+    # The gameplay split (#6527): the server, client and shared halves of the game.
+    "sunrise_gameplay", "sunrise_client_gameplay", "sunrise_gameplay_common",
 }
 # Shared Minecraft vocabulary: plain, engine-independent values, parity RNG,
 # and the JSON/NBT format converter (JavaString is the key and string type of
@@ -319,7 +321,12 @@ pub fn stack() -> Borrowed { todo!() }
 pub fn json() -> serde_json::Value { todo!() }
 pub mod __private { pub use sunrise_world::fluid::FluidState; }
 pub use crate::__private::FluidState as Public;
+pub fn server() -> sunrise_gameplay::game::ServerGame { todo!() }
+pub fn client() -> sunrise_client_gameplay::game::ClientGame { todo!() }
+pub fn common() -> sunrise_gameplay_common::game::CommonGame { todo!() }
 '''
+# Every engine package the probe's manifest depends on, each by a name the audit must see through.
+NEGATIVE_DEPENDENCIES = {"sunrise-world", "sunrise-gameplay", "sunrise-client-gameplay", "sunrise-gameplay-common"}
 
 
 def negative_control():
@@ -327,11 +334,19 @@ def negative_control():
     with tempfile.TemporaryDirectory() as directory:
         crate = Path(directory)
         (crate / "src/exports").mkdir(parents=True)
-        (crate / "Cargo.toml").write_text('[dependencies]\nrenamed = { package = "sunrise-world", version = "1" }\n')
+        (crate / "Cargo.toml").write_text(
+            '[dependencies]\nrenamed = { package = "sunrise-world", version = "1" }\n'
+            'sunrise-gameplay = "1"\n'
+            '[dev-dependencies]\nsunrise-client-gameplay = "1"\n'
+            '[build-dependencies]\ncommon = { package = "sunrise-gameplay-common", version = "1" }\n'
+        )
         (crate / "src/exports/probe.rs").write_text(NEGATIVE)
         found = check(crate)
         required = {"engine-dependency", "engine-type", "json-signature", "private-export"}
-        return required <= {f.rule for f in found} and sum(f.rule == "engine-type" for f in found) == 3
+        dependencies = {f.detail for f in found if f.rule == "engine-dependency"}
+        return (required <= {f.rule for f in found}
+                and dependencies == NEGATIVE_DEPENDENCIES
+                and sum(f.rule == "engine-type" for f in found) == 6)
 
 
 def main():

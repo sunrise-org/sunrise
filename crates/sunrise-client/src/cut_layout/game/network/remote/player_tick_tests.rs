@@ -105,8 +105,7 @@ fn guest_ticks_before_player_loaded_and_after_its_timeout() {
             let mut motion = sunrise_sim::motion::PlayerMotion::new(
                 game.motion,
                 sunrise_core::geometry::Vec3::ZERO,
-            )
-            .unwrap();
+            );
             motion.health.food.exhaustion = 5.0;
             g.motion = Some(Box::new(motion));
             let host = game.server.lan.as_mut().unwrap();

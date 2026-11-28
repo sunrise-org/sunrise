@@ -611,12 +611,17 @@ pub struct Resources<'a> {
     pub mod_depth_targets: &'a [ModDepthTargetDecl],
     /// Mod-declared per-frame uniforms for uniform resolution and type validation.
     pub mod_uniforms: &'a [ModUniformDecl],
-    /// Deduplicates warnings when a pack declares a mod uniform with an incompatible GLSL type.
+    /// The pack is served Sunrise's HDR extension (`Post::hdr`): its programs read the display
+    /// uniforms (`pack_uniforms::DISPLAY`).
+    pub display_uniforms: bool,
+    /// Deduplicates mod frame-uniform mismatch warnings by program and uniform name.
     pub mod_uniform_mismatches: &'a std::cell::RefCell<HashSet<(String, String)>>,
     /// Auxiliary depth target index written by the mod geometry pass currently being built, if any.
     pub mod_depth_target: std::cell::Cell<Option<usize>>,
     /// Depth comparison function for the pass currently being built.
     pub depth_compare: std::cell::Cell<wgpu::CompareFunction>,
+    /// The linked mod pass's declared depth bias; `None` leaves the pack program's own bias.
+    pub mod_depth_bias: std::cell::Cell<Option<wgpu::DepthBiasState>>,
     /// The mod's own vertex stage for the pass about to be built, which `build_pass` takes and
     /// links to that pass's fragment stage ([`ModProgramMode::ModVertexPackFragment`]).
     pub mod_vertex: std::cell::RefCell<Option<ModVertexStage>>,
@@ -1200,18 +1205,28 @@ const POLYGON_OFFSET: wgpu::DepthBiasState = wgpu::DepthBiasState {
     clamp: 0.0,
 };
 
-/// Match a pass's declared GLSL uniforms against mod-declared per-frame uniforms.
-/// Incompatible GLSL types leave the uniform unbound, record a note, and log a warning once
-/// per `(name, declared_ty)` without panicking.
+struct ResolvedModUniforms<'a> {
+    bound: Vec<(usize, bool, u32)>,
+    handled: HashSet<&'a str>,
+    mismatched: HashSet<&'a str>,
+}
+
+/// Resolve mod frame uniforms before the ordinary pack uploads are assigned. A mismatch
+/// keeps its shader slot at zero without refusing the program. In a pack served Sunrise's HDR
+/// extension the display uniforms (`pack_uniforms::DISPLAY`) are the display's, never a mod's:
+/// a mod uniform of such a name binds only where the pack isn't served.
 fn resolve_mod_uniforms<'a>(
-    interface: &'a sunrise_shaders::Interface,
+    uniforms: &'a [sunrise_shaders::Uniform],
+    initial_block: &mut [u8],
     pass_name: &str,
     pack: &Resources<'_>,
     notes: &mut Vec<String>,
-) -> (Vec<(usize, bool, u32)>, HashSet<&'a str>) {
+) -> ResolvedModUniforms<'a> {
     let mut bound = Vec::new();
     let mut handled = HashSet::new();
-    for u in &interface.uniforms {
+    let mut mismatched = HashSet::new();
+    let display = |name: &str| pack.display_uniforms && pack_uniforms::DISPLAY.contains(&name);
+    for u in uniforms.iter().filter(|u| !display(&u.name)) {
         match match_mod_uniform(pack.mod_uniforms, &u.name, &u.ty) {
             ModUniformMatch::None => {}
             ModUniformMatch::Bound { index, previous } => {
@@ -1220,22 +1235,27 @@ fn resolve_mod_uniforms<'a>(
             }
             ModUniformMatch::TypeMismatch { expected } => {
                 handled.insert(u.name.as_str());
-                let key = (u.name.clone(), u.ty.clone());
-                let first = pack.mod_uniform_mismatches.borrow_mut().insert(key);
-                let msg = format!(
-                    "{pass_name}: mod uniform `{}` declared as `{}` (mod provides `{}`); left unbound",
-                    u.name,
-                    u.ty,
-                    expected.glsl_name()
-                );
-                if first {
-                    log::warn!("shader pack: {msg}");
+                mismatched.insert(u.name.as_str());
+                // The member's range is guaranteed by `sunrise_shaders::Interface::uniforms`.
+                initial_block[u.offset as usize..(u.offset + u.size) as usize].fill(0);
+                let key = (pass_name.to_owned(), u.name.clone());
+                if pack.mod_uniform_mismatches.borrow_mut().insert(key) {
+                    let msg = format!(
+                        "{pass_name}: mod uniform `{}` declared as `{}` (mod provides `{}`); left unbound, reads zero",
+                        u.name,
+                        u.ty,
+                        expected.glsl_name()
+                    );
+                    notes.push(msg);
                 }
-                notes.push(msg);
             }
         }
     }
-    (bound, handled)
+    ResolvedModUniforms {
+        bound,
+        handled,
+        mismatched,
+    }
 }
 
 /// The pass of program `p`: a quad, or `geometry` drawn by the game. `None` (with a note) when
@@ -1260,7 +1280,8 @@ pub fn build_pass(
     let features = device.features();
     // The frame's uniforms, then the pack's custom ones.
     let index = |name: &str, ty: &str| {
-        pack_uniforms::index_in(name, geometry.is_some()).or_else(|| custom_index(custom, name, ty))
+        pack_uniforms::index_in(name, geometry.is_some(), pack.display_uniforms)
+            .or_else(|| custom_index(custom, name, ty))
     };
     let mask = |flips: &[(u32, bool)]| flips.iter().filter(|f| f.1).fold(0u16, |m, f| m | 1 << f.0);
     let mut p = p;
@@ -1498,11 +1519,13 @@ pub fn build_pass(
                 depth_write_enabled: Some(g.depth_write),
                 depth_compare: Some(pack.depth_compare.get()),
                 stencil: Default::default(),
-                bias: if p.name == "gbuffers_damagedblock" {
-                    POLYGON_OFFSET
-                } else {
-                    Default::default()
-                },
+                bias: pack.mod_depth_bias.get().unwrap_or_else(|| {
+                    if p.name == "gbuffers_damagedblock" {
+                        POLYGON_OFFSET
+                    } else {
+                        Default::default()
+                    }
+                }),
             }),
             targets: targets.to_vec(),
         };
@@ -1577,14 +1600,24 @@ pub fn build_pass(
             return None;
         }
     };
-    let interface = &program.interface;
-    let (mod_uniforms, mod_handled) = resolve_mod_uniforms(interface, &p.name, pack, notes);
+    let interface = &mut program.interface;
+    let ResolvedModUniforms {
+        bound: mod_uniforms,
+        handled,
+        mismatched,
+    } = resolve_mod_uniforms(
+        &interface.uniforms,
+        &mut interface.initial_values,
+        &p.name,
+        pack,
+        notes,
+    );
     let missing: Vec<&str> = interface
         .uniforms
         .iter()
         .filter(|u| {
             !u.name.starts_with("hz_")
-                && !mod_handled.contains(u.name.as_str())
+                && !handled.contains(u.name.as_str())
                 && index(&u.name, &u.ty).is_none()
         })
         .map(|u| u.name.as_str())
@@ -1610,6 +1643,7 @@ pub fn build_pass(
         uniforms: interface
             .uniforms
             .iter()
+            .filter(|u| !mismatched.contains(u.name.as_str()))
             .map(|u| (index(&u.name, &u.ty), u.ty.clone(), u.offset))
             .collect(),
         mod_uniforms,
@@ -1727,7 +1761,7 @@ pub fn build_compute(
     device: &wgpu::Device,
     name: String,
     group: Group,
-    c: sunrise_shaders::ComputeProgram,
+    mut c: sunrise_shaders::ComputeProgram,
     formats: &[wgpu::TextureFormat; BUFFERS],
     shadow: Option<&[wgpu::TextureFormat; SHADOW_COLORS]>,
     notes: &mut Vec<String>,
@@ -1735,7 +1769,8 @@ pub fn build_compute(
     pack: &Resources<'_>,
 ) -> Option<Pass> {
     let index = |name: &str, ty: &str| {
-        pack_uniforms::index_in(name, false).or_else(|| custom_index(custom, name, ty))
+        pack_uniforms::index_in(name, false, pack.display_uniforms)
+            .or_else(|| custom_index(custom, name, ty))
     };
     let interface = &c.interface;
     let (entries, samplers, slots, reads, shadow_reads, images) = bindings(
@@ -1809,7 +1844,18 @@ pub fn build_compute(
     let image_copies = image_copies(&samplers, &images);
     let (before_colors, snapshots) = befores(&images);
     let (shadow_own, shadow_before) = shadow_images(&images);
-    let (mod_uniforms, _) = resolve_mod_uniforms(interface, &name, pack, notes);
+    let interface = &mut c.interface;
+    let ResolvedModUniforms {
+        bound: mod_uniforms,
+        mismatched,
+        ..
+    } = resolve_mod_uniforms(
+        &interface.uniforms,
+        &mut interface.initial_values,
+        &format!("{name}.csh"),
+        pack,
+        notes,
+    );
     Some(Pass {
         ubo: device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(&name),
@@ -1822,6 +1868,7 @@ pub fn build_compute(
         uniforms: interface
             .uniforms
             .iter()
+            .filter(|u| !mismatched.contains(u.name.as_str()))
             .map(|u| (index(&u.name, &u.ty), u.ty.clone(), u.offset))
             .collect(),
         mod_uniforms,
@@ -1967,7 +2014,8 @@ pub struct PackPost {
     pub down: HashMap<wgpu::TextureFormat, (wgpu::RenderPipeline, wgpu::BindGroupLayout)>,
     /// The per-draw uniforms of gbuffers programs.
     pub draws: DrawUniforms,
-    /// Set 3 of flat terrain: an unknown-source fallback and immutable state/sprite tables.
+    /// Set 3 of flat terrain: an unknown-source fallback and the state/sprite tables
+    /// (`PackPost::write_block_ids` rewrites the states' ids).
     /// Each page's bind group tracks both its vertex buffer and optional source sidecar.
     pub block_ids: Option<(wgpu::BindGroupLayout, wgpu::Buffer, wgpu::Buffer)>,
     pub page_groups: HashMap<u32, (wgpu::Buffer, Option<wgpu::Buffer>, wgpu::BindGroup)>,
@@ -2062,10 +2110,19 @@ pub struct PackPost {
     pub other_clears: Vec<usize>,
     /// Source views identify the world target, including replacements at the same size.
     pub blit_group: Option<([wgpu::TextureView; 2], wgpu::BindGroup)>,
-    /// Shows colortex0 when the pack has no `final` (OQ-5).
+    /// Shows colortex0 when the pack has no `final` (OQ-5); served Sunrise's HDR (`hdr`), it
+    /// encodes the linear light colortex0 holds as a served `final` does (`fs_copy_linear`),
+    /// loading texels only: its layout has no sampler and takes an unfilterable colortex0.
     pub copy: (wgpu::RenderPipeline, wgpu::BindGroupLayout),
+    /// Served Sunrise's HDR (`hdr`), the copy of colortex0 when it is the window's size: each
+    /// pixel its own texel (`fs_copy_linear_texel`), filtered by nothing.
+    pub copy_texel: Option<(wgpu::RenderPipeline, wgpu::BindGroupLayout)>,
+    /// Sunrise's HDR extension as the pack was served it (`Post::hdr`): what its picture on
+    /// the frame was encoded from, and who owns the tone curve.
+    pub hdr: Option<sunrise_shaders::Tonemap>,
     /// Copies the picture `final` drew at the world's size onto the window: no flip, it is
-    /// already in the screen's rows.
+    /// already in the screen's rows. Served Sunrise's HDR, alpha isn't filtered
+    /// (`fs_upscale_linear`).
     pub upscale: (wgpu::RenderPipeline, wgpu::BindGroupLayout),
     /// Copies the pack's GL-rows, GL-depth `targets.depth` back into Sunrise's screen-rows,
     /// reversed-Z `world_depth` so post-pack stages (`AfterLevel`, `world_drawn`) see valid
@@ -2210,6 +2267,7 @@ impl PackPost {
                 packed[i].map_or(c, |bits| packed::quantise(c, bits))
             })
         });
+        let hdr = post.hdr;
         let mut notes = post.notes;
         notes.extend(post.config.notes);
         let mut sizes = post.sizes;
@@ -2351,9 +2409,11 @@ impl PackPost {
             jobs: defer.then(Default::default),
             mod_depth_targets: mods.depth_targets,
             mod_uniforms: mods.uniforms,
+            display_uniforms: hdr.is_some(),
             mod_uniform_mismatches: &mod_uniform_mismatches,
             mod_depth_target: std::cell::Cell::new(None),
             depth_compare: std::cell::Cell::new(wgpu::CompareFunction::LessEqual),
+            mod_depth_bias: Default::default(),
             mod_vertex: Default::default(),
         };
         // Flat terrain resolves each quad's source state against the current pack; terrain that
@@ -2860,10 +2920,12 @@ impl PackPost {
                 };
                 pack.mod_depth_target.set(active_depth);
                 pack.depth_compare.set(spec.depth_compare);
+                pack.mod_depth_bias.set(spec.depth_bias);
                 *pack.mod_vertex.borrow_mut() = own_stage.cloned();
                 let built_pass = build(program, Some(&mod_geometry));
                 pack.mod_vertex.borrow_mut().take();
                 pack.mod_depth_target.set(None);
+                pack.mod_depth_bias.set(None);
                 pack.depth_compare.set(wgpu::CompareFunction::LessEqual);
                 if let Some(pass) = built_pass {
                     mod_passes.push(ModPackPass {
@@ -3265,24 +3327,59 @@ impl PackPost {
                 }),
             )
         });
-        let copy = helper(
-            device,
-            "vs_uv",
-            "fs_copy",
-            &[
-                texture_entry(0, float),
-                entry(
-                    2,
-                    wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                ),
-            ],
-            &[target(screen)],
-            None,
-        );
+        // The colortex0 copy's bindings: served Sunrise's HDR it only loads texels, so colortex0
+        // needs no filtering (an `RGBA32F` one isn't filterable without `FLOAT32_FILTERABLE`);
+        // otherwise `fs_copy` samples it.
+        let unfiltered = [texture_entry(
+            0,
+            wgpu::TextureSampleType::Float { filterable: false },
+        )];
+        let sampled = [
+            texture_entry(0, float),
+            entry(
+                2,
+                wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+            ),
+        ];
+        let copy = match hdr {
+            // Served Sunrise's HDR, colortex0 holds the linear light `final` would write.
+            Some(_) => helper(
+                device,
+                "vs_uv",
+                "fs_copy_linear",
+                &unfiltered,
+                &[target(screen)],
+                None,
+            ),
+            None => helper(
+                device,
+                "vs_uv",
+                "fs_copy",
+                &sampled,
+                &[target(screen)],
+                None,
+            ),
+        };
+        // Served, a colortex0 copy without a render scale reads each pixel's own texel.
+        let copy_texel = hdr.is_some().then(|| {
+            helper(
+                device,
+                "vs_uv",
+                "fs_copy_linear_texel",
+                &unfiltered,
+                &[target(screen)],
+                None,
+            )
+        });
         let upscale = helper(
             device,
             "vs_screen",
-            "fs_copy",
+            // Served, the picture's alpha is the centre texel's, as for the copy.
+            if hdr.is_some() {
+                "fs_upscale_linear"
+            } else {
+                "fs_copy"
+            },
             &[
                 texture_entry(0, float),
                 entry(
@@ -3525,6 +3622,8 @@ impl PackPost {
             }),
             blit,
             copy,
+            copy_texel,
+            hdr,
             upscale,
             export_depth,
             export_depth_group: None,
@@ -3560,5 +3659,23 @@ impl PackPost {
     /// bind groups are kept once made). A missing one reads as the dummy (flat, no specular).
     pub fn set_paged_maps(&mut self, maps: [Option<wgpu::TextureView>; 2]) {
         self.paged_maps = maps;
+    }
+
+    /// Rewrites flat terrain's state table (set 3, [`block_ids`]) with `table`, the states' ids
+    /// as `World::block_ids` gives them, beside the sprite `rects`: the draws from the next
+    /// submission on read them. `false`, with the table left as it was, when the two make a
+    /// table of another size than the one built (another registry or atlas). Nothing to do for
+    /// a pack whose terrain reads no table.
+    pub fn write_block_ids(&self, queue: &wgpu::Queue, table: &[i32], rects: &[u32]) -> bool {
+        let Some((_, _, buffer)) = &self.block_ids else {
+            return true;
+        };
+        let contents = terrain_tables(table, rects);
+        let bytes: &[u8] = bytemuck::cast_slice(&contents);
+        if bytes.len() as u64 != buffer.size() {
+            return false;
+        }
+        queue.write_buffer(buffer, 0, bytes);
+        true
     }
 }

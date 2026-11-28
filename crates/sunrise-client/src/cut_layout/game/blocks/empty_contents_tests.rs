@@ -68,7 +68,7 @@ impl ItemPart for Jar {
             assert_eq!(
                 host.living(player.entity()).unwrap().set_hand_item(
                     host,
-                    mod_api::client::first_person::Hand::Main,
+                    mod_api::Hand::Main,
                     Some(stone),
                 ),
                 Ok(true)

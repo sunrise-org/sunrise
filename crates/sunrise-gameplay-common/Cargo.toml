@@ -35,6 +35,7 @@ sunrise-sim = { path = "../sunrise-sim" }
 sunrise-level = { path = "../sunrise-level" }
 
 [dev-dependencies]
+sunrise-core = { path = "../sunrise-core", features = ["test-support"] }
 tempfile = "3"
 mod_platform = { package = "sunrise-mod-api", path = "../sunrise-mod-api", features = ["engine-test-platform"] }
 sunrise-hooks = { path = "../sunrise-hooks", features = ["test-support"] }

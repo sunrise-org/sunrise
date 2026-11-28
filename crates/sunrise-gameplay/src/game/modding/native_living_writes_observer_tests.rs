@@ -1,7 +1,7 @@
 #[cfg(test)]
 pub(crate) mod tests {
 
-    use mod_api::client::first_person::Hand;
+    use mod_api::Hand;
 
     use mod_api::{
         CanContinueUsingEvent, Flow, Hooks, Host, HostSide, ItemPart,

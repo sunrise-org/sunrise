@@ -9,7 +9,7 @@ How decisions are made is in [GOVERNANCE.md](../GOVERNANCE.md); how a change rea
 
 | Who | Can |
 | --- | --- |
-| **Sunrise Team** (GitHub team `sunrise-team`, write access) | Review, label and merge pull requests; approve a fork's workflow runs; re-run failed jobs; start workflows by hand (`gh workflow run`); add `release-blocker` to an issue; merge in sunrise-mods (form pull requests too) and upload its `staging` files |
+| **Sunrise Team** (GitHub team `sunrise-team`, write access) | Review, label and merge pull requests; approve a fork's workflow runs; re-run failed jobs; start workflows by hand (`gh workflow run`); add `release-blocker` to an issue; merge in sunrise-mods the pull requests its merger leaves (below) |
 | **Trusted reviewers** (`.github/trusted-reviewers.txt`) | `/nightly`, `/close`, `/reopen`, `/label`, `/unlabel`, `/unclaim` by comment ([release-flow.md](release-flow.md#trusted-reviewers)) |
 | **Council** (🏛️ Council on Discord) | Decide by poll (`/vote`, `/poll start`); emergency actions (GOVERNANCE.md 4.6) |
 | **Organisation owners** (Ludovic and rdbtCVS since 2026-11-11, council poll P28) | Repository variables and secrets (`SELF_HOSTED_CI`, `RELEASES_PAUSED`), branch protection, adding people to GitHub teams, merging past a missing review, the security advisories |
@@ -90,14 +90,13 @@ is out, so label that pull request `release-now` (or ask the council to) once it
 
 ## The mods registry (sunrise-org/sunrise-mods)
 
-- **Submissions from the website** arrive as pull requests authored by `ludovic111` (the registry's account). A
-  Team member reviews every one of them, owner updates with a signed trailer included, for malware, dangerous
-  patterns and suspicious or obfuscated code only (never licences, provenance or copyright), approves, and
-  squash-merges once `check` passed. The trailer only proves who submitted it; it is never a reason to skip the review. Publishing to the registry is hourly
-  (`publish.yml`).
-- **Fork pull requests:** approve their workflow run, and upload the mod's file to the registry's
-  [`staging` release](https://github.com/sunrise-org/sunrise-mods/releases/tag/staging) as
-  `<sha256>.<extension>` after checking its hash.
+- **Registration:** the registry's app opens a registration pull request from a `register/` branch. The merger
+  requires a saved approving verdict and a review file that approves the live head, plus green checks.
+- **Releases:** a signed release pull request is reviewed for malware, dangerous patterns and suspicious or
+  obfuscated code only (never licences, provenance or copyright). The merger merges it only when the saved
+  verdict for its live head is approved and the checks are green.
+- **Everything else** in sunrise-mods is reviewed and merged by hand by a Team member. Publishing to the registry is
+  hourly (`publish.yml`).
 - **Taking a mod down:** a pull request adding it to `revoked.toml`. That file is a code-owner path: today only
   Ludovic can approve it. For malware, two council members act at once as an emergency (GOVERNANCE.md 4.6), post
   in #mod-log, and ask Ludovic to approve.

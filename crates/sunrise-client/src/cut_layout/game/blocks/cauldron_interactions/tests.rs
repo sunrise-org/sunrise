@@ -210,7 +210,7 @@ fn a_panicking_cauldron_registrar_leaves_no_exact_tag_or_all_entries() {
         ]
         .into(),
         || {
-            sunrise_gameplay_common::game::api_values::install_parts(&[]).unwrap();
+            crate::game::api_values::install_parts(&[]).unwrap();
             mod_api::__private::resolve_block_keys(["minecraft:water_cauldron"], |_| {
                 BlockDefinition::new(&[&Default::default()], 0).map_err(|err| format!("{err:?}"))
             })
@@ -388,10 +388,10 @@ fn setup_common_with<'g, G: sunrise_gameplay_common::game::SideGame<'g>>(
     };
     let id = game.pack.assets.registry.resolve(&state).unwrap();
     game.world.set(0, 64, 0, id).unwrap();
-    game.player = Some(
-        sunrise_sim::motion::PlayerMotion::new(game.motion, sunrise_core::geometry::Vec3::ZERO)
-            .unwrap(),
-    );
+    game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+        game.motion,
+        sunrise_core::geometry::Vec3::ZERO,
+    ));
     game.creative = false;
     game.selected = 0;
     game.hand = Hand::Main;
@@ -1392,7 +1392,7 @@ fn cauldron_displaced_handlers_drop_under_original_owner_and_order_edits() {
         .into(),
         || {
             let _ = mod_api::__private::take_hook_panics();
-            sunrise_gameplay_common::game::api_values::install_parts(&[]).unwrap();
+            crate::game::api_values::install_parts(&[]).unwrap();
             mod_api::__private::resolve_block_keys(
                 ["minecraft:water_cauldron", "test:custom_cauldron"],
                 |_| {

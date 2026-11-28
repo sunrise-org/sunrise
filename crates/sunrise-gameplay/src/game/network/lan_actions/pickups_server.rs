@@ -148,7 +148,22 @@ impl crate::game::ServerGame<'_> {
             .random
             .next_int_bound(touching.len() as i32)
             .unwrap_or(0) as usize;
-        let index = touching[pick];
+        self.guest_take_orb(conn, id, at, player, &name, touching[pick]);
+    }
+
+    /// `ExperienceOrb.playerTouch` for guest `conn` (entity `id`, at `at`, named `name`) and the
+    /// orb at `index`: the `pickup_xp` hook, then the delay, the take, Mending and the points. False
+    /// when a mod vetoed or removed the orb.
+    pub(in crate::game) fn guest_take_orb(
+        &mut self,
+        conn: u32,
+        id: i32,
+        at: [f64; 3],
+        player: u128,
+        name: &str,
+        index: usize,
+    ) -> bool {
+        // A merged orb gives its value once per count and goes at zero.
         let join = self.common.orbs[index].join;
         let orb_id = self.common.orbs[index].id;
         // Swapping the guest in costs: only when a mod hears the pickup.
@@ -158,12 +173,12 @@ impl crate::game::ServerGame<'_> {
             let orb = mod_api::ExperienceOrbRef::new(mod_api::EntityRef::new(epoch, orb_id));
             let mut canceled = false;
             let dimension = self.common.dim.id();
-            let called = self.as_guest(conn, |game| {
+            let called = self.as_guest_here(conn, |game| {
                 let player = game.native_acting_id();
                 game.native_pickup_xp(player, dimension, orb, &mut canceled);
             });
             if called.is_none() || canceled {
-                return;
+                return false;
             }
         }
         // A callback may have committed a discard: the row stays until removals flush.
@@ -175,10 +190,10 @@ impl crate::game::ServerGame<'_> {
                 )
         };
         if !live(self) {
-            return;
+            return false;
         }
         let Some(index) = self.common.orbs.locate(join) else {
-            return;
+            return false;
         };
         let (orb_value, orb_pos) = {
             let orb = &self.common.orbs[index];
@@ -186,10 +201,13 @@ impl crate::game::ServerGame<'_> {
         };
         // ExperienceOrb.playerTouch: delay, take, repair/award positive value,
         // then decrement count and discard at zero.
-        if let Some(host) = self.server.lan.as_mut() {
+        if self.server.lan_acting == Some(conn) {
+            // In the guest's own turn its `takeXpDelay` is in place; the turn's end saves it.
+            self.server.xp_delay = 2;
+        } else if let Some(host) = self.server.lan.as_mut() {
             host.play.entry(conn).or_default().xp_delay = 2;
         }
-        self.native_player_exp_cooldown_change(player, &name, 2);
+        self.native_player_exp_cooldown_change(player, name, 2);
         if let Some(host) = self.server.lan.as_ref() {
             host.hub.take_item(orb_id as i32, id, 1, at);
         }
@@ -201,14 +219,14 @@ impl crate::game::ServerGame<'_> {
             0.1,
             pitch,
         );
-        self.as_guest(conn, |game| {
+        self.as_guest_here(conn, |game| {
             let rest = game.mending(orb_value);
             if rest > 0 {
                 game.give_experience_points(rest);
             }
         });
         if !live(self) {
-            return;
+            return false;
         }
         if let Some(index) = self.common.orbs.locate(join) {
             if self.common.orbs[index].count <= 1 {
@@ -217,6 +235,7 @@ impl crate::game::ServerGame<'_> {
                 self.common.orbs[index].count -= 1;
             }
         }
+        true
     }
     /// Dropped items touching a guest go into their inventory
     /// (`ItemEntity.playerTouch`, then `ServerPlayer.onItemPickup`).

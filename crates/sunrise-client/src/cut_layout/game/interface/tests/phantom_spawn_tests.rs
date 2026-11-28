@@ -75,7 +75,7 @@ fn game<'a>(
     // passes `isHarderThan(random * 3)` and the seed decides only the spawn.
     game.world.inhabited.insert((0, 0), 3_600_000);
     game.world.day_time = 18000;
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 99.0, 2.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 99.0, 2.5)));
     game.stats.custom("time_since_rest", i32::MAX);
     game.world.random.set_seed(0x5EED);
     game

@@ -225,7 +225,7 @@ fn a_part_keeps_the_swing_from_starting() {
     let probe = Probe::default();
     with_probe(&probe, || {
         with_game(|game| {
-            let mut player = PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap();
+            let mut player = PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5));
             player.entity_id = 7;
             game.player = Some(player);
             game.common.inventory[game.common.selected] =

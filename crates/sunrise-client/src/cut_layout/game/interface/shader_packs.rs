@@ -12,7 +12,7 @@ pub(crate) mod player_status_tests {
                 .chunks
                 .insert(chunk, Arc::new(Chunk::empty(chunk.0, chunk.1)));
         }
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)));
     }
 
     pub(crate) fn rain_on_the_player(

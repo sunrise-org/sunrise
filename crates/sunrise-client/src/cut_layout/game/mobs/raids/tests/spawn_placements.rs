@@ -178,8 +178,7 @@ fn spawners_check_registered_placements_for_types_outside_the_mob_table() {
                 assert!(game.natural_level().mob_type("minecraft:arrow").is_none());
                 game.set_difficulty_forced(2);
                 game.world.game_time = 1;
-                game.player =
-                    Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 70.0, 0.5)).unwrap());
+                game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 70.0, 0.5)));
                 let mut chunk = Chunk::empty(0, 0);
                 chunk.lit = true;
                 game.world.chunks.insert((0, 0), Arc::new(chunk));
@@ -348,8 +347,7 @@ fn patrols_and_sieges_bypass_registered_predicates_and_placement_listeners() {
             with_game(|game| {
                 game.set_difficulty_forced(2);
                 game.world.day_time = 6000;
-                game.player =
-                    Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+                game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)));
                 let stone = game
                     .pack
                     .assets

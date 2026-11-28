@@ -9,7 +9,7 @@ fn actual_holder_detach_does_not_reaward_the_held_lead_criterion() {
     let mut resources = None;
     let mut game = server_game(&mut resources);
     game.options.dedicated = None;
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 100.0, 4.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 100.0, 4.5)));
     sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(
         &mut game,
         1,

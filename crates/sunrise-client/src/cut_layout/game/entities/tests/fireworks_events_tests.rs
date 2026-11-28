@@ -44,9 +44,10 @@ pub(crate) fn with_game(test: impl FnOnce(&mut sunrise_gameplay::game::ServerGam
     game.block_ticks
         .add_empty_chunk(ChunkPos::new(0, 0))
         .unwrap();
-    game.player = Some(
-        sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)).unwrap(),
-    );
+    game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+        game.motion,
+        Vec3::new(2.5, 200.0, 2.5),
+    ));
     game.world.random = sunrise_core::random::LevelRandom::for_level(LegacyRandom::new(114));
     test(&mut game);
 }

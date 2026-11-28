@@ -270,7 +270,7 @@ pub fn main() -> Result<()> {
         let f: Value = serde_json::from_str(&line?)?;
         scene.health_rules = sunrise_client::health::HealthRules::default();
         let hashes: Vec<_> = resources
-            .attributes
+            .attributes()
             .attributes()
             .map(|(_, a)| {
                 f["holder_hashes"][&a.name]

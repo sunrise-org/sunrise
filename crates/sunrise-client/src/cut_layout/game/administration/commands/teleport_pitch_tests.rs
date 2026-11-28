@@ -127,7 +127,7 @@ fn teleport_to_the_current_position_marks_the_player_for_sync() {
 
     with_game(|game| {
         let at = Vec3::new(0.5, 64.0, 0.5);
-        game.player = Some(PlayerMotion::new(game.motion, at).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, at));
 
         game.teleport_to_in_level(Target::Player, [at.x, at.y, at.z], None, [false; 3], false);
 

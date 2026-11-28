@@ -20,7 +20,7 @@ mod tests {
     }
 
     fn acting_player(game: &mut sunrise_gameplay::game::ServerGame<'_>) {
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
         sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 7, 7);
     }
 
@@ -104,11 +104,11 @@ mod tests {
             );
             game.start_audio_capture();
             assert!(game.entity_broadcast_event(cow, 3));
-            assert_eq!(game.server.lan_entity_events, [(10, 3)]);
+            assert_eq!(game.server.lan_queues.entity_events, [(10, 3)]);
             let stale = EntityRef::new(WorldEpoch::new(cow.epoch().get() + 1), 10);
             assert!(!game.entity_broadcast_event(stale, 3));
             assert!(!game.entity_game_event(stale, "minecraft:step"));
-            assert_eq!(game.server.lan_entity_events.len(), 1);
+            assert_eq!(game.server.lan_queues.entity_events.len(), 1);
             game.stop_audio_capture();
         });
     }

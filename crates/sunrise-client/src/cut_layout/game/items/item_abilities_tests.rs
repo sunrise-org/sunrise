@@ -340,7 +340,7 @@ impl Hooks for Lights {
 #[cfg(feature = "client")]
 fn grounded(game: &mut sunrise_gameplay_common::game::CommonGame<'_>) {
     let start = Vec3::new(0.5, 64.0, 0.5);
-    let mut player = sunrise_sim::motion::PlayerMotion::new(game.motion, start).unwrap();
+    let mut player = sunrise_sim::motion::PlayerMotion::new(game.motion, start);
     player.ground.on_ground = true;
     player.speed = 0.1;
     game.player = Some(player);

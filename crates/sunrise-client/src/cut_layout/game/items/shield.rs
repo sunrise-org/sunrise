@@ -12,7 +12,7 @@ mod durability_tests {
     #[ignore = "daily"]
     fn shield_break_clears_the_active_use() {
         super::super::native_entity_refs::tests::with_game(|game| {
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             let mut shield = ItemStack::new("minecraft:shield", 1);
             shield.damage = game.items().get(&shield.item).unwrap().max_damage - 1;
             game.offhand = Some(shield);
@@ -54,7 +54,7 @@ mod durability_tests {
             crate::game::server_side::damage_item_tests::with_wear_part,
         };
         with_wear_part("minecraft:shield", Rule::Halve, |game, wear| {
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             let block = |game: &mut sunrise_gameplay::game::ServerGame<'_>| {
                 game.offhand = Some(ItemStack::new("minecraft:shield", 1));
                 game.using = Some((OFFHAND_SLOT, 20));

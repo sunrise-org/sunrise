@@ -31,7 +31,7 @@ fn a_server_that_starts_tracking_later_shows_the_same_knot() {
     assert!(game.server.lan.is_some());
     game.lan_assign_ids();
     assert_eq!(
-        game.server.knot_ids.get(&[8, 201, 0]),
+        game.server.knot_state.knot_ids.get(&[8, 201, 0]),
         Some(&id),
         "the tracker's id"
     );

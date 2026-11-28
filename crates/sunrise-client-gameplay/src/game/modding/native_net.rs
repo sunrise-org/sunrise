@@ -140,8 +140,7 @@ mod tests {
                         prepared_generation: None,
                         staged_prepared_draws: 0,
                     }));
-                game.player =
-                    Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+                game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)));
                 game.client.screen = Screen::Paused;
                 game.send_unattended_command("unknown_command");
                 assert!(game.client.command_prompt.0.is_some());
@@ -252,8 +251,7 @@ mod tests {
             .into(),
             || {
                 with_client_game(|game| {
-                    game.player =
-                        Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+                    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)));
                     // The tick following wake-up: the existing bed chat still has typed input.
                     assert!(game.begin_chat_screen("typed in bed", false));
                     game.client.chat_ui.in_bed_chat = true;
@@ -332,8 +330,7 @@ mod tests {
             || {
                 with_client_game(|game| {
                     game.client.title.0 = None;
-                    game.player =
-                        Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+                    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)));
                     game.client.screen = Screen::Playing;
                     events.lock().unwrap().clear();
 
@@ -419,8 +416,7 @@ mod tests {
             || {
                 with_client_game(|game| {
                     game.client.title.0 = None;
-                    game.player =
-                        Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+                    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)));
                     game.sleeping = None;
 
                     // Empty bed chat dismisses via Gui.setScreen(null): Closing, no vetoable Opening.
@@ -567,7 +563,7 @@ mod tests {
 
                     // Ctrl+F borrows the input. Wake must classify the original input, not
                     // the nonempty query that cleared the widget's draft flag.
-                    game.client.settings.extras.pvp.chat.search = true;
+                    game.client.settings.extras.chat.search = true;
                     for edited in [false, true] {
                         game.set_screen(Screen::Playing);
                         game.client.chat_ui.chat_draft = Some(ChatDraft {

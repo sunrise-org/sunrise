@@ -427,8 +427,7 @@ fn start_case(
     let p = &case["player"];
     let at = |i: usize| p["pos"][i].as_f64().unwrap();
     let mut player =
-        sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(at(0), at(1), at(2)))
-            .unwrap();
+        sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(at(0), at(1), at(2)));
     player.health.dead = p["dead"].as_bool().unwrap();
     game.player = Some(player);
     game.mode = if p["spectator"].as_bool().unwrap() {

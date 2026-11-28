@@ -11,13 +11,10 @@ fn remote_mob_takes_only_adult_piglin_currency_with_free_offhand() {
         with_client_game(|g| {
             let (pipe, _server) = sunrise_protocol::connection::Pipe::pair();
             g.connect_local(pipe, "PiglinUseTest").unwrap();
-            g.player = Some(
-                sunrise_sim::motion::PlayerMotion::new(
-                    g.motion,
-                    sunrise_core::geometry::Vec3::new(4.5, 100.0, 4.5),
-                )
-                .unwrap(),
-            );
+            g.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                g.motion,
+                sunrise_core::geometry::Vec3::new(4.5, 100.0, 4.5),
+            ));
             let kind = g.res.mob_types().get("minecraft:piglin").unwrap().clone();
             g.mobs.push(Mob::new(
                 7,

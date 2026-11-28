@@ -240,8 +240,7 @@ fn remote_mining_component_update_restarts_unless_the_part_refuses() {
                     peer.set_read_timeout(Some(std::time::Duration::from_millis(50)))
                         .unwrap();
                     game.set_local_mode(sunrise_command::args::GameMode::Survival);
-                    let mut player =
-                        PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 3.5)).unwrap();
+                    let mut player = PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 3.5));
                     player.ground.on_ground = true;
                     game.player = Some(player);
                     game.inventory[0] = Some(ItemStack::new("minecraft:stick", 1));

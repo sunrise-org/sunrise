@@ -89,7 +89,7 @@ fn pre_teleport_to_unloaded_edge_keeps_the_resolved_body_tick() {
                 game.world.chunks.remove(&(1, 0));
                 assert!(!game.world.chunks.contains_key(&(1, 0)));
                 let mut watcher = placed(1, 8.5, SPECTATOR);
-                let mut motion = PlayerMotion::new(game.motion, Vec3::new(8.5, 64.0, 8.5)).unwrap();
+                let mut motion = PlayerMotion::new(game.motion, Vec3::new(8.5, 64.0, 8.5));
                 motion.spectator = true;
                 motion.local_spectator = true;
                 motion.health.food.exhaustion = 5.0;

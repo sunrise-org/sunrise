@@ -22,7 +22,7 @@ thread_local! {
 }
 
 /// The most spans a thread holds before they are taken ([`take_raw`]): a worker thread
-/// that records spans (`lod_reduce`, `lt_*`) while they are on for every thread is never
+/// that records spans (`lt_*`) while they are on for every thread is never
 /// taken from, so it drops what it held instead of growing for as long as they stay on.
 const UNTAKEN_MAX: usize = 1 << 14;
 
@@ -297,6 +297,23 @@ impl SpanTotal {
                 .zip(cpu_if_enabled())
                 .map_or(elapsed, |(start, end)| end - start);
             self.depth = Some(DEPTH.with(Cell::get));
+        }
+    }
+
+    pub fn start_wall() -> Option<Instant> {
+        recording_here().then(Instant::now)
+    }
+
+    #[inline]
+    pub fn add_wall(&mut self, elapsed: Duration) {
+        self.wall += elapsed;
+        self.depth = Some(DEPTH.with(Cell::get));
+    }
+
+    #[inline]
+    pub fn add_wall_sample(&mut self, started: Option<Instant>) {
+        if let Some(started) = started {
+            self.add_wall(started.elapsed());
         }
     }
 
@@ -1155,5 +1172,21 @@ mod tests {
             timeline::drain().is_empty(),
             "a stopped timeline records nothing"
         );
+    }
+
+    #[test]
+    fn wall_only_span_total_keeps_cpu_zero() {
+        let _lock = spans_switch();
+        super::enable(true);
+        let _ = super::take_raw();
+        let mut total = super::SpanTotal::default();
+        total.add_wall(std::time::Duration::from_millis(5));
+        total.record("wall_only_test");
+        let recorded = super::take_raw();
+        super::enable(false);
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].name, "wall_only_test");
+        assert!(recorded[0].ms >= 4.9);
+        assert_eq!(recorded[0].cpu_ms, 0.0);
     }
 }

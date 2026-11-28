@@ -32,6 +32,21 @@ impl OwnedHeap for String {
         self.capacity()
     }
 }
+/// One `Arc` allocation holding a value of `size` bytes aligned to `align`: the value, both
+/// reference counts, and padding on either side.
+#[inline]
+fn arc_allocation_bytes(size: usize, align: usize) -> usize {
+    size.saturating_add(2 * size_of::<usize>())
+        .saturating_add(2 * (align.max(align_of::<usize>()) - 1))
+}
+impl OwnedHeap for sunrise_core::identifier::Identifier {
+    /// The shared value, charged in full per reference as an `Arc` is, and its text.
+    #[inline]
+    fn owned_heap_bytes(&self) -> usize {
+        use sunrise_core::identifier::IDENTIFIER_DATA_LAYOUT as DATA;
+        arc_allocation_bytes(DATA.size(), DATA.align()).saturating_add(self.as_str().len())
+    }
+}
 impl<T: OwnedHeap> OwnedHeap for [T] {
     #[inline]
     fn owned_heap_bytes(&self) -> usize {
@@ -68,9 +83,7 @@ impl<T: OwnedHeap + ?Sized> OwnedHeap for Box<T> {
 impl<T: OwnedHeap + ?Sized> OwnedHeap for Arc<T> {
     #[inline]
     fn owned_heap_bytes(&self) -> usize {
-        size_of_val(&**self)
-            .saturating_add(2 * size_of::<usize>())
-            .saturating_add(2 * (align_of_val(&**self).max(align_of::<usize>()) - 1))
+        arc_allocation_bytes(size_of_val(&**self), align_of_val(&**self))
             .saturating_add((**self).owned_heap_bytes())
     }
 }

@@ -77,7 +77,7 @@ pub(crate) fn run_an_armor_stand_ticks_its_living_counters() {
     assert_eq!(witness.minecraft, "26.3");
     assert!(!witness.cases.is_empty());
     with_game(|game| {
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
         game.world
             .chunks
             .insert((0, 0), Arc::new(Chunk::empty(0, 0)));

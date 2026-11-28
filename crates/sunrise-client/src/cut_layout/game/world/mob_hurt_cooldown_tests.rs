@@ -50,7 +50,7 @@ fn with_game(test: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>)) {
         .unwrap();
     assert!(game.run_command("forceload add 0 0"));
     assert!(game.run_command("difficulty normal"));
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)));
     game.creative = true;
     test(&mut game);
 }

@@ -512,15 +512,14 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (name, text) in resources {
         tags.apply_json(&name, "vanilla", &text)?;
     }
-    let tags = tags.build(|name, _| registry.default_state(name).map(|_| name.to_owned()))?;
+    let tags = tags.bind(|name, _| registry.default_state(name).map(|_| name.to_owned()));
     let fluid_resources: BTreeMap<String, String> =
         serde_json::from_str(&fs::read_to_string(dir.join("fluid-tags.json"))?)?;
     let mut fluid_tags = TagDefinitions::default();
     for (name, text) in fluid_resources {
         fluid_tags.apply_json(&name, "vanilla", &text)?;
     }
-    let fluid_tags =
-        fluid_tags.build(|name, _| FluidKind::from_name(name).map(|_| name.to_owned()))?;
+    let fluid_tags = fluid_tags.bind(|name, _| FluidKind::from_name(name).map(|_| name.to_owned()));
     let facts: Value = serde_json::from_str(&fs::read_to_string(dir.join("facts.json"))?)?;
     let integers: BTreeSet<(String, String)> = facts["integers"]
         .as_array()

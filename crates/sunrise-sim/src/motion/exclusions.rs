@@ -42,7 +42,7 @@ mod tests {
         scene.set(21, 4, 20, web).unwrap();
         let land = |scene: &mut World, x: f64| {
             let at = Vec3::new(x, 4.0, 20.5);
-            let mut player = PlayerMotion::new(resources, at).unwrap();
+            let mut player = PlayerMotion::new(resources, at);
             player
                 .collision_exclusions
                 .set(&[[20.0, 4.0, 20.0, 21.0, 5.0, 21.0]])

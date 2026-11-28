@@ -47,8 +47,8 @@ pub(super) fn with_integrated_pair_at(
             saved.player_extra = Some(saved.player_tag(server.res.items()));
             server
                 .server
+                .chunk_ticking
                 .tickets
-                .0
                 .add_spawn((0, 0), SpawnTicketKind::Player);
             open_fixture_hub(server);
             let owner = offline_uuid(PLAYER);

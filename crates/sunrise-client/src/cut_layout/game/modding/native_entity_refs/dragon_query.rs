@@ -440,8 +440,7 @@ mod tests {
             remote.logged_in = true;
             remote.entity_id = 7;
             remote.profile = 42;
-            let mut local =
-                sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::ZERO).unwrap();
+            let mut local = sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::ZERO);
             local.entity_id = 7;
             game.player = Some(local);
             game.spawn_entity(15, "minecraft:pig", [2.0, 0.0, 0.0], [0.0; 3]);

@@ -10,24 +10,26 @@ pub(super) mod modules;
 
 pub(super) type Inventory = BTreeMap<String, BTreeMap<String, String>>;
 
-pub(super) fn inventory(root: &Path) -> Result<Inventory, String> {
+pub(super) fn inventory(root: &Path, inputs: &mut crate::Inputs) -> Result<Inventory, String> {
     let path = root.join("tools/layering/mod_vocab_state.json");
     serde_json::from_str(
-        &std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?,
+        &inputs
+            .read_to_string(&path)
+            .map_err(|e| format!("{}: {e}", path.display()))?,
     )
     .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
 fn validate(name: &str, code: &str, inventory: &Inventory) -> Result<(), String> {
-    validate_with_modules(name, code, inventory, &BTreeSet::new())
+    validate_with_modules(name, code, inventory, None)
 }
 
 pub(super) fn validate_with_modules(
     name: &str,
     code: &str,
     inventory: &Inventory,
-    sources: &BTreeSet<std::path::PathBuf>,
+    vocab_root: Option<&Path>,
 ) -> Result<(), String> {
     let prefix = format!("@generated/{name}::");
     let allowed: BTreeMap<_, _> = inventory
@@ -38,7 +40,7 @@ pub(super) fn validate_with_modules(
         })
         .collect();
     let parsed = syn::parse_file(code).map_err(|e| e.to_string())?;
-    modules::validate(&parsed, sources)?;
+    modules::validate(&parsed, vocab_root)?;
     let mut seen = BTreeSet::new();
     for item in parsed.items {
         if let syn::Item::Static(item) = item {

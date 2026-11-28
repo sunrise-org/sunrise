@@ -715,7 +715,7 @@ fn liquid_part_accepts_nonwater_from_bucket_and_predicts_the_same_target() {
     use sunrise_gameplay_common::game::Hit;
     use sunrise_world::{fluid::FluidKind, level::BucketContent};
     with_liquid_part(|game, _, calls| {
-        let mut player = sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::ZERO).unwrap();
+        let mut player = sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::ZERO);
         player.entity_id = 77;
         game.player = Some(player);
         let hit = Hit {
@@ -1044,3 +1044,206 @@ use sunrise_gameplay_common::game::transactions::TransactionsGameExt as _;
 use sunrise_gameplay_common::game::held_items::HeldItemsGameExt1 as _;
 
 use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _;
+
+/// `LevelRef::schedule_block_tick` and `schedule_fluid_tick` (#6125) queue into the level's own
+/// tick queue, at once or when the transaction commits (`ScheduledTickAccess.scheduleTick`). The
+/// queue keeps one tick per type and position: a repeat with another delay or priority is
+/// dropped and the first keeps its deadline and priority (`LevelChunkTicks.schedule`). Ticks due
+/// together run by priority, the journal's included, and a fluid tick a transaction queued keeps
+/// its priority. A position with no tick container is
+/// refused, as is a stale handle; the height is not checked (`LevelTicks.schedule`).
+#[test]
+#[ignore = "daily"]
+fn a_mod_schedules_block_and_fluid_ticks_in_the_level_queue() {
+    use mod_api::{LevelWriteError, TickPriority, WorldEpoch};
+    use sunrise_core::{
+        position::{BlockPos, ChunkPos},
+        ticks::{ScheduledTick, TickPriority as Engine, TickTypeId},
+    };
+    use sunrise_gameplay::game::ServerGame as Game;
+    use sunrise_world::fluid::FluidKind;
+
+    // The game fixture registers keys and loads resources for the process: run in a child.
+    if crate::game::native_entity_refs::tests::run_fresh_cases(
+        "cut_layout::game::server_side::world_fluids_tests::a_mod_schedules_block_and_fluid_ticks_in_the_level_queue",
+        "SUNRISE_SCHEDULE_TICK_CHILD",
+        &["schedule"],
+    ) {
+        return;
+    }
+    with_level(|game, level| {
+        let ice_key = mod_api::__private::block_key("minecraft:frosted_ice").unwrap();
+        // A loaded chunk with no tick container yet: nothing to queue into.
+        assert_eq!(
+            level.schedule_block_tick(game, AT, ice_key, 1, TickPriority::Normal),
+            Ok(false)
+        );
+        game.block_ticks
+            .add_chunk(ChunkPos::new(0, 0), Default::default(), Default::default())
+            .unwrap();
+        let start = game.world.game_time;
+        let at = |[x, y, z]: [i32; 3]| BlockPos::new(x, y, z);
+        let pos = at(AT);
+        let ice = state(game, "minecraft:frosted_ice");
+        let ice_id = game.res.behaviours().block(ice);
+        let water_tick = TickTypeId(FluidKind::Water.tick_id());
+        let water = key("minecraft:water");
+        let queued = |game: &Game<'_>, place: [i32; 3]| -> Vec<ScheduledTick> {
+            game.block_ticks
+                .blocks
+                .all_queued()
+                .filter(|tick| tick.pos == at(place))
+                .copied()
+                .collect()
+        };
+        // The positions the block ticks due at `time` run at, in run order.
+        let run_order = |game: &mut Game<'_>, time: i64| -> Vec<BlockPos> {
+            let mut order = Vec::new();
+            game.block_ticks
+                .blocks
+                .tick(time, 65_536, |_| true, |_, tick| order.push(tick.pos))
+                .unwrap();
+            order
+        };
+
+        assert_eq!(
+            level.schedule_block_tick(game, AT, ice_key, 60, TickPriority::Normal),
+            Ok(true)
+        );
+        assert!(game.block_ticks.has_block_tick(pos, ice_id));
+        // A repeat with another delay and priority counts as scheduled, and the first tick keeps
+        // its deadline and priority.
+        assert_eq!(
+            level.schedule_block_tick(game, AT, ice_key, 5, TickPriority::High),
+            Ok(true),
+            "a repeat is kept as the one tick"
+        );
+        let [tick] = queued(game, AT)[..] else {
+            panic!("one tick at {AT:?}");
+        };
+        assert_eq!(
+            (tick.trigger_tick, tick.priority),
+            (start + 60, Engine::Normal)
+        );
+        assert_eq!(game.block_ticks.blocks.count(), 1);
+        assert_eq!(
+            level.schedule_fluid_tick(game, AT, water, 5, TickPriority::High),
+            Ok(true)
+        );
+        assert!(game.block_ticks.fluids.has_scheduled(pos, water_tick));
+        assert!(
+            game.block_ticks
+                .fluids
+                .all_queued()
+                .any(|tick| tick.pos == pos && tick.priority == Engine::High)
+        );
+
+        // An unloaded position queues nothing; one above the build height of a loaded chunk is
+        // queued, as vanilla's queue checks only the chunk; a stale handle is an error.
+        assert_eq!(
+            level.schedule_block_tick(
+                game,
+                [1_000_000, 65, 1_000_000],
+                ice_key,
+                1,
+                TickPriority::Low
+            ),
+            Ok(false)
+        );
+        let high = [AT[0], 1_000, AT[2]];
+        assert_eq!(
+            level.schedule_block_tick(game, high, ice_key, 100, TickPriority::Normal),
+            Ok(true)
+        );
+        assert_eq!(queued(game, high).len(), 1);
+        let stale = LevelRef::new(WorldEpoch::new(level.epoch().get() + 1), level.dimension());
+        assert_eq!(
+            stale.schedule_block_tick(game, AT, ice_key, 1, TickPriority::Normal),
+            Err(LevelWriteError::Stale)
+        );
+
+        // In a transaction the tick waits for the commit and an abort drops it.
+        let other = [AT[0] + 1, AT[1], AT[2]];
+        for commit in [false, true] {
+            game.storage_scope(|game, _| {
+                assert_eq!(
+                    level.schedule_block_tick(game, other, ice_key, 20, TickPriority::High),
+                    Ok(true)
+                );
+                assert!(!game.block_ticks.has_block_tick(at(other), ice_id));
+                ((), commit)
+            });
+            assert_eq!(game.block_ticks.has_block_tick(at(other), ice_id), commit);
+        }
+        // A fluid tick in a transaction is a journal write: the commit replays it into the fluid
+        // queue at its priority, its delay counted from there, and an abort leaves that queue
+        // empty at its position.
+        let fluid_ticks = |game: &Game<'_>, place: [i32; 3]| -> Vec<(i64, Engine)> {
+            game.block_ticks
+                .fluids
+                .all_queued()
+                .filter(|tick| tick.pos == at(place) && tick.kind == water_tick)
+                .map(|tick| (tick.trigger_tick, tick.priority))
+                .collect()
+        };
+        for commit in [false, true] {
+            game.storage_scope(|game, _| {
+                assert_eq!(
+                    level.schedule_fluid_tick(game, other, water, 20, TickPriority::VeryHigh),
+                    Ok(true)
+                );
+                assert!(fluid_ticks(game, other).is_empty());
+                ((), commit)
+            });
+            let expected = if commit {
+                vec![(game.world.game_time + 20, Engine::VeryHigh)]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(fluid_ticks(game, other), expected);
+        }
+        // The tick a transaction committed keeps its deadline and priority against a later
+        // repeat with others.
+        let journaled = [AT[0] + 2, AT[1], AT[2]];
+        game.storage_scope(|game, _| {
+            assert_eq!(
+                level.schedule_block_tick(game, journaled, ice_key, 40, TickPriority::Low),
+                Ok(true)
+            );
+            ((), true)
+        });
+        assert_eq!(
+            level.schedule_block_tick(game, journaled, ice_key, 3, TickPriority::High),
+            Ok(true)
+        );
+        let [tick] = queued(game, journaled)[..] else {
+            panic!("one tick at {journaled:?}");
+        };
+        assert_eq!(
+            (tick.trigger_tick, tick.priority),
+            (start + 40, Engine::Low)
+        );
+
+        // Two ticks due together, `Low` scheduled first: `High` runs first, directly and when
+        // a transaction queued both.
+        let (low, high) = ([AT[0], AT[1], AT[2] + 1], [AT[0], AT[1], AT[2] + 2]);
+        let pair = [(low, TickPriority::Low), (high, TickPriority::High)];
+        for (place, priority) in pair {
+            assert_eq!(
+                level.schedule_block_tick(game, place, ice_key, 1, priority),
+                Ok(true)
+            );
+        }
+        assert_eq!(run_order(game, start + 1), [at(high), at(low)]);
+        game.storage_scope(|game, _| {
+            for (place, priority) in pair {
+                assert_eq!(
+                    level.schedule_block_tick(game, place, ice_key, 1, priority),
+                    Ok(true)
+                );
+            }
+            ((), true)
+        });
+        assert_eq!(run_order(game, start + 1), [at(high), at(low)]);
+    });
+}

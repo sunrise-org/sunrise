@@ -337,8 +337,7 @@ pub(in crate::game) mod connected_advancement_preservation_tests {
                 let motion = sunrise_sim::motion::PlayerMotion::new(
                     game.motion,
                     sunrise_core::geometry::Vec3::ZERO,
-                )
-                .unwrap();
+                );
                 let guests = &mut game.server.lan.as_mut().unwrap().hub.guests;
                 let g = &guests[0];
                 let fake = sunrise_sim::lan::guest::Guest::connectionless(

@@ -426,10 +426,10 @@ fn support_snapshot_reaches_both_anvils_and_enchant_without_dispatching_inside_t
         );
         assert!(sharpness_at_30(game, "minecraft:diamond_sword").is_empty());
         game.creative = false;
-        game.player = Some(
-            sunrise_sim::motion::PlayerMotion::new(game.motion, sunrise_core::geometry::Vec3::ZERO)
-                .unwrap(),
-        );
+        game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+            game.motion,
+            sunrise_core::geometry::Vec3::ZERO,
+        ));
         game.build_registries();
         let sharpness = [(Arc::<str>::from(SHARPNESS), 1)];
         let check_anvils =

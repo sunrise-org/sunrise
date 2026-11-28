@@ -1,33 +1,17 @@
 //! Out-of-line generated modules may only refer to source scanned by the gate.
 use quote::ToTokens;
-use std::{
-    collections::BTreeSet,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 use syn::visit::Visit;
 
-pub(in crate::build) fn sources(root: &Path) -> Result<BTreeSet<PathBuf>, String> {
-    fn walk(directory: &Path, files: &mut BTreeSet<PathBuf>) -> Result<(), String> {
-        for entry in std::fs::read_dir(directory).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            let path = entry.path();
-            if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
-                walk(&path, files)?;
-            } else if path.extension().is_some_and(|extension| extension == "rs") && path.is_file()
-            {
-                files.insert(path.canonicalize().map_err(|e| e.to_string())?);
-            }
-        }
-        Ok(())
-    }
-    let mut files = BTreeSet::new();
-    walk(&root.join("crates/sunrise-mod-vocab/src"), &mut files)?;
-    Ok(files)
+pub(in crate::build) fn vocab_root(root: &Path) -> Result<PathBuf, String> {
+    root.join("crates/sunrise-mod-vocab/src")
+        .canonicalize()
+        .map_err(|e| e.to_string())
 }
 
-pub(super) fn validate(file: &syn::File, sources: &BTreeSet<PathBuf>) -> Result<(), String> {
+pub(super) fn validate(file: &syn::File, vocab_root: Option<&Path>) -> Result<(), String> {
     struct Modules<'a> {
-        sources: &'a BTreeSet<PathBuf>,
+        vocab_root: Option<&'a Path>,
         errors: Vec<String>,
     }
     impl<'ast> Visit<'ast> for Modules<'_> {
@@ -57,15 +41,20 @@ pub(super) fn validate(file: &syn::File, sources: &BTreeSet<PathBuf>) -> Result<
                     }
                     None
                 });
-                let accepted = path
-                    .as_ref()
-                    .and_then(|path| {
-                        Path::new(path)
-                            .is_absolute()
-                            .then(|| Path::new(path).canonicalize().ok())
-                            .flatten()
-                    })
-                    .is_some_and(|path| self.sources.contains(&path));
+                let accepted = self.vocab_root.is_some_and(|vocab_root| {
+                    path.as_ref()
+                        .and_then(|path| {
+                            Path::new(path)
+                                .is_absolute()
+                                .then(|| Path::new(path).canonicalize().ok())
+                                .flatten()
+                        })
+                        .is_some_and(|path| {
+                            path.starts_with(vocab_root)
+                                && path.extension().is_some_and(|ext| ext == "rs")
+                                && path.is_file()
+                        })
+                });
                 if !accepted {
                     self.errors.push(format!(
                         "generated module {} targets source outside the scanned vocabulary set",
@@ -91,7 +80,7 @@ pub(super) fn validate(file: &syn::File, sources: &BTreeSet<PathBuf>) -> Result<
         }
     }
     let mut modules = Modules {
-        sources,
+        vocab_root,
         errors: Vec::new(),
     };
     modules.visit_file(file);
@@ -107,25 +96,25 @@ mod tests {
     #[test]
     fn out_of_set_module_is_refused_but_scanned_source_is_accepted() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let sources = super::sources(&root).unwrap();
+        let vocab_root = super::vocab_root(&root).unwrap();
         let source = root
             .join("crates/sunrise-mod-vocab/src/dispatch_scope.rs")
             .canonicalize()
             .unwrap();
         let safe = syn::parse_file(&format!("#[path = {source:?}] mod socket;")).unwrap();
-        assert!(super::validate(&safe, &sources).is_ok());
+        assert!(super::validate(&safe, Some(&vocab_root)).is_ok());
         let outside = root
             .join("crates/sunrise-mod-api/src/lib.rs")
             .canonicalize()
             .unwrap();
         let escaped = syn::parse_file(&format!("#[path = {outside:?}] mod hidden;")).unwrap();
-        assert!(super::validate(&escaped, &sources).is_err());
+        assert!(super::validate(&escaped, Some(&vocab_root)).is_err());
         for mutant in [
             "#[path = \"/outside/hidden.rs\"] mod hidden;",
             "mod hidden;",
             "macro_rules! hidden { () => { #[path = \"/outside/hidden.rs\"] mod hidden; }; }",
         ] {
-            assert!(super::validate(&syn::parse_file(mutant).unwrap(), &sources).is_err());
+            assert!(super::validate(&syn::parse_file(mutant).unwrap(), Some(&vocab_root)).is_err());
         }
     }
     use std::path::Path;

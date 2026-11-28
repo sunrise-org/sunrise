@@ -68,7 +68,7 @@ fn rolls_live_death_context_without_dropping() {
         )
         .unwrap();
         game.server.server_loot.0.set(Some(Arc::new(loot)));
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
         bind_local_player(game, 11, 123);
         let credited = game.player(123).unwrap();
         assert!(game.living_set_attribute_base(

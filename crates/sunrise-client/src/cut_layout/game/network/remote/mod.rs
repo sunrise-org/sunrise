@@ -678,7 +678,7 @@ pub(crate) mod tests {
         )
         .unwrap();
         game.init_remote_for_replay().unwrap();
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)));
         let me = game.client.remote.as_ref().unwrap().entity_id;
         let speed = game.remote_effect_network_id("speed").unwrap();
         let attribute = {

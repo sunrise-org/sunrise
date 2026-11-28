@@ -1043,13 +1043,10 @@ pub(crate) mod tests {
                 let mut resources = None;
                 let mut game = server_game(&mut resources);
                 game.build_registries();
-                game.player = Some(
-                    sunrise_sim::motion::PlayerMotion::new(
-                        game.motion,
-                        sunrise_core::geometry::Vec3::new(8.5, 65.0, 8.5),
-                    )
-                    .unwrap(),
-                );
+                game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                    game.motion,
+                    sunrise_core::geometry::Vec3::new(8.5, 65.0, 8.5),
+                ));
                 game.update_chunk_tickets();
                 assert!(game.block_ticking_area()(1, 1));
                 let start = game.world.game_time;

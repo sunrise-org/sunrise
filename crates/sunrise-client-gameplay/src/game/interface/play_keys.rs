@@ -31,7 +31,7 @@ impl crate::game::ClientGame<'_> {
     pub fn key_pressed(&mut self, key: KeyCode, raw: KeyCode) -> Result<()> {
         // Scripted presses and controller presses are delivered to the same mappings
         // as window input; direct screen keys remain immediate.
-        if !self.mod_mappings_screen_open() && !self.client.replay.playing() {
+        if !self.mod_mappings_screen_open() {
             let key = if key == KeyCode::Enter {
                 KeyCode::KeyT
             } else {
@@ -67,10 +67,6 @@ impl crate::game::ClientGame<'_> {
         raw: KeyCode,
     ) -> Result<()> {
         self.direct_craft_stop();
-        if self.client.screen == Screen::Playing && self.client.replay.playing() {
-            self.studio_key(key);
-            return Ok(());
-        }
         // `CreativeModeInventoryScreen.keyPressed` clears `ignoreTextInput` on
         // every key, before it decides anything.
         self.client.creative_ignore_text = false;
@@ -87,7 +83,7 @@ impl crate::game::ClientGame<'_> {
             return Ok(());
         }
         if sunrise_client::keybinds::key_name(key)
-            .is_some_and(|name| self.hud_editor_key_press(name) || self.shader_pack_key_press(name))
+            .is_some_and(|name| self.shader_pack_key_press(name))
         {
             return Ok(());
         }
@@ -105,10 +101,6 @@ impl crate::game::ClientGame<'_> {
                     self.options_key(KeyCode::Escape, None)?;
                 }
                 Screen::Playing => {
-                    if self.client.replay.playing() && self.client.captured {
-                        self.capture(false);
-                        return Ok(());
-                    }
                     self.client.pause_focus = None;
                     self.set_screen(Screen::Paused);
                     self.client.pause_menu = true;
@@ -162,7 +154,6 @@ impl crate::game::ClientGame<'_> {
                 Screen::Win => self.close_win_screen()?,
                 Screen::DebugOptions => self.close_debug_options(),
                 Screen::Mod => self.close_mod_screen(),
-                Screen::HudEditor => self.close_hud_editor(),
             },
             KeyCode::F11 => self.toggle_fullscreen(),
             KeyCode::KeyE

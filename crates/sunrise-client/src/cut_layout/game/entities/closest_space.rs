@@ -31,7 +31,7 @@ mod tests {
                         game.world.set(x, y, z, stone).unwrap();
                     }
                 }
-                let body = PlayerMotion::new(game.motion, Vec3::new(3.5, 64.0, 5.5)).unwrap();
+                let body = PlayerMotion::new(game.motion, Vec3::new(3.5, 64.0, 5.5));
                 assert_eq!(
                     sunrise_gameplay_common::game::closest_space::closest_space_nudge(
                         &body,

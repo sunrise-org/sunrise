@@ -5,16 +5,18 @@
 pub(crate) use sunrise_glsl::macros::lex;
 
 /// The feature flags of `iris.features.*` (spec 3.2) Sunrise has on every device (and
-/// [`PER_BUFFER_BLENDING`] on some). A pack that requires one of them loads; one it lacks is
-/// noted. Sunrise defines no `IRIS_FEATURE_<name>` macro for them
-/// (spec OQ-2, docs/cleanroom/README.md): that macro family names another loader, so packs take
-/// the path they take without it. `BLOCK_EMISSION_ATTRIBUTE`: terrain's
-/// `at_midBlock.w` is the light its block gives. `SEPARATE_HARDWARE_SAMPLERS` (ShaderDoc,
+/// [`PER_BUFFER_BLENDING`] on a device that draws it). A pack that requires one of them loads;
+/// one it lacks is noted. For each of them the pack lists, in either list, its programs and
+/// property files see `IRIS_FEATURE_<NAME>` (spec 1.5.1, 3.2; decision D-7 and OQ-2 in
+/// docs/cleanroom/): `Macros::define_features`, all but [`UNANSWERED`].
+/// `BLOCK_EMISSION_ATTRIBUTE`: terrain's `at_midBlock.w` is the light its block gives, where the
+/// draw reaches the quad's source block. `SEPARATE_HARDWARE_SAMPLERS` (ShaderDoc,
 /// "Separate Hardware Shadow Samplers"): `shadowtex0`/`shadowtex1` stay plain depth samplers when
 /// hardware filtering is on, `shadowtex0HW`/`shadowtex1HW` compare; Sunrise picks a comparison
 /// sampler by the declared type (`sampler2DShadow`), so they always are. `HIGHER_SHADOWCOLOR`:
-/// `shadowcolor2` to `shadowcolor7` beside the first two. `FADE_VARIABLE`: terrain vertex
-/// programs can read the section's visibility transition as `mc_chunkFade`.
+/// `shadowcolor2` to `shadowcolor7` beside the first two. `FADE_VARIABLE`: gbuffers programs read
+/// `mc_chunkFade`, terrain's the section's visibility transition and every other draw's `-1.0`
+/// (spec 5.1, `post::off_terrain_fade`).
 const FEATURES: [&str; 9] = [
     "BLOCK_EMISSION_ATTRIBUTE",
     "COMPUTE_SHADERS",
@@ -27,9 +29,63 @@ const FEATURES: [&str; 9] = [
     "SSBO",
 ];
 
-/// Whether `name` is one of [`FEATURES`], in any case.
-fn is_feature(name: &str) -> bool {
-    FEATURES.iter().any(|f| f.eq_ignore_ascii_case(name))
+/// The flags of [`FEATURES`] a pack requiring them loads with, but that get no
+/// `IRIS_FEATURE_<NAME>`: Sunrise can't keep their promise on every draw it may take.
+/// `BLOCK_EMISSION_ATTRIBUTE`: terrain drawn from its attributes alone
+/// (`TerrainDraws::Attributes`, when neither the arena's pages nor the normal stream fit the
+/// pack's vertex stage) has no source block, and `at_midBlock.w` is `0` there, so a pack's
+/// emission branch would lose every block's light on that path.
+const UNANSWERED: [&str; 1] = ["BLOCK_EMISSION_ATTRIBUTE"];
+
+/// The one of [`FEATURES`] `name` is, in any case.
+fn feature(name: &str) -> Option<&'static str> {
+    FEATURES
+        .iter()
+        .copied()
+        .find(|f| f.eq_ignore_ascii_case(name))
+}
+
+/// The keys that list the feature flags a pack asks for (spec 3.2).
+pub(crate) const FEATURE_LISTS: [&str; 2] = ["iris.features.optional", "iris.features.required"];
+
+/// The prefix of the macros that answer a pack's feature flags.
+const FEATURE_MACRO: &str = "IRIS_FEATURE_";
+
+/// Whether `name` is one of the macros that answer a pack's feature flags. Sunrise alone
+/// answers them (`Macros::define_features`): a pack's line declaring such a name is no option.
+/// It is not found as one (`options`, `switches_on`, `value_options`), so it is never defined for
+/// the pack's property files, never counted as on in `program.*.enabled`, and a saved choice
+/// never rewrites it (`Pack::with_chosen`, `options::apply`). As written, uncommented, it is the
+/// pack's own directive, with a directive's scope (decision D-7): in a program, the rest of the
+/// stage's preprocessed source; in `shaders.properties`, the rest of that file.
+pub(crate) fn is_feature_answer(name: &str) -> bool {
+    name.starts_with(FEATURE_MACRO)
+}
+
+/// Whether `name` is one of the macros Sunrise alone answers: a feature answer
+/// ([`is_feature_answer`]) or an identity macro (`IS_IRIS`, `IRIS_VERSION`, decision D-8). A
+/// pack's line declaring one is no option (`options`, `switches_on`, `value_options`): it is
+/// never defined for the pack's property files, never counted as on in `program.*.enabled`, and
+/// a saved choice never rewrites it, so neither an option nor a profile changes the answer. As
+/// written, uncommented, it is the pack's own directive, with a directive's scope.
+pub(crate) fn is_reserved(name: &str) -> bool {
+    is_feature_answer(name) || crate::identity::NAMES.contains(&name)
+}
+
+/// The flags `properties` gives under `key`, as the pack wrote them.
+fn flags<'a>(properties: &'a crate::Properties, key: &str) -> std::str::SplitWhitespace<'a> {
+    properties.get(key).unwrap_or_default().split_whitespace()
+}
+
+/// The flags of [`FEATURES`] that `properties` lists in either of [`FEATURE_LISTS`], as
+/// `FEATURES` writes them; a name matches in any case.
+pub(crate) fn listed_features(
+    properties: &crate::Properties,
+) -> impl Iterator<Item = &'static str> {
+    FEATURE_LISTS
+        .iter()
+        .flat_map(|key| flags(properties, key))
+        .filter_map(feature)
 }
 
 /// The feature flag of `iris.features.*` (spec 3.2) Sunrise has only on a device that can draw
@@ -37,6 +93,8 @@ fn is_feature(name: &str) -> bool {
 /// buffers. wgpu creates a pipeline whose colour targets differ in blend or write mask only on a
 /// device with `DownlevelFlags::INDEPENDENT_BLEND` ("Supports different blend operations per
 /// color attachment"); the renderer gives its device's answer (`Macros::set_per_buffer_blending`).
+/// Where it is supported it is answered as [`FEATURES`] are: listed, it gets
+/// `IRIS_FEATURE_PER_BUFFER_BLENDING` (`Macros::define_features`).
 const PER_BUFFER_BLENDING: &str = "PER_BUFFER_BLENDING";
 
 /// `MC_VERSION` of the version Sunrise plays: 26.3 → 260300.
@@ -191,8 +249,10 @@ impl Macros {
         // default; Iris 1.11.7 defines both too, with or without a resource pack's maps).
         m.define("MC_NORMAL_MAP", "");
         m.define("MC_SPECULAR_MAP", "");
-        // No `IS_IRIS`, `IRIS_VERSION` or `IRIS_HAS_*`: Sunrise is not that loader and does not
-        // claim its identity (spec OQ-2, docs/cleanroom/README.md). Packs take their other path.
+        // No `IS_IRIS`, `IRIS_VERSION` or `IRIS_HAS_*` here (spec OQ-2, docs/cleanroom/README.md):
+        // the identity macros are defined only for a pack whose Iris compatibility is on
+        // (`set_identity`, decision D-8), and the `IRIS_FEATURE_*` answers depend on the pack
+        // (`define_features`).
         // Distant Sunrises' block materials, which Iris defines with or without the mod (packs
         // compare ids with them unguarded: Exposa's `blockID == DH_BLOCK_LEAVES`), numbered as
         // the mod's `EDhApiBlockMaterial` numbers them.
@@ -238,31 +298,81 @@ impl Macros {
         }
     }
 
-    /// Whether the device the pack's programs run on draws a `blend.<program>.<buffer>` that
-    /// differs from the program's other buffers ([`PER_BUFFER_BLENDING`]): the renderer's
-    /// answer, from its device. Defines no macro.
-    pub fn set_per_buffer_blending(&mut self, supported: bool) {
-        self.1.per_buffer_blending = supported;
+    /// Sunrise's HDR extension, served to a pack that asked for it (`sunrise.hdr`,
+    /// [`crate::Properties::sunrise_hdr`]) and got a frame made for it: `SUNRISE_HDR` at the
+    /// extension's version, 1 (its `final` writes linear light), and `SUNRISE_HDR_TONEMAP_PACK`
+    /// when the pack owns the tone curve (`tonemap`). Sunrise's own names, which no other loader
+    /// defines: there the pack takes its other path. Never part of [`Self::standard`].
+    pub fn define_sunrise_hdr(&mut self, tonemap: crate::Tonemap) {
+        self.define("SUNRISE_HDR", "1");
+        if tonemap == crate::Tonemap::Pack {
+            self.define("SUNRISE_HDR_TONEMAP_PACK", "");
+        }
     }
 
-    /// Whether Sunrise has feature flag `name` (spec 3.2) with these macros' device, in any
-    /// case: one of [`FEATURES`], or [`PER_BUFFER_BLENDING`] on a device that draws it.
-    fn supports(&self, name: &str) -> bool {
-        is_feature(name)
-            || self.1.per_buffer_blending && PER_BUFFER_BLENDING.eq_ignore_ascii_case(name)
+    /// Whether the device the pack's programs run on draws a `blend.<program>.<buffer>` that
+    /// differs from the program's other buffers ([`PER_BUFFER_BLENDING`]): the renderer's
+    /// answer, from its device. Defines no macro itself: a pack that lists the flag gets its
+    /// answer from `define_features`. A device without it drops the answer these macros held,
+    /// at once.
+    pub fn set_per_buffer_blending(&mut self, supported: bool) {
+        self.1.per_buffer_blending = supported;
+        if !supported {
+            self.undef(&format!("{FEATURE_MACRO}{PER_BUFFER_BLENDING}"));
+        }
+    }
+
+    /// Drops every answer to a pack's feature flags these macros hold ([`is_feature_answer`]),
+    /// whoever defined it: a set reused for another pack, or after the device changed, holds
+    /// none of the previous answers.
+    pub(crate) fn drop_feature_answers(&mut self) {
+        let answers: Vec<String> = (self.names())
+            .filter(|n| is_feature_answer(n))
+            .map(str::to_owned)
+            .collect();
+        for name in &answers {
+            self.undef(name);
+        }
+    }
+
+    /// The feature flag `name` is (spec 3.2), in any case, as Sunrise writes it, if Sunrise has
+    /// it with these macros' device: one of [`FEATURES`], or [`PER_BUFFER_BLENDING`] on a device
+    /// that draws it.
+    fn supported(&self, name: &str) -> Option<&'static str> {
+        let device = self.1.per_buffer_blending && PER_BUFFER_BLENDING.eq_ignore_ascii_case(name);
+        feature(name).or(device.then_some(PER_BUFFER_BLENDING))
     }
 
     /// A note for each feature `iris.features.required` names that Sunrise lacks with these
-    /// macros' device (`supports`); a name matches in any case. Optional features need nothing:
-    /// no macro is defined for them (see `FEATURES`).
+    /// macros' device (`supported`); a name matches in any case. The pack still loads.
     pub fn feature_notes(&self, properties: &crate::Properties) -> Vec<String> {
-        properties
-            .get("iris.features.required")
-            .unwrap_or_default()
-            .split_whitespace()
-            .filter(|f| !self.supports(f))
+        flags(properties, "iris.features.required")
+            .filter(|f| self.supported(f).is_none())
             .map(|f| format!("the pack requires `{f}`, which is not supported yet"))
             .collect()
+    }
+
+    /// Defines `IRIS_FEATURE_<NAME>` as `1` for each flag Sunrise has with these macros' device
+    /// (`supported`: one of [`FEATURES`], or [`PER_BUFFER_BLENDING`] where the device draws it)
+    /// that `properties` lists in `iris.features.optional` (spec 3.2) or
+    /// `iris.features.required` (decision D-7), a name matching in any case and the macro taking
+    /// the name as Sunrise writes it. A flag Sunrise lacks, and one of [`UNANSWERED`], stays
+    /// undefined. The answers these macros held before are dropped first
+    /// (`drop_feature_answers`), so the set holds this read's answers alone. Whether any was
+    /// defined.
+    pub fn define_features(&mut self, properties: &crate::Properties) -> bool {
+        self.drop_feature_answers();
+        let mut defined = false;
+        let answered: Vec<&'static str> = (FEATURE_LISTS.iter())
+            .flat_map(|key| flags(properties, key))
+            .filter_map(|f| self.supported(f))
+            .filter(|f| !UNANSWERED.contains(f))
+            .collect();
+        for name in answered {
+            self.define(format!("{FEATURE_MACRO}{name}"), "1");
+            defined = true;
+        }
+        defined
     }
 }
 
@@ -330,9 +440,16 @@ mod tests {
     }
 
     /// A required feature Sunrise has loads without a note, one it lacks gets a note, whatever the
-    /// case it is written in; no `IRIS_FEATURE_*` macro is defined either way (spec OQ-2).
+    /// case it is written in; the standard and renderer sets hold no `IRIS_*` macro (the
+    /// feature answers come from the pack's lists, `define_features`).
+    /// The feature flags a list of notes names, in order: tests check which flags are noted, not the
+    /// English of the note.
+    fn noted_flags(notes: &[String]) -> Vec<&str> {
+        notes.iter().filter_map(|n| n.split('`').nth(1)).collect()
+    }
+
     #[test]
-    fn required_features_are_noted_and_never_defined() {
+    fn required_features_are_noted_and_the_standard_set_names_no_feature() {
         let properties = crate::Properties::parse(
             "iris.features.optional = COMPUTE_SHADERS ssbo NOT_A_FEATURE\n\
              iris.features.required = BLOCK_EMISSION_ATTRIBUTE HIGHER_SHADOWCOLOR custom_images \
@@ -340,13 +457,37 @@ mod tests {
             &Macros::standard(),
         );
         assert_eq!(
-            Macros::standard().feature_notes(&properties),
-            ["the pack requires `Not_A_Feature`, which is not supported yet"]
+            noted_flags(&Macros::standard().feature_notes(&properties)),
+            ["Not_A_Feature"]
         );
         let mut m = Macros::standard();
         m.define_renderer(4);
         let iris: Vec<_> = m.names().filter(|name| name.contains("IRIS")).collect();
         assert!(iris.is_empty(), "{iris:?}");
+    }
+
+    /// Sunrise's HDR macros are absent from the standard set and the renderer's; served, the
+    /// version is 1, and the tone curve's macro follows its owner.
+    #[test]
+    fn sunrise_hdr_macros_appear_only_when_served() {
+        const NAMES: [&str; 2] = ["SUNRISE_HDR", "SUNRISE_HDR_TONEMAP_PACK"];
+        let mut m = Macros::standard();
+        m.define_renderer(4);
+        m.define_subgroups();
+        assert!(NAMES.iter().all(|n| !m.is_defined(n)));
+        let mut pack = m.clone();
+        pack.define_sunrise_hdr(crate::Tonemap::Pack);
+        assert_eq!(pack.get("SUNRISE_HDR"), Some("1"));
+        assert_eq!(pack.get("SUNRISE_HDR_TONEMAP_PACK"), Some(""));
+        let mut sunrise = m.clone();
+        sunrise.define_sunrise_hdr(crate::Tonemap::Sunrise);
+        assert_eq!(sunrise.get("SUNRISE_HDR"), Some("1"));
+        assert!(!sunrise.is_defined("SUNRISE_HDR_TONEMAP_PACK"));
+        // A program's `#ifdef SUNRISE_HDR` path is taken only when served.
+        let fsh = "#version 330\nout vec4 c;\n#ifdef SUNRISE_HDR\nconst float v = 3.0;\n#endif\n\
+                   void main() { c = vec4(v); }\n";
+        assert!(translates(fsh, &m).is_err());
+        translates(fsh, &pack).unwrap();
     }
 
     /// A required `PER_BUFFER_BLENDING`, in any case, is supported where the device draws it
@@ -366,15 +507,15 @@ mod tests {
         able.set_per_buffer_blending(true);
         unable.set_per_buffer_blending(false);
         assert_eq!(
-            able.feature_notes(&properties),
-            ["the pack requires `NOT_A_FEATURE`, which is not supported yet"]
+            noted_flags(&able.feature_notes(&properties)),
+            ["NOT_A_FEATURE"]
         );
         assert_eq!(
-            unable.feature_notes(&properties),
+            noted_flags(&unable.feature_notes(&properties)),
             [
-                "the pack requires `PER_BUFFER_BLENDING`, which is not supported yet",
-                "the pack requires `per_Buffer_blending`, which is not supported yet",
-                "the pack requires `NOT_A_FEATURE`, which is not supported yet",
+                "PER_BUFFER_BLENDING",
+                "per_Buffer_blending",
+                "NOT_A_FEATURE"
             ]
         );
         // Without a renderer's answer the device draws none of it.
@@ -388,6 +529,46 @@ mod tests {
             able.for_file().feature_notes(&properties),
             able.feature_notes(&properties)
         );
+    }
+
+    /// The macro set itself holds no stale answer: a device without per-buffer blending drops
+    /// `IRIS_FEATURE_PER_BUFFER_BLENDING` at once, and `define_features` holds only its own
+    /// read's answers, whatever the set held before.
+    #[test]
+    fn a_stale_feature_answer_leaves_the_macro_set() {
+        const PBB: &str = "IRIS_FEATURE_PER_BUFFER_BLENDING";
+        let parse = |text| crate::Properties::parse(text, &Macros::standard());
+        let listing = parse("iris.features.optional = PER_BUFFER_BLENDING SSBO\n");
+        let other = parse("iris.features.optional = CUSTOM_IMAGES\n");
+        let mut m = Macros::standard();
+        m.set_per_buffer_blending(true);
+        assert!(m.define_features(&listing));
+        assert_eq!(m.get(PBB), Some("1"));
+        assert_eq!(m.get("IRIS_FEATURE_SSBO"), Some("1"));
+        // The device answer turned no: the macro goes with it, the other answers stay.
+        m.set_per_buffer_blending(false);
+        assert!(!m.is_defined(PBB));
+        assert_eq!(m.get("IRIS_FEATURE_SSBO"), Some("1"));
+        // Answered again on that device: still undefined.
+        assert!(m.define_features(&listing));
+        assert!(!m.is_defined(PBB));
+        // A read of another pack holds its answers alone.
+        m.set_per_buffer_blending(true);
+        assert!(m.define_features(&listing));
+        assert_eq!(m.get(PBB), Some("1"));
+        assert!(m.define_features(&other));
+        let answers: Vec<&str> = m
+            .names()
+            .filter(|n| n.starts_with("IRIS_FEATURE_"))
+            .collect();
+        assert_eq!(answers, ["IRIS_FEATURE_CUSTOM_IMAGES"]);
+        // One that lists none Sunrise has holds none.
+        assert!(!m.define_features(&parse("iris.features.optional = NOT_A_FEATURE\n")));
+        assert_eq!(m, {
+            let mut able = Macros::standard();
+            able.set_per_buffer_blending(true);
+            able
+        });
     }
 
     #[test]

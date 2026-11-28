@@ -304,7 +304,7 @@ fn health_extraction_runs_only_in_the_vanilla_layer_body() {
         game.client.screen = Screen::Playing;
         game.client.chat_ui.hide_gui = false;
         set_fixture_mode(game, GameMode::Survival);
-        let mut player = PlayerMotion::new(game.motion, Vec3::new(2.0, 64.0, 2.0)).unwrap();
+        let mut player = PlayerMotion::new(game.motion, Vec3::new(2.0, 64.0, 2.0));
         player.set_health(12.0, false).unwrap();
         player
             .set_modifier(
@@ -914,13 +914,10 @@ fn a_gui_wrapper_panic_is_contained_but_delegated_engine_paint_is_fatal() {
 fn enter_test_world(game: &mut sunrise_client_gameplay::game::ClientGame<'_>) {
     game.client.title.0 = None;
     game.set_screen(Screen::Playing);
-    game.player = Some(
-        sunrise_sim::motion::PlayerMotion::new(
-            game.motion,
-            sunrise_core::geometry::Vec3::new(0.5, 64.0, 0.5),
-        )
-        .unwrap(),
-    );
+    game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+        game.motion,
+        sunrise_core::geometry::Vec3::new(0.5, 64.0, 0.5),
+    ));
 }
 
 #[test]

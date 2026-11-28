@@ -70,7 +70,7 @@ impl ClientGame<'_> {
         attribute: &str,
         player: bool,
     ) -> Option<AttributeStyle> {
-        let catalog = &self.common.motion.attributes;
+        let catalog = self.common.motion.attributes();
         let registered = catalog.attribute(catalog.id(attribute)?);
         if registered.tooltip == Tooltip::default() {
             return None;

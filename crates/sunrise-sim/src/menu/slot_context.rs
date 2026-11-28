@@ -161,17 +161,21 @@ impl<'a> LiveSlotRules<'a> {
         }
     }
 
+    /// The slot's own answers, with `can_equip` deciding whether the placement
+    /// half may dispatch an item part's equip check. A read-only pickup query
+    /// passes `None` (#6790); a real placement query passes `env.can_equip`.
     pub(super) fn vanilla_answers(
         &self,
         env: &Env,
         slot: Slot,
         stack: &ItemStack,
+        can_equip: Option<&dyn crate::mobs::equip::CanEquip>,
     ) -> (bool, bool, u32) {
         (
             vanilla_may_place_for_role(
                 slot.role,
                 env,
-                env.can_equip,
+                can_equip,
                 stack,
                 self.crafter_disabled,
                 None,
@@ -207,7 +211,7 @@ impl<'a> LiveSlotRules<'a> {
         if slot.role == Role::Hidden || self.excludes(s) {
             return Some(0);
         }
-        let own = self.vanilla_answers(env, slot, stack);
+        let own = self.vanilla_answers(env, slot, stack, env.can_equip);
         let item_max = item_max_stack(env.items, stack);
         let (place, _, max) = if let Some(id) = self.registry_id {
             apply_menu_slot_rules(
@@ -254,7 +258,9 @@ impl<'a> LiveSlotRules<'a> {
                 slot.index,
                 stack,
                 self.slot_context(env, slot),
-                self.vanilla_answers(env, slot, stack),
+                // Picking a slot up never places the held stack: do not ask a
+                // listening item part whether it could be equipped (#6790).
+                self.vanilla_answers(env, slot, stack, None),
                 item_max_stack(env.items, stack),
             )
             .1,

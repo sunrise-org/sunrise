@@ -79,7 +79,7 @@ impl HudRenderer {
         });
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("HUD size"),
-            contents: bytemuck::bytes_of(&HudUniform::new([1.0; 4], EndPortalFill::default(), 0)),
+            contents: bytemuck::bytes_of(&HudUniform::new([1.0; 4], EndPortalFill::default())),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -534,7 +534,6 @@ impl HudRenderer {
                     batch.glint_alpha,
                 ],
                 batch.end_portal,
-                batch.glint_colour,
             )),
         );
         if let Some(pack_text) = &self.pack_text {

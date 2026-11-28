@@ -16,7 +16,21 @@ pub(crate) fn apply(
     rest: &str,
     macros: &Macros,
 ) -> Result<bool, String> {
-    conditionals.apply_with(word, |kind| test(kind, rest, macros))
+    conditionals.apply_with(word, |kind| test(kind, rest, macros, &mut |_| {}))
+}
+
+/// [`apply`], calling `lookup` with each name the condition it evaluates looks up: the name
+/// `#ifdef` / `#ifndef` tests, and each name `#if` / `#elif` reads
+/// ([`sunrise_glsl::condition::eval_condition_noting`]). A condition that isn't evaluated (a
+/// branch not reached, an `#elif` after a taken one) looks up nothing.
+pub(crate) fn apply_noting(
+    conditionals: &mut Conditionals,
+    word: &str,
+    rest: &str,
+    macros: &Macros,
+    lookup: &mut dyn FnMut(&str),
+) -> Result<bool, String> {
+    conditionals.apply_with(word, |kind| test(kind, rest, macros, lookup))
 }
 
 /// The text after a line's `#`, split into the directive word and the rest without its `//`
@@ -32,12 +46,19 @@ pub(crate) fn split_directive(after_hash: &str) -> Option<(&str, &str)> {
     ok.then(|| (word, rest.split("//").next().unwrap_or("").trim()))
 }
 
-fn test(word: &str, rest: &str, macros: &Macros) -> Result<bool, String> {
+fn test(
+    word: &str,
+    rest: &str,
+    macros: &Macros,
+    lookup: &mut dyn FnMut(&str),
+) -> Result<bool, String> {
     let name = rest.split_whitespace().next().unwrap_or("");
     match word {
-        "ifdef" => Ok(macros.is_defined(name)),
-        "ifndef" => Ok(!macros.is_defined(name)),
-        _ => eval_condition(rest, macros)
+        "ifdef" | "ifndef" => {
+            lookup(name);
+            Ok(macros.is_defined(name) == (word == "ifdef"))
+        }
+        _ => sunrise_glsl::condition::eval_condition_noting(rest, macros, lookup)
             .map(|v| v != 0)
             .map_err(|e| format!("`#{word} {rest}`: {e}; read as false")),
     }

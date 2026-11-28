@@ -156,7 +156,7 @@ pub(crate) mod stand_lodestone_inventory_tick_tests {
         game.build_registries();
         game.set_allow_commands(true);
         game.level.health = 20.0;
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(14.5, 200.0, 14.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(14.5, 200.0, 14.5)));
         game.block_ticks
             .add_empty_chunk(BlockPos::new(0, 0, 0).chunk())
             .unwrap();
@@ -407,8 +407,8 @@ pub(crate) mod postbaseline_lodestone_controls {
         // Direct class ticks do not refresh the headless fixture's tickets.
         // Use the existing ticket model: only chunk zero is forced to tick.
         game.server
+            .chunk_ticking
             .tickets
-            .0
             .update(Some(sunrise_sim::ticket_levels::Sources {
                 forced: vec![(0, 0)],
                 ..Default::default()

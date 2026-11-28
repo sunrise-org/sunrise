@@ -102,10 +102,10 @@ pub(crate) mod tests {
             crate::game::profile_resolver,
         )
         .unwrap();
-        game.player = Some(
-            sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(10.5, 64.0, -3.25))
-                .unwrap(),
-        );
+        game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+            game.motion,
+            Vec3::new(10.5, 64.0, -3.25),
+        ));
         let feet = {
             let p = game.player.as_ref().expect("a player").position;
             [p.x, p.y, p.z]

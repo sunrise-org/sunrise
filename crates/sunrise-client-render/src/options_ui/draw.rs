@@ -7,7 +7,6 @@ pub(super) enum FrameDraw {
     Calibration(crate::hdr_calibration::Layout),
     Shell(Page),
     RadialName,
-    Studio([f32; 4]),
     Mods,
     Packs,
     Standard(std::sync::Arc<OptionsLayout>),
@@ -68,8 +67,6 @@ impl OptionsUi {
             shell.draw_background(s, batch, atlas, in_world, waiting);
             self.size = (w, h);
             FrameDraw::Shell(page)
-        } else if page == Page::Studio {
-            FrameDraw::Studio(self.studio.draw_background(batch, atlas, in_world))
         } else if matches!(page, Page::Mods | Page::Packs) {
             if page == Page::Packs {
                 self.watch_data_packs(atlas, (w, h));
@@ -81,9 +78,6 @@ impl OptionsUi {
                 _ => unreachable!(),
             }
         } else {
-            if page == Page::Pvp {
-                self.wide_extras = wide_extras(s, |t| atlas.font.width(t));
-            }
             let layout = self.built_layout(s, w, h);
             let (_, top, bottom, _) = layout.parts();
             self.size = (w, h);
@@ -132,10 +126,6 @@ impl OptionsUi {
                     .as_mut()
                     .expect("name entry remains open")
                     .draw_contents(batch, atlas, cursor);
-                FrameDraw::Complete
-            }
-            FrameDraw::Studio(rect) => {
-                self.studio.draw_contents(batch, atlas, cursor, rect);
                 FrameDraw::Complete
             }
             kind @ (FrameDraw::Mods | FrameDraw::Packs) => {

@@ -37,13 +37,10 @@ fn enter_handles_the_line_before_the_chat_screen_closes() {
             let remote = game.client.remote.as_mut().unwrap();
             remote.joined = true;
             remote.has_logical_player = true;
-            game.player = Some(
-                sunrise_sim::motion::PlayerMotion::new(
-                    game.motion,
-                    sunrise_core::geometry::Vec3::ZERO,
-                )
-                .unwrap(),
-            );
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                sunrise_core::geometry::Vec3::ZERO,
+            ));
             game.client.screen = Screen::Playing;
             game.open_chat_method("");
             assert!(game.client.screen == Screen::Chat);

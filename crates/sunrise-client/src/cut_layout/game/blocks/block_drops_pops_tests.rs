@@ -191,13 +191,10 @@ fn harvest_game<'a>(
 ) {
     let (published, mut game) = isolated_server_game(resources);
     set_up(&mut game);
-    game.player = Some(
-        sunrise_sim::motion::PlayerMotion::new(
-            game.motion,
-            sunrise_core::geometry::Vec3::new(12.5, 100.0, 2.5),
-        )
-        .unwrap(),
-    );
+    game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+        game.motion,
+        sunrise_core::geometry::Vec3::new(12.5, 100.0, 2.5),
+    ));
     game.server.server_loot.0.set(Some(std::sync::Arc::new(
         sunrise_world::loot::LootData::load(
             &game.options.resources,

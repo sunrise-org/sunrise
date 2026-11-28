@@ -194,12 +194,14 @@ fn run() -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     let export_directory = root.join("crates/sunrise-mod-vocab/src/exports");
     let exports = if export_directory.is_dir() {
-        let (scopes, _, _) = sunrise_game_discovery::exports::fragments(
+        let fragments = sunrise_game_discovery::exports::fragments(
             &root,
             sunrise_game_discovery::module_files(&export_directory)?,
+            |path| fs::read_to_string(path),
         )?;
         Some(
-            scopes
+            fragments
+                .scopes
                 .into_iter()
                 .map(|(scope, source)| {
                     (

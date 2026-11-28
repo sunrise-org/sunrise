@@ -101,7 +101,7 @@ impl ServerGame<'_> {
     /// The registry id of a client-syncable attribute the entity type has
     /// (`AttributeMap.getInstance` is null for the others), by name.
     fn synced_attribute(&self, entity: &str, name: &str) -> Option<i32> {
-        let catalog = &self.common.motion.attributes;
+        let catalog = self.common.motion.attributes();
         let id = catalog.id(name)?;
         (catalog.attribute(id).syncable && catalog.default_base(entity, id).is_some())
             .then(|| id.registry_id())
@@ -109,7 +109,7 @@ impl ServerGame<'_> {
 
     /// The type's base value of an attribute, as the instance starts.
     fn attribute_default(&self, entity: &str, name: &str) -> f64 {
-        let catalog = &self.common.motion.attributes;
+        let catalog = self.common.motion.attributes();
         catalog
             .id(name)
             .and_then(|id| catalog.default_base(entity, id))
@@ -156,7 +156,7 @@ impl ServerGame<'_> {
         // keeps its stacks current. What the map holds is sent once, with the
         // base its instance has — never derived again beside it.
         let _ = m.extra.live.read(
-            &self.common.motion.attributes,
+            self.common.motion.attributes(),
             kind,
             Attr::MovementSpeed.id(),
             sunrise_world::attribute_map::ValueKind::Computed,
@@ -246,7 +246,7 @@ impl ServerGame<'_> {
             );
         }
         let _ = live.read(
-            &self.common.motion.attributes,
+            self.common.motion.attributes(),
             KIND,
             "minecraft:movement_speed",
             sunrise_world::attribute_map::ValueKind::Computed,

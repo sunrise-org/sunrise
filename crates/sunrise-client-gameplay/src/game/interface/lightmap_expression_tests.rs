@@ -105,15 +105,7 @@ fn a_packs_lightmap_draws_its_expression_uniform() {
     if run_fresh_cases(
         NAME,
         CASE,
-        &[
-            "pack",
-            "fullbright",
-            "sky",
-            "outline",
-            "globals",
-            "post",
-            "particles",
-        ],
+        &["pack", "sky", "outline", "globals", "post", "particles"],
     ) {
         return;
     }
@@ -140,7 +132,6 @@ fn a_packs_lightmap_draws_its_expression_uniform() {
             assert!(game.reads_pack_expressions());
         });
     }
-    let fullbright = case == "fullbright";
     with_client_game(|game| {
         // The pack's resources as the game loads them: the atlas resolves the uniform, and the
         // renderer the game builds over them takes the shader with it.
@@ -149,7 +140,6 @@ fn a_packs_lightmap_draws_its_expression_uniform() {
         assert!(game.client.gui.atlas.lightmap_shader.is_some());
         assert_eq!(game.client.gui.atlas.lightmap_expressions.len(), 1);
         let _event_loop = frame_scene(game);
-        game.client.renderer.0.as_mut().unwrap().fullbright = fullbright;
         // The expression context's strings, given room up front: every frame rewrites them in
         // place, so their buffers (address and capacity) are the same after the frames.
         let context = &mut game.client.expression_frame;
@@ -161,27 +151,18 @@ fn a_packs_lightmap_draws_its_expression_uniform() {
         };
         let before = buffers(game);
         let texture = drawn_texture(game);
-        if fullbright {
-            // Fullbright keeps the texture white, and nothing is evaluated: no context is
-            // written.
-            assert!(!game.reads_pack_expressions());
-            assert!(texture.iter().all(|&b| b == 255));
-            assert_eq!(game.client.expression_frame.dimension, "");
-            assert_eq!(game.client.expression_frame.biome, "");
-        } else {
-            assert!(game.reads_pack_expressions());
-            for texel in texture.chunks(4) {
-                assert_eq!(texel, [51, 0, 0, 255]);
-            }
-            for _ in 0..3 {
-                game.render_with(|renderer, frame| renderer.render(frame, None))
-                    .unwrap();
-            }
-            assert_eq!(buffers(game), before);
-            let context = &game.client.expression_frame;
-            assert_eq!(context.dimension, "minecraft:overworld");
-            assert_eq!(context.biome, BIOME);
+        assert!(game.reads_pack_expressions());
+        for texel in texture.chunks(4) {
+            assert_eq!(texel, [51, 0, 0, 255]);
         }
+        for _ in 0..3 {
+            game.render_with(|renderer, frame| renderer.render(frame, None))
+                .unwrap();
+        }
+        assert_eq!(buffers(game), before);
+        let context = &game.client.expression_frame;
+        assert_eq!(context.dimension, "minecraft:overworld");
+        assert_eq!(context.biome, BIOME);
     });
 }
 

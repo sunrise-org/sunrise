@@ -1,4 +1,4 @@
-use mod_api::client::particles::PositionSource;
+use mod_api::PositionSource;
 use sunrise_level::particle_options::{ParticleOptions, ParticleType};
 use sunrise_protocol::entity_data::PositionSource as NetworkPositionSource;
 use sunrise_sim::lan::server_effects::{ServerParticle, ServerParticleData};

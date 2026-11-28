@@ -2,7 +2,6 @@
 use quote::ToTokens;
 use std::{
     collections::BTreeMap,
-    fs,
     path::{Component, Path, PathBuf},
 };
 use syn::{Item, parse::Parser};
@@ -76,11 +75,20 @@ pub fn env_concat_include(
     Ok(Some(path))
 }
 
+/// Assembled export fragments and the module file targets selected for out-of-line `mod` items.
+pub struct Fragments {
+    pub scopes: BTreeMap<String, String>,
+    pub has_parts: bool,
+    pub has_host: bool,
+    pub module_paths: Vec<PathBuf>,
+}
+
 fn collect(
     root: &Path,
     scope: &str,
     items: Vec<Item>,
     out: &mut BTreeMap<String, String>,
+    module_paths: &mut Vec<PathBuf>,
 ) -> Result<(), String> {
     for mut item in items {
         if let Item::Mod(module) = &mut item {
@@ -98,20 +106,29 @@ fn collect(
                 if !module.attrs.is_empty() {
                     return Err("export scope containers must not carry attributes".into());
                 }
-                collect(root, &next, items, out)?;
+                collect(root, &next, items, out, module_paths)?;
                 continue;
             }
             if scope != "root" {
                 return Err("out-of-line export modules belong at the API root".into());
             }
-            let path = root
+            let flat = root
                 .join("crates/sunrise-mod-vocab/src")
                 .join(format!("{}.rs", module.ident));
-            let path = if path.is_file() {
-                path
-            } else {
-                path.with_extension("").join("mod.rs")
+            let nested = flat.with_extension("").join("mod.rs");
+            let path = match (flat.is_file(), nested.is_file()) {
+                (true, true) => {
+                    return Err(format!(
+                        "ambiguous export module `{}`: both {} and {} exist",
+                        module.ident,
+                        flat.display(),
+                        nested.display()
+                    ));
+                }
+                (true, false) => flat,
+                (false, _) => nested,
             };
+            module_paths.push(path.clone());
             let path = path.to_string_lossy();
             module.attrs.push(syn::parse_quote!(#[path = #path]));
         } else if !matches!(item, Item::Use(_)) {
@@ -129,9 +146,10 @@ fn collect(
 pub fn fragments(
     root: &Path,
     areas: Vec<String>,
-) -> Result<(BTreeMap<String, String>, bool, bool), String> {
+    mut read: impl FnMut(&Path) -> std::io::Result<String>,
+) -> Result<Fragments, String> {
     let directory = root.join("crates/sunrise-mod-vocab/src/exports");
-    let mut out = [
+    let mut scopes = [
         "root",
         "private",
         "private_built",
@@ -143,15 +161,21 @@ pub fn fragments(
     .collect();
     let mut has_parts = false;
     let mut has_host = false;
+    let mut module_paths = Vec::new();
     for area in areas {
         let path = directory.join(format!("{area}.rs"));
-        let source = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let source = read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         let file = syn::parse_file(&source).map_err(|e| format!("{}: {e}", path.display()))?;
         has_host |= file.items.iter().any(|item| matches!(item, Item::Mod(module) if module.ident == "host" && module.content.is_none()));
         has_parts |= file.items.iter().any(|item| matches!(item, Item::Mod(module) if module.ident == "parts" && module.content.is_none()));
-        collect(root, "root", file.items, &mut out)?;
+        collect(root, "root", file.items, &mut scopes, &mut module_paths)?;
     }
-    Ok((out, has_parts, has_host))
+    Ok(Fragments {
+        scopes,
+        has_parts,
+        has_host,
+        module_paths,
+    })
 }
 
 #[cfg(test)]

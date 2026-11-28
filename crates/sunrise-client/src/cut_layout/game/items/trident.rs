@@ -54,7 +54,7 @@ pub(crate) mod tests {
             crate::game::profile_resolver,
         )
         .unwrap();
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 200.0, 4.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 200.0, 4.5)));
         let mut stack = ItemStack::new("minecraft:trident", 1);
         stack.damage = 8;
         stack
@@ -151,7 +151,7 @@ pub(crate) mod tests {
             .default_state("minecraft:water")
             .unwrap();
         game.world.set(4, 200, 4, water).unwrap();
-        let mut player = PlayerMotion::new(game.motion, Vec3::new(4.5, 200.0, 4.5)).unwrap();
+        let mut player = PlayerMotion::new(game.motion, Vec3::new(4.5, 200.0, 4.5));
         player.velocity = Vec3::new(0.1, 0.2, 0.3);
         game.player = Some(player);
         game.yaw = 30.0;
@@ -187,7 +187,7 @@ pub(crate) mod tests {
             let water = registry.default_state("minecraft:water").unwrap();
             game.world.set(0, 63, 0, stone).unwrap();
             game.world.set(0, 64, 0, water).unwrap();
-            let mut player = PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap();
+            let mut player = PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5));
             player.ground.on_ground = true;
             game.player = Some(player);
             let mut stack = ItemStack::new("minecraft:trident", 1);

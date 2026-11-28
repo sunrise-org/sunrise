@@ -131,15 +131,6 @@ def decode(token):
     return token
 
 
-# Particles whose tick calls Math.pow: cherry leaves' flow, which still calls the
-# platform powf. On x86-64 HotSpot's intrinsic (Intel's libm) rounds a fraction of a
-# percent of arguments a unit apart from it, so in these cases each differing 16-hex
-# double token may differ by up to 1e-12 * max(1, |expected|) (`close`); every other
-# token of these cases, and every other type, compares exactly. The allowance goes
-# once the flow calls an exact pow.
-LIBM = {'cherry_leaves'}
-
-
 def sections(path):
     out, name = {}, None
     for line in path.read_text(encoding='utf-8', errors='replace').splitlines():
@@ -151,43 +142,16 @@ def sections(path):
     return out
 
 
-def close(a, b):
-    ta, tb = a.split(), b.split()
-    if len(ta) != len(tb):
-        return False
-    for x, y in zip(ta, tb):
-        if x == y:
-            continue
-        if len(x) != 16 or len(y) != 16:
-            return False
-        try:
-            fx, fy = (struct.unpack('>d', bytes.fromhex(t))[0] for t in (x, y))
-        except ValueError:
-            return False
-        if not abs(fx - fy) <= 1e-12 * max(1.0, abs(fx)):
-            return False
-    return True
-
-
-def tolerated(build, cases_path):
-    """Lines of LIBM cases that differ only within the libm tolerance, or None."""
-    rows = cases_path.read_text().splitlines()
-    left, right = sections(build / 'client.txt'), sections(build / 'rust.txt')
-    if left.keys() != right.keys():
-        return None
-    count = 0
-    for name in left:
-        a, b = left[name], right[name]
-        if a == b:
-            continue
-        if json.loads(rows[name])['type'] not in LIBM or len(a) != len(b):
-            return None
-        for x, y in zip(a, b):
-            if x != y:
-                if not close(x, y):
-                    return None
-                count += 1
-    return count
+def ulp_note(a, b):
+    """How far apart the first differing hex float tokens of two lines are, in ULPs."""
+    for x, y in zip(a.split(), b.split()):
+        if x != y and len(x) == len(y) and len(x) in (8, 16):
+            try:
+                width = 4 * len(x)
+                return f' ({lab.ulps(int(x, 16), int(y, 16), width)} ulp at {decode(x)} vs {decode(y)})'
+            except ValueError:
+                return ''
+    return ''
 
 
 def explain(build, cases_path):
@@ -203,7 +167,8 @@ def explain(build, cases_path):
                 a, b = left[name], right.get(name, [])
                 diff = next(((x, y) for x, y in zip(a, b) if x != y), (f'<{len(a)} lines>', f'<{len(b)} lines>'))
                 pretty = [' '.join(decode(t) for t in s.split()) for s in diff]
-                report += f'\n  case {name} {rows[name][:160]}\n    vanilla: {pretty[0]}\n    rust:    {pretty[1]}'
+                report += (f'\n  case {name} {rows[name][:160]}\n    vanilla: {pretty[0]}\n    rust:    {pretty[1]}'
+                           + ulp_note(*diff))
     return f'\n{count} differing cases by type: {kinds}' + report
 
 
@@ -227,21 +192,17 @@ def main():
     # The oracle runs first: the probe replays the particle seeds it recovered.
     harness.java_run(build, classes, dependencies, oracle, [cases_path, build / 'client.txt'], 'client')
     harness.run_logged([*command, cases_path, build / 'client.txt', build / 'rust.txt'], build, 'rust')
-    tolerance = 0
     try:
         matched = base.compare(build / 'client.txt', build / 'rust.txt')
     except AssertionError as error:
-        tolerance = tolerated(build, cases_path)
-        if tolerance is None:
-            raise AssertionError(str(error) + explain(build, cases_path)) from None
-        matched = sum(len(v) + 1 for v in sections(build / 'client.txt').values())
+        raise AssertionError(str(error) + explain(build, cases_path)) from None
     base.ensure_sources_unchanged(sources, tested)
     lab.write_json(report, dict(
         schema=1, minecraft=lock['minecraft']['version'], platform=platform.platform(),
         rustc=subprocess.check_output(['rustc', '--version'], text=True).strip(), units=units,
         sources_sha256=tested, input_sha256=lab.digest(cases_path, 'sha256'),
         client_jar_sha256=lab.digest(jars['client'], 'sha256'), matched_output_lines=matched,
-        output_sha256=lab.digest(build / 'rust.txt', 'sha256'), libm_tolerated_lines=tolerance,
+        output_sha256=lab.digest(build / 'rust.txt', 'sha256'),
         scope=('Real ParticleResources providers for every type Sunrise implements, ticked in an air level with an optional '
                'stone floor and, for the bubbles, still water: construction (provider, level, SpellParticle and particle-local random draws), per-tick '
                'position, previous position, motion, age, lifetime, removal, onGround, quad size at partial 0 and 0.5, '
@@ -250,8 +211,7 @@ def main():
                'carries and the plume rises that many blocks; the noxious gas cloud asks the still water for each gas it '
                'spawns. Flowing fluids, block light, render layers/facing and the ParticleEngine group limits '
                'are not exercised.')))
-    print(f'{units:,} particle cases match the pinned client ({matched:,} output lines, {tolerance} within '
-          f'the libm tolerance): {report}', flush=True)
+    print(f'{units:,} particle cases match the pinned client bit for bit ({matched:,} output lines): {report}', flush=True)
 
 
 if __name__ == '__main__':

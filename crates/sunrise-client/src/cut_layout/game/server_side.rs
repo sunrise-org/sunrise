@@ -558,9 +558,6 @@ pub(crate) mod native_level_effects;
 #[path = "modding/native_level_border.rs"]
 pub(crate) mod native_level_border;
 
-#[path = "modding/native_item_places.rs"]
-pub(crate) mod native_item_places;
-
 #[path = "modding/native_item_entity_refs_server.rs"]
 pub(crate) mod native_item_entity_refs_server;
 

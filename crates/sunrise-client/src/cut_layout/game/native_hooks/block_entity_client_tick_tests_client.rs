@@ -115,13 +115,10 @@ fn a_clients_frames_tick_its_declared_copies_until_they_go() {
         }
         // The player the spawner looks for (`hasNearbyAlivePlayer` needs one, whatever the range).
         let [x, y, z] = SPAWNER_AT.map(f64::from);
-        game.player = Some(
-            sunrise_sim::motion::PlayerMotion::new(
-                game.motion,
-                sunrise_core::geometry::Vec3::new(x, y + 2.0, z),
-            )
-            .unwrap(),
-        );
+        game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+            game.motion,
+            sunrise_core::geometry::Vec3::new(x, y + 2.0, z),
+        ));
         take_events();
 
         // Each declared copy once per tick, in arrival order, inside the level's brackets; the

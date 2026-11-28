@@ -454,7 +454,7 @@ impl ServerGame<'_> {
     /// `interact`), the ones in reach of `at`. Whether any did.
     pub(in crate::game) fn tie_player_boats(&mut self, at: glam::DVec3, to: Holder) -> bool {
         let knot_id = match to {
-            Holder::Knot(fence) => self.server.knot_ids.get(&fence).copied(),
+            Holder::Knot(fence) => self.server.knot_state.knot_ids.get(&fence).copied(),
             _ => None,
         };
         let mut any = false;
@@ -520,7 +520,7 @@ impl ServerGame<'_> {
                     .map(|&(_, id)| id)
             }
             Holder::Mob(id) | Holder::Boat(id) => Some(id as i32),
-            Holder::Knot(p) => self.server.knot_ids.get(&p).map(|&id| id as i32),
+            Holder::Knot(p) => self.server.knot_state.knot_ids.get(&p).map(|&id| id as i32),
         }
     }
 }

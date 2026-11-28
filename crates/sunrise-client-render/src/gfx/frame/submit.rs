@@ -13,7 +13,6 @@ pub(in super::super) struct SubmitFrameArgs<'a, 'b> {
     pub lifts_world: bool,
     pub started: Instant,
     pub visible: Vec<resident::Visible>,
-    pub visible_lods: Vec<lod::Visible>,
     pub shadow_visible: Vec<resident::Visible>,
 }
 
@@ -36,7 +35,6 @@ impl Renderer {
             lifts_world,
             started,
             visible,
-            visible_lods,
             shadow_visible,
         } = args;
 
@@ -151,7 +149,6 @@ impl Renderer {
                     self.last_wait += self.queue.take_waited();
                     self.last_encode = started.elapsed().saturating_sub(self.last_wait);
                     self.visible = visible;
-                    self.visible_lods = visible_lods;
                     self.shadow_visible = shadow_visible;
                     return Ok(true);
                 }
@@ -271,7 +268,6 @@ impl Renderer {
         self.last_encode = started.elapsed().saturating_sub(self.last_wait);
         let _ = self.started;
         self.visible = visible;
-        self.visible_lods = visible_lods;
         self.shadow_visible = shadow_visible;
         Ok(true)
     }

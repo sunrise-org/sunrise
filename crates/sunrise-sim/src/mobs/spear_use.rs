@@ -280,7 +280,7 @@ fn stab_attack(
             attacker: Some(Who::Mob(m.id)),
             from: Some(from),
             direct: None,
-            attacker_species: Some(m.species()),
+            attacker_species: Some(crate::mobs::species::vanilla_id(m.species())),
         },
         weapon: weapon.clone(),
         amount: base_damage,

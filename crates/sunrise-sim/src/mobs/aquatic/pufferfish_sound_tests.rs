@@ -124,6 +124,7 @@ fn the_fish_ai_never_plays_the_players_sting() {
         let p = crate::mobs::world::test_player(Vec3::new(0.5, 64.0, 0.5));
         let world = MobWorld {
             side: crate::motion::dry_side(),
+            variant_tables: None,
             player: Some(p),
             ..w.clone()
         };

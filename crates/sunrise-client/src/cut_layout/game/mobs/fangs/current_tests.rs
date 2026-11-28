@@ -127,7 +127,7 @@ pub(crate) fn run_fangs_in_a_current_are_pushed_and_fangs_in_still_water_are_not
         prepare_entity_ticking_neighborhood(game, ChunkPos::new(0, 0));
         // Loaded but non-entity-ticking chunk neighborhood well outside simulation distance.
         prepare_entity_ticking_neighborhood(game, ChunkPos::new(20, 0));
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
         game.update_chunk_tickets();
         bind_local_player(game, 1, 99);
         game.set_allow_commands(true);
@@ -293,7 +293,7 @@ pub(crate) fn run_fangs_in_a_current_are_pushed_and_fangs_in_still_water_are_not
     with_game(|game| {
         prepare_entity_ticking_neighborhood(game, ChunkPos::new(0, 0));
         game.world.fast_lava = true;
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
         game.update_chunk_tickets();
         bind_local_player(game, 1, 99);
         game.set_allow_commands(true);

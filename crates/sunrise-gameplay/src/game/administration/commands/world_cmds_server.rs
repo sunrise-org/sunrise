@@ -774,11 +774,14 @@ impl crate::game::ServerGame<'_> {
     ) -> Option<&mut sunrise_world::attributes::entity::EntityAttributes> {
         if let Target::Mob(id) = t {
             let mob = self.common.mobs.iter_mut().find(|m| m.id == id)?;
-            return sunrise_sim::mobs::finalize::attribute_map(mob, &self.common.motion.attributes);
+            return sunrise_sim::mobs::finalize::attribute_map(
+                mob,
+                self.common.motion.attributes(),
+            );
         }
         if !self.server.cmds.0.attributes.contains_key(&t) {
             let ty = self.target_type(t);
-            let map = self.common.motion.attributes.create(&ty)?;
+            let map = self.common.motion.attributes().create(&ty)?;
             self.server.cmds.0.attributes.insert(t, map);
         }
         self.server.cmds.0.attributes.get_mut(&t)
@@ -846,7 +849,7 @@ impl crate::game::ServerGame<'_> {
                         .mobs
                         .iter()
                         .find(|m| m.id == i)
-                        .map(|m| m.species()),
+                        .map(|m| sunrise_sim::mobs::species::vanilla_id(m.species())),
                     _ => None,
                 };
                 let damage = Damage {

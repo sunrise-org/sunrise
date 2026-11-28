@@ -26,7 +26,7 @@ pub(crate) struct ModelQuad {
 
 /// A model particle's faces.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) struct ParticleModel {
+pub struct ParticleModel {
     pub(crate) quads: Vec<ModelQuad>,
 }
 

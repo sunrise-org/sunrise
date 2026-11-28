@@ -61,7 +61,7 @@ fn game_at<'a>(
     game.block_ticks
         .add_empty_chunk(ChunkPos::new(0, 0))
         .unwrap();
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)));
     game.selected = 0;
     game.set_mode_id(0);
     game

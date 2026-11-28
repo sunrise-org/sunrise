@@ -15,7 +15,7 @@ pub trait Hooks {
     /// Starts from the camera entity's interpolated `(view_y_rot(partial), view_x_rot(partial), 0.0)`
     /// in degrees. Each listener sees the preceding listener's assignments, with no filtering
     /// or normalization at dispatch, as in NeoForge's setters. This hook does not run
-    /// for the interpolating `NewMinecartBehavior` rider branch or for a custom studio camera.
+    /// for the interpolating `NewMinecartBehavior` rider branch.
     ///
     /// Third-person front mirroring (`yaw + 180`, `-pitch`, `-roll`), detached back-off along the
     /// rotated look vector, and sleeping bed rotation run after this hook, matching NeoForge.

@@ -42,8 +42,7 @@ mod tests {
             // The fixture leaves the guest without a body, and a player's attributes live on
             // it: give one, as a joined player's record keeps.
             let body =
-                sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(3.0, 64.0, 5.0))
-                    .unwrap();
+                sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(3.0, 64.0, 5.0));
             game.server
                 .lan
                 .as_mut()
@@ -198,7 +197,7 @@ mod tests {
 
         with_client_game(|game| {
             let _server = logged_client(game);
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             let player = game.local_player().unwrap();
             let me = player.entity();
             let eye_height = f64::from(game.player.as_ref().unwrap().dimensions.eye_height);

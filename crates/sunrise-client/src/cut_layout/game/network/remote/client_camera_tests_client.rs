@@ -46,7 +46,7 @@ fn client_camera_entity_returns_to_player_after_removal() {
         remote.logged_in = true;
         remote.entity_id = 7;
         assert!(camera(game).is_none(), "a level alone has no player");
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
         let local = camera(game).unwrap();
         assert_eq!(
             local.id(),
@@ -134,7 +134,7 @@ fn client_camera_entity_returns_to_player_after_removal() {
             camera(game).is_none(),
             "replacement waits for its new player"
         );
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
         let fresh = camera(game).unwrap();
         assert_eq!(fresh.id(), local.id());
         assert_ne!(fresh.epoch(), local.epoch());
@@ -185,7 +185,7 @@ pub(crate) fn run_a_named_mob_the_server_camera_is_attached_to_shows_no_name_tag
         let remote = game.client.remote.as_mut().unwrap();
         remote.logged_in = true;
         remote.entity_id = 7;
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
         let creeper = game
             .client
             .remote

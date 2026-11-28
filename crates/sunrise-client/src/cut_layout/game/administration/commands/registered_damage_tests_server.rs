@@ -322,7 +322,7 @@ pub(crate) fn setup_live_damage_world(game: &mut sunrise_gameplay::game::ServerG
     game.block_ticks
         .add_empty_chunk(ChunkPos::new(0, 0))
         .unwrap();
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(14.5, 64.0, 14.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(14.5, 64.0, 14.5)));
     sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 1, 99);
     game.set_mode_id(0);
     game.server.next_entity = 100;

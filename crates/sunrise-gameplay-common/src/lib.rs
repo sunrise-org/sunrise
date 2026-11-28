@@ -2,8 +2,8 @@
 #![forbid(unsafe_code)]
 
 #[cfg(test)]
-#[used]
-static KEEP_TEST_PLATFORM: fn() = mod_platform::__private::test_platform::keep;
+mod_platform::__install_engine_test_platform!();
+
 pub mod brushing;
 pub mod cauldron_contents;
 pub mod chests;
@@ -48,3 +48,8 @@ pub mod worn_boots;
 
 extern crate self as sunrise_gameplay_common;
 pub mod game;
+#[cfg(any(test, feature = "test-support"))]
+#[path = "../../sunrise-core/src/prepared_test_root.rs"]
+pub(crate) mod prepared_test_root;
+#[cfg(test)]
+mod test_game_dir;

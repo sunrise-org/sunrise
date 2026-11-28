@@ -52,8 +52,7 @@ pub(crate) mod tests {
                     game.block_ticks
                         .add_empty_chunk(ChunkPos::new(0, 0))
                         .unwrap();
-                    game.player =
-                        Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 64.0, 4.5)).unwrap());
+                    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 64.0, 4.5)));
                     game.server.lan_acting_uuid = Some(123);
                     game.server.lan_acting_entity = Some(20);
                     game.server.lan_acting_permission = Some(0);

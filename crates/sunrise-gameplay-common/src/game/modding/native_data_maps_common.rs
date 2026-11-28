@@ -53,7 +53,7 @@ pub struct WorldRegistries<'a> {
     id_sets: RefCell<HashMap<String, HashSet<String>>>,
     tags: RefCell<HashMap<String, HashMap<String, HashSet<String>>>>,
 }
-pub type PackTags = HashMap<&'static str, HashMap<String, HashSet<String>>>;
+pub type PackTags = sunrise_sim::lan::data::PackTags;
 impl<'a> WorldRegistries<'a> {
     pub fn new(
         ids: impl IntoIterator<Item = (&'a str, &'a [String])>,
@@ -99,6 +99,16 @@ impl<'a> WorldRegistries<'a> {
             .iter()
             .any(|declaration| declaration.key == registry)
     }
+
+    /// A frozen mod-declared static custom registry with `registry`, if any.
+    fn custom_registry(
+        &self,
+        registry: &str,
+    ) -> Option<&'static std::sync::Arc<dyn mod_api::__private::RegistryDirectory>> {
+        mod_api::__private::custom_registry_directories()
+            .iter()
+            .find(|dir| dir.id() == registry)
+    }
 }
 impl MapRegistries for WorldRegistries<'_> {
     fn known(&self, registry: &str) -> bool {
@@ -107,8 +117,12 @@ impl MapRegistries for WorldRegistries<'_> {
             || self.ids.contains_key(registry)
             || TYPED.contains(&registry)
             || self.declared(registry)
+            || self.custom_registry(registry).is_some()
     }
     fn contains(&self, registry: &str, entry: &str) -> bool {
+        if let Some(dir) = self.custom_registry(registry) {
+            return dir.contains_id(entry);
+        }
         if registry == sunrise_sim::lan::data::BIOME_REGISTRY
             && let Some(keys) = self.biome_keys
         {
@@ -158,19 +172,41 @@ impl MapRegistries for WorldRegistries<'_> {
                 members(self.items.entity_type_tags.members())
             }
             _ => {
-                if let Some(tags) = self
-                    .bound_tags
-                    .and_then(|tags| tags.get(folder(registry).as_str()))
-                {
-                    return members(tags);
+                if let Some(tags) = self.bound_tags.and_then(|tags| {
+                    tags.get(registry)
+                        .or_else(|| tags.get(folder(registry).as_str()))
+                }) {
+                    return tags
+                        .get(tag)
+                        .map(|members| members.iter().cloned().collect())
+                        .unwrap_or_default();
                 }
                 let mut loaded = self.tags.borrow_mut();
                 let tags = loaded.entry(registry.to_owned()).or_insert_with(|| {
-                    sunrise_items::items::load_tags(self.root, &folder(registry), self.overlay)
+                    if let Some(dir) = self.custom_registry(registry) {
+                        sunrise_world::tag_layers::load(
+                            self.root,
+                            dir.tag_directory(),
+                            self.overlay,
+                            |id| dir.contains_id(id),
+                        )
+                        .map(|loaded| {
+                            loaded
+                                .into_iter()
+                                .map(|(tag, ids)| (tag, ids.into_iter().collect()))
+                                .collect()
+                        })
                         .unwrap_or_else(|e| {
                             log::warn!("Sunrise: the {registry} tags data maps read: {e}");
                             HashMap::new()
                         })
+                    } else {
+                        sunrise_items::items::load_tags(self.root, &folder(registry), self.overlay)
+                            .unwrap_or_else(|e| {
+                                log::warn!("Sunrise: the {registry} tags data maps read: {e}");
+                                HashMap::new()
+                            })
+                    }
                 });
                 members(tags)
             }

@@ -6,19 +6,14 @@ use super::*;
 /// blue + green cyan, blue + red purple), and a pair no recipe mixes
 /// keeps one of the two.
 #[test]
+#[ignore = "daily"]
 fn two_dyes_mix_by_their_crafting_recipe() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../.local/sunrise-client")
-        .join(sunrise_core::VANILLA_VERSION);
-    if !root.join("data/minecraft/recipe").is_dir() {
-        return;
-    }
-    let registry = sunrise_world::level::data::load_registry(&root).unwrap();
-    let facts = sunrise_items::blocks::BlockFacts::load(&root, &registry).unwrap();
+    use sunrise_core::prepared_test_support::SERVER_INPUTS;
+
+    let root = crate::prepared_test_root::prepared_root(&[SERVER_INPUTS]);
     let overlay = sunrise_world::loot::PackOverlay::NONE;
     let defaults = sunrise_world::item_defaults::read(&root).unwrap();
-    let items =
-        sunrise_items::items::Items::load(&root, &registry, &facts, &overlay, &defaults).unwrap();
+    let items = sunrise_items::items::Items::catalog(&root, &overlay, &defaults).unwrap();
     let recipes = Recipes::load(&root, &items, &overlay, &crate::game::test_server_load()).unwrap();
     let dye = |name: &str| {
         u8::try_from(

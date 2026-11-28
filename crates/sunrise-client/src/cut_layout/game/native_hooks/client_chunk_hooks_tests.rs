@@ -245,20 +245,19 @@ fn cache_packets_hide_replace_and_resize_slots() {
 
                 game.apply_packet(radius(1)).unwrap();
                 assert_eq!(game.effective_render_distance(), 1);
-                assert_eq!(game.terrain_distance(), 1);
                 assert!(std::sync::Arc::ptr_eq(&origin, &game.world.chunks[&(0, 0)]));
                 game.apply_packet(radius(0)).unwrap();
-                assert_eq!(game.terrain_distance(), 8);
+                assert_eq!(game.effective_render_distance(), 8);
                 game.client.settings.render_distance = 10;
                 game.apply_settings();
                 assert_eq!(game.client.streaming.radius, 10);
                 game.apply_packet(radius(4)).unwrap();
                 game.client.settings.render_distance = 11;
                 game.apply_settings();
-                assert_eq!(game.terrain_distance(), 4);
+                assert_eq!(game.effective_render_distance(), 4);
                 assert_eq!(game.client.streaming.radius, 5);
                 game.apply_packet(radius(14)).unwrap();
-                assert_eq!(game.terrain_distance(), 11);
+                assert_eq!(game.effective_render_distance(), 11);
                 game.apply_packet(radius(2)).unwrap();
 
                 game.apply_packet(center(11)).unwrap();

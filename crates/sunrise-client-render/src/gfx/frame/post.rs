@@ -46,9 +46,10 @@ pub(in crate::gfx) struct PostPassArgs<'a> {
     pub(in crate::gfx) gpu_frame: bool,
     pub(in crate::gfx) serial: u64,
     pub(in crate::gfx) cpu: [usize; 3],
-    pub(in crate::gfx) sourced_frame: bool,
-    pub(in crate::gfx) sourced_cpu: [usize; 3],
     pub(in crate::gfx) lifts_world: bool,
+    /// The display this frame is shown on, for a shader pack's display uniforms
+    /// (`EffectiveOutput::display` of the output it is drawn for).
+    pub(in crate::gfx) display: sunrise_render_shaderpack::pack_uniforms::Display,
     pub(in crate::gfx) frame_graph: Option<mod_frame_graph::FrameGraphRunner>,
 }
 
@@ -109,13 +110,15 @@ impl Renderer {
             gpu_frame,
             serial,
             cpu,
-            sourced_frame,
-            sourced_cpu,
             lifts_world,
+            display,
             mut frame_graph,
         } = args;
 
         let mut fg_made = false;
+        // Sunrise's HDR as served to the pack whose post passes draw this frame; `None` when none
+        // draws (no pack, or no scaled target to run it on: the world without its passes).
+        let mut drawn_pack_hdr = None;
         // Read while the pack is in `self.pack_post`, which the pass below takes out: as
         // `follow_arena_layout` read it at the start of the frame.
         let pack_reads_pages = self.pack_reads_pages();
@@ -124,6 +127,7 @@ impl Renderer {
             && pack_post
             && let Some((dimension, Some(mut post))) = self.pack_post.take()
         {
+            drawn_pack_hdr = Some(post.hdr);
             let format = post.formats[0];
             // The standard primitive blend cannot target an integer or unblendable colortex0.
             // On that route the pack world stages have no compatible pass, rather than firing
@@ -305,6 +309,7 @@ impl Renderer {
                 &view_target,
                 frame,
                 &frame.pack,
+                display,
                 size,
                 [self.config.width, self.config.height],
                 pages,
@@ -435,6 +440,8 @@ impl Renderer {
                 real: false,
                 hand_drawn: !pack_draws_hand,
                 hand_view_proj,
+                // Frame generation runs where no pack's passes drew the world.
+                pack_tonemap: false,
             };
             let onto = (&view_target, &target_texture, generated);
             fg_made =
@@ -521,20 +528,16 @@ impl Renderer {
             real: true,
             hand_drawn: !pack_draws_hand,
             hand_view_proj,
+            pack_tonemap: pack_owns_tone_curve(drawn_pack_hdr),
         };
         let readback =
             self.draw_overlay(&mut encoder, frame, &view_target, &target_texture, &overlay);
         if culling && let Some(cull) = &mut self.cull {
             cull.end(&self.device, &mut encoder);
         }
-        // GPU culling's counts once its world passes are done (phase 2's too), and sourced
-        // geometry's beside them; whether the frame drew sourced geometry rides the near
-        // copy, so its half waits for sourced geometry's (`in_flight::collect_stats`).
+        // GPU culling's counts once its world passes are done (phase 2's too).
         if gpu_frame && let Some(gpu) = &mut self.gpu_culling {
-            gpu.copy_stats(&mut encoder, serial, cpu, sourced_frame);
-        }
-        if sourced_frame {
-            self.sourced.copy_stats(&mut encoder, serial, sourced_cpu);
+            gpu.copy_stats(&mut encoder, serial, cpu);
         }
         if let Some(runner) = frame_graph {
             let mut pool = self

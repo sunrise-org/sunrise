@@ -352,13 +352,10 @@ fn an_adventure_use_on_is_not_predicted_on_the_client() {
         });
         game.install_server_items();
 
-        game.player = Some(
-            sunrise_sim::motion::PlayerMotion::new(
-                game.motion,
-                sunrise_core::geometry::Vec3::new(0.5, 4.0, 0.5),
-            )
-            .unwrap(),
-        );
+        game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+            game.motion,
+            sunrise_core::geometry::Vec3::new(0.5, 4.0, 0.5),
+        ));
         game.world.chunks.insert(
             (0, 0),
             std::sync::Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)),

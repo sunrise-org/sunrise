@@ -1546,6 +1546,17 @@ class SmokeStartTests(unittest.TestCase):
                 for key in ("SUNRISE_HOME", "SUNRISE_LAUNCHER_HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME"):
                     self.assertTrue(Path(environment[key]).is_relative_to(root))
 
+    def test_stage_catalog_and_prebuilt_game_import_cleanly_as_scripts(self):
+        root = Path(__file__).resolve().parent.parent
+        with tempfile.TemporaryDirectory() as directory:
+            for args in (
+                [sys.executable, "-E", str(root / "tools/ci/test_stage_catalog.py"), "--help"],
+                [sys.executable, "-E", str(root / "tools/prebuilt_game.py"), "--help"],
+            ):
+                with self.subTest(args=args):
+                    done = subprocess.run(args, cwd=directory, capture_output=True, text=True)
+                    self.assertEqual(done.returncode, 0, done.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

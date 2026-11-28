@@ -674,7 +674,7 @@ impl MotionWorld<'_, '_, '_> {
             if slime
                 && !damage_only
                 && !self.player.shift_key_down
-                && let Some(scale) = crate::entities::slime_step_on_scale(self.player.velocity.y)
+                && let Some(scale) = slime_step_on_scale(self.player.velocity.y)
             {
                 self.player.velocity.x *= scale;
                 self.player.velocity.z *= scale;

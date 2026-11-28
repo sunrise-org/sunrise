@@ -62,6 +62,7 @@ fn a_pearl_feels_the_water_its_box_touches() {
     let lid_openers = std::collections::HashMap::new();
     let w = MobWorld {
         side: sunrise_sim::motion::dry_side(),
+        variant_tables: None,
         mob_maps: sunrise_sim::neoforge_mob_maps::NeoForgeMobMaps::vanilla(),
         goal_host: None,
         live_mobs: None,
@@ -73,7 +74,7 @@ fn a_pearl_feels_the_water_its_box_touches() {
         registry,
         facts: &facts,
         fluid_tables: &motion.fluids,
-        attributes: &motion.attributes,
+        attributes: motion.attributes(),
         movement: &motion.blocks,
         collision: &collision,
         suffocation: &suffocation,

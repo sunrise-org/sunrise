@@ -1,1 +1,2 @@
-sunrise-client-gameplay game::client_side::native_custom_geometry::tests::native_frame_graph_compute_reads_live_world_depth_with_the_default_sampler lib daily gpu
+sunrise-client-gameplay game::client_side::native_custom_geometry::tests::native_frame_graph_compute_reads_world_depth_after_resize_with_the_default_sampler lib daily child-process
+sunrise-client-gameplay game::client_side::native_custom_geometry::tests::a_scaled_screenshot_reads_its_own_world_depth_then_a_new_window_id lib daily child-process

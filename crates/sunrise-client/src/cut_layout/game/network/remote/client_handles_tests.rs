@@ -223,7 +223,7 @@ fn client_handle_reads_answer_from_the_clients_copy() {
         remote.logged_in = true;
         remote.entity_id = 7;
         remote.profile = 42;
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(1.5, 65.0, -2.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(1.5, 65.0, -2.5)));
         game.yaw = 90.0;
         game.pitch = 10.0;
 

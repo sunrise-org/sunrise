@@ -100,7 +100,7 @@ fn game<'a>(
     game.native_lifecycle
         .begin_open(Some(Authority::IntegratedServer));
     // The player the command's `@s` is.
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 100.0, 8.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 100.0, 8.5)));
     game.world
         .chunks
         .insert((0, 0), Arc::new(Chunk::empty(0, 0)));

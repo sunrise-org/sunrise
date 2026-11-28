@@ -54,7 +54,7 @@ impl ClientGame<'_> {
         self.common.player = Some(PlayerMotion::new(
             self.common.motion,
             Vec3::new(0.0, 100.0, 0.0),
-        )?);
+        ));
         let encoded = [f64::from(0xff12ab), 7.0, -2.0];
         let mut custom = ParticleOptions::named("fixture:encoded");
         custom.color = [0.1, 0.2, 0.3, 0.4];
@@ -379,9 +379,10 @@ mod tests {
                         let at = [5.5, 101.0, 4.5];
                         let velocity = [f64::from(0xff12ab), 7.0, -2.0];
                         let options = ty.options(257);
-                        game.player = Some(
-                            PlayerMotion::new(game.motion, Vec3::new(at[0], at[1], at[2])).unwrap(),
-                        );
+                        game.player = Some(PlayerMotion::new(
+                            game.motion,
+                            Vec3::new(at[0], at[1], at[2]),
+                        ));
                         game.client.particles.0.camera = at;
                         let host: &mut dyn ClientHost = game;
                         assert!(host.add_particle(&options, at, velocity));

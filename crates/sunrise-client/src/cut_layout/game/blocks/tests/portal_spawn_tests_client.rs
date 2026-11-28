@@ -22,7 +22,12 @@ fn a_portal_over_obsidian_spawns_a_grunting_piglin() {
     let id = game.mobs[0].id;
     // setPortalCooldown: Entity.getDimensionChangingDelay.
     assert_eq!(
-        game.server.portals.entities.get(&id).map(|p| p.cooldown),
+        game.server
+            .portals
+            .level
+            .entities
+            .get(&id)
+            .map(|p| p.cooldown),
         Some(300),
         "the new piglin's portal cooldown"
     );

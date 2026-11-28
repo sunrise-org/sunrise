@@ -13,7 +13,7 @@ pub(crate) mod tests {
         registry::Builtin,
     };
 
-    fn update(builtin: &Builtin, tags: &[(&str, &str, &[&str])]) -> UpdateTags {
+    pub(crate) fn update(builtin: &Builtin, tags: &[(&str, &str, &[&str])]) -> UpdateTags {
         let mut registries = std::collections::BTreeMap::<_, Vec<_>>::new();
         for &(registry, tag, members) in tags {
             let names = builtin.get(registry).unwrap();
@@ -628,6 +628,80 @@ pub(crate) mod tests {
     }
     /// A client's damage type tags are the ones its server sent, at join and after a tag
     /// update, for its own tag service, a tag listener and the hit host of a mount it predicts.
+    /// A loaded shader pack's `%tag` entries (4.1) follow the tags a server sends, at once:
+    /// `ClientboundUpdateTags` in play replaces them, and the pack's entity, item and block
+    /// entity ids read the new members before any frame, a name's own entry still winning.
+    #[test]
+    #[ignore = "daily"]
+    fn a_shader_packs_tag_ids_follow_the_servers_tags() {
+        use sunrise_items::items::TagRegistry;
+        with_client_game(|game| {
+            let (pipe, _server) = sunrise_protocol::connection::Pipe::pair();
+            game.connect_local(pipe, "Steve").unwrap();
+            let builtin = game.client.remote.as_ref().unwrap().builtin.clone();
+            game.handle_packet(login()).unwrap();
+            game.client.pack_ids = Some(
+                sunrise_client_gameplay::game::client_side::shader_packs::PackIds::of_files(
+                    game,
+                    "block.42=%test:signs\n",
+                    "item.10=%test:blades\nitem.11=minecraft:iron_sword\n",
+                    "entity.20=%test:bones\nentity.21=minecraft:stray\n",
+                ),
+            );
+            let registry = game.pack.assets.registry;
+            let oak_sign = registry.default_state("minecraft:oak_sign").unwrap().0;
+            let reads = |game: &sunrise_client_gameplay::game::ClientGame<'_>| {
+                game.client.entity_spans.borrow_mut().clear();
+                game.mark_block_entity(0, oak_sign);
+                let sign = game.client.entity_spans.borrow()[0].id;
+                [
+                    game.entity_part_span(0, "minecraft:skeleton", false)
+                        .unwrap()
+                        .id,
+                    game.entity_part_span(0, "minecraft:stray", false)
+                        .unwrap()
+                        .id,
+                    game.rendered_item_id("minecraft:iron_sword"),
+                    game.rendered_item_id("minecraft:golden_sword"),
+                    sign,
+                ]
+            };
+            // No such tags yet: the names' own entries, and the ids of names the files lack.
+            assert_eq!(reads(game), [65535, 21, 11, 65535, 65535]);
+            let send = |game: &mut sunrise_client_gameplay::game::ClientGame<'_>,
+                        bones: &[&str],
+                        blades: &[&str],
+                        signs| {
+                let update = update(
+                    &builtin,
+                    &[
+                        ("minecraft:entity_type", "test:bones", bones),
+                        ("minecraft:item", "test:blades", blades),
+                        ("minecraft:block", "test:signs", signs),
+                    ],
+                );
+                game.handle_packet(C::UpdateTags(update)).unwrap();
+            };
+            send(
+                game,
+                &["minecraft:skeleton", "minecraft:stray"],
+                &["minecraft:golden_sword", "minecraft:iron_sword"],
+                &["minecraft:oak_sign"],
+            );
+            assert_eq!(reads(game), [20, 21, 11, 10, 42]);
+            // Block and item tables that don't hold the tags the server sent: the ids still
+            // read the sent tags.
+            let mut window = game.items().clone();
+            window.set_tags(TagRegistry::Block, Default::default());
+            window.set_tags(TagRegistry::Item, Default::default());
+            game.server_items = Some(Arc::new(window));
+            game.sync_pack_ids();
+            assert_eq!(reads(game), [20, 21, 11, 10, 42], "the sent tags");
+            send(game, &["minecraft:stray"], &["minecraft:iron_sword"], &[]);
+            assert_eq!(reads(game), [65535, 21, 11, 65535, 65535]);
+        });
+    }
+
     #[test]
     #[ignore = "daily"]
     fn a_client_reads_the_damage_type_tags_its_server_sent() {

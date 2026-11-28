@@ -1,0 +1,16 @@
+[package]
+name = "sunrise-entity-data"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The entity fields a save codec and the mob simulation both read, and the living state damage writes"
+
+[dependencies]
+sunrise-core = { path = "../sunrise-core" }
+sunrise-game-data = { path = "../sunrise-game-data" }
+sunrise-world = { path = "../sunrise-world" }
+mod_api = { package = "sunrise-mod-vocab", path = "../sunrise-mod-vocab" }
+
+[lints]
+workspace = true

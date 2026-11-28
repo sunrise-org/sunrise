@@ -76,7 +76,7 @@ prebuilt = ["dep:cap-std", "dep:cap-fs-ext", "dep:tar", "dep:xz4rust", "sunrise-
 sdk = []
 # Reading `index.json`, `browser_state`, and native `.smod` bundles without registry-building tools (`tar`, `xz4rust`, `object`, `page`).
 index-read = ["dep:minisign-verify", "dep:same-file"]
-# The mod registry's index (docs/modding/src/reference/registry-index.md): the launcher, the registry server and its CI.
+# The mod registry's index (docs/modding/src/reference/registry-index.md): the launcher and the registry's CI.
 index = ["index-read", "sdk", "dep:object", "dep:libc", "dep:tar", "dep:url", "dep:xz4rust", "dep:zune-jpeg"]
 
 [dev-dependencies]

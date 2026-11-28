@@ -407,7 +407,7 @@ fn player_support_uses_the_footprint_then_the_exact_feet_offset_on_both_sides() 
     with_client_game(|game| {
         let _server = logged_client(game);
         let player = game.local_player().unwrap();
-        let mut body = PlayerMotion::new(game.motion, Vec3::ZERO).unwrap();
+        let mut body = PlayerMotion::new(game.motion, Vec3::ZERO);
         body.entity_id = player.entity().id() as i32;
         game.player = Some(body);
         game.client

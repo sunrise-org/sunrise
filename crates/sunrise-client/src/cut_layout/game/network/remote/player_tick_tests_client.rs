@@ -18,11 +18,10 @@ fn client_player_ticks_on_the_death_screen_too() {
             remote.logged_in = true;
             remote.profile = 456;
             remote.entity_id = 42;
-            game.player = sunrise_sim::motion::PlayerMotion::new(
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
                 game.motion,
                 sunrise_core::geometry::Vec3::ZERO,
-            )
-            .ok();
+            ));
             game.client
                 .remote
                 .as_mut()

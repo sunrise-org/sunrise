@@ -34,7 +34,7 @@ fn client_player_reads_answer_from_the_local_players_copy() {
         remote.logged_in = true;
         remote.entity_id = 7;
         remote.profile = 42;
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 65.0, 0.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 65.0, 0.5)));
         let player = game.local_player().unwrap();
 
         // Before ADD_PLAYER, the entity's PlayerInfo is unresolved (`AbstractClientPlayer.gameMode()`

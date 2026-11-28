@@ -122,9 +122,10 @@ pub(crate) fn with_player(
         guest.position = START;
         guest.first_good = START;
         guest.last_reported = (START, [0.0, 0.0]);
-        guest.motion = Some(Box::new(
-            PlayerMotion::new(game.motion, Vec3::new(3.0, 64.0, 5.0)).unwrap(),
-        ));
+        guest.motion = Some(Box::new(PlayerMotion::new(
+            game.motion,
+            Vec3::new(3.0, 64.0, 5.0),
+        )));
         let (tx, rx) = mpsc::channel();
         guest.sender = PlayerSender::new(tx, Arc::default());
         let hub = &mut game.server.lan.as_mut().unwrap().hub;

@@ -56,10 +56,10 @@ pub(crate) fn attach_offscreen_window(
         game.set_renderer(renderer);
     }
     game.client.title.0 = None;
-    game.player = Some(
-        sunrise_sim::motion::PlayerMotion::new(game.motion, sunrise_core::geometry::Vec3::ZERO)
-            .unwrap(),
-    );
+    game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+        game.motion,
+        sunrise_core::geometry::Vec3::ZERO,
+    ));
     game.client.focused = true;
     (event_loop, id)
 }

@@ -46,7 +46,7 @@ pub(crate) fn burn_in(game: &mut sunrise_gameplay::game::ServerGame<'_>, pos: [i
         f64::from(pos[1]),
         f64::from(pos[2]) + 0.5,
     );
-    game.player = Some(PlayerMotion::new(game.motion, at).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, at));
     game.player.as_mut().unwrap().fire_ticks = 100;
     let events = {
         let (common, state) = sunrise_gameplay_common::game::SideGame::common_and_state_mut(game);

@@ -437,7 +437,7 @@ impl crate::game::ServerGame<'_> {
             _ => GameMode::Survival,
         };
         self.common.creative = self.common.mode == GameMode::Creative;
-        let mut player = PlayerMotion::new(self.common.motion, Vec3::new(at[0], at[1], at[2]))?;
+        let mut player = PlayerMotion::new(self.common.motion, Vec3::new(at[0], at[1], at[2]));
         player.spectator = self.common.mode == GameMode::Spectator;
         self.common.player = Some(player);
         if s.trace_events {
@@ -475,7 +475,7 @@ impl crate::game::ServerGame<'_> {
             }
         });
         self.common.level_events.clear();
-        self.server.sculk.known = self.common.world.chunks.keys().copied().collect();
+        self.server.sculk.level.known = self.common.world.chunks.keys().copied().collect();
         self.server.sculk.known_revision = Some(self.common.world.chunks.membership_revision());
         self.sculk_sync_index();
         let mut names: HashMap<u32, String> = HashMap::new();
@@ -526,7 +526,7 @@ impl crate::game::ServerGame<'_> {
         let mut region_last: HashMap<[i32; 3], String> = HashMap::new();
         let (mut last_player, mut last_rng) = (String::new(), String::new());
         let mut out = String::new();
-        self.server.lan_entity_events.clear();
+        self.server.lan_queues.entity_events.clear();
         for t in 0..=s.ticks {
             dispense_fixture::start_recording();
             if t > 0 {
@@ -637,7 +637,7 @@ impl crate::game::ServerGame<'_> {
                         "pos": [p.position.x, p.position.y, p.position.z]})
                     ));
                 }
-                for (_, event) in self.server.lan_entity_events.drain(..) {
+                for (_, event) in self.server.lan_queues.entity_events.drain(..) {
                     lines.push(format!("entity_event {event}"));
                 }
             }

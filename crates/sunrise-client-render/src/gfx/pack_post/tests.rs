@@ -143,9 +143,11 @@ fn a_custom_texture_over_a_buffer_ends_when_its_stage_flips_it() {
         jobs: None,
         mod_depth_targets: &[],
         mod_uniforms: &[],
+        display_uniforms: false,
         mod_uniform_mismatches: &mod_uniform_mismatches,
         mod_depth_target: std::cell::Cell::new(None),
         depth_compare: std::cell::Cell::new(wgpu::CompareFunction::LessEqual),
+        mod_depth_bias: Default::default(),
         mod_vertex: Default::default(),
     };
     let reads = |group: Group| {
@@ -243,9 +245,11 @@ fn a_png_under_a_name_of_its_own_is_not_bound() {
         packed: [None; BUFFERS],
         mod_depth_targets: &[],
         mod_uniforms: &[],
+        display_uniforms: false,
         mod_uniform_mismatches: &mod_uniform_mismatches,
         mod_depth_target: std::cell::Cell::new(None),
         depth_compare: std::cell::Cell::new(wgpu::CompareFunction::LessEqual),
+        mod_depth_bias: Default::default(),
         mod_vertex: Default::default(),
     };
     let (_, samplers, ..) = bindings(
@@ -330,9 +334,11 @@ fn an_image_without_an_entry_reads_zero() {
         jobs: None,
         mod_depth_targets: &[],
         mod_uniforms: &[],
+        display_uniforms: false,
         mod_uniform_mismatches: &mod_uniform_mismatches,
         mod_depth_target: std::cell::Cell::new(None),
         depth_compare: std::cell::Cell::new(wgpu::CompareFunction::LessEqual),
+        mod_depth_bias: Default::default(),
         mod_vertex: Default::default(),
     };
     let mut notes = Vec::new();
@@ -460,9 +466,11 @@ fn a_composite_program_blends_onto_its_buffer() {
         jobs: None,
         mod_depth_targets: &[],
         mod_uniforms: &[],
+        display_uniforms: false,
         mod_uniform_mismatches: &mod_uniform_mismatches,
         mod_depth_target: std::cell::Cell::new(None),
         depth_compare: std::cell::Cell::new(wgpu::CompareFunction::LessEqual),
+        mod_depth_bias: Default::default(),
         mod_vertex: Default::default(),
     };
     let draws = DrawUniforms::new(&device);

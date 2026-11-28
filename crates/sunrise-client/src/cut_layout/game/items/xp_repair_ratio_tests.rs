@@ -146,10 +146,10 @@ fn bad_ratios_never_break_the_repair() {
 #[ignore = "daily"]
 fn orb_pickup_repairs_through_the_part() {
     with_parts(|game, pickaxe, _| {
-        game.player = Some(
-            sunrise_sim::motion::PlayerMotion::new(game.motion, sunrise_core::geometry::Vec3::ZERO)
-                .unwrap(),
-        );
+        game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+            game.motion,
+            sunrise_core::geometry::Vec3::ZERO,
+        ));
         sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
         let player = game.player(123).unwrap();
         for (damage, answer, after, experience) in [

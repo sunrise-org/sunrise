@@ -130,8 +130,7 @@ fn a_replaced_finish_still_stops_the_use() {
                         remote.logged_in = true;
                         remote.entity_id = 71;
                         remote.profile = 0x0000_0001_0000_0002_0000_0003_0000_0004;
-                        let mut player =
-                            PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap();
+                        let mut player = PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5));
                         player.entity_id = 71;
                         game.player = Some(player);
                         game.bind_local_player_residency();

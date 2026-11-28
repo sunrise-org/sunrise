@@ -298,7 +298,7 @@ fn export_here(
         ("mod_api_generated.rs", generated.hooks.as_str()),
         ("mod_api_generated_host.rs", generated.host.as_str()),
     ];
-    let (keys, _) = crate::capability_keys::generate(root, &included)?;
+    let keys = crate::capability_keys::generate(root)?;
     let mut with_keys = included.to_vec();
     with_keys.push((crate::capability_keys::OUTPUT, keys.as_str()));
     let mut index = crate::index::game(root, &with_keys);

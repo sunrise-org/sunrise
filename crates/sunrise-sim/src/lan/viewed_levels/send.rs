@@ -189,10 +189,30 @@ impl Hub {
     /// ticked it, or a view pass): its changes go to the viewers, then its viewed-level sending.
     /// False, and nothing done, while nobody views it.
     pub fn viewed_pass(&mut self, ctx: &mut TickCtx) -> bool {
+        if !self.viewed_broadcast_in(ctx.world, true) {
+            return false;
+        }
+        self.send_viewed(ctx);
+        self.track_entities(ctx, None);
+        true
+    }
+
+    /// The incremental changes of the level in place since its last pass, to its viewers: its
+    /// light, then its blocks with their connection groups (`ChunkHolder.broadcastChanges`,
+    /// which `ServerChunkCache.tick` runs before the level's block entities tick). False, and
+    /// nothing done, while nobody views it. A view pass sends them before the block entities
+    /// that joined the level since are told they loaded, so a block placed with its group goes
+    /// with that group, as vanilla's tick order sends it; what their load changes goes after.
+    /// Whole columns (bulk changes and resends) wait for [`Self::viewed_pass`], after the
+    /// loads, so they carry the groups the loads publish.
+    pub fn viewed_broadcast_incremental(&mut self, world: &mut World) -> bool {
+        self.viewed_broadcast_in(world, false)
+    }
+
+    fn viewed_broadcast_in(&mut self, world: &mut World, whole: bool) -> bool {
         if !self.viewed_here() {
             return false;
         }
-        let world = &mut *ctx.world;
         if world.block_log.is_none() {
             world.block_log = Some(Vec::new());
         }
@@ -203,9 +223,11 @@ impl Hub {
             world.light_log = Some(Default::default());
         }
         self.broadcast_light_changes(world);
-        self.broadcast_block_changes(world);
-        self.send_viewed(ctx);
-        self.track_entities(ctx, None);
+        if whole {
+            self.broadcast_block_changes(world);
+        } else {
+            self.broadcast_incremental_block_changes(world);
+        }
         true
     }
 

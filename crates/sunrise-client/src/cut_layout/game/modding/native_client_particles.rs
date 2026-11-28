@@ -26,7 +26,7 @@ pub(crate) mod tests {
         }
         with_client_game(|game| {
             let eye = sunrise_core::geometry::Vec3::new(0.5, 200.0, 0.5);
-            game.player = Some(sunrise_sim::motion::PlayerMotion::new(game.motion, eye).unwrap());
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(game.motion, eye));
             let at = [6.5, 201.5, 10.5];
             let request = |audible| FireworksRequest {
                 at,

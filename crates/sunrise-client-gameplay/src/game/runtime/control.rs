@@ -22,7 +22,7 @@ pub(in crate::game) const PROTOCOL: &str = "0.1.0";
 /// The command groups the game serves, as `help` chains them: what `hello` reports as its features.
 pub(in crate::game) const FEATURES: &[&str] = &[
     "game", "station", "blocks", "lan", "friends", "render", "sculk", "agent", "ui", "options",
-    "events", "saves", "pad", "studio",
+    "events", "saves", "pad",
 ];
 
 /// `hello`: the protocol the socket speaks, the game's release and the command groups it serves.
@@ -49,7 +49,6 @@ pub(in crate::game) const HELP: &[&str] = &[
     "hotbar 1-9                     select a hotbar slot",
     "give ITEM [COUNT]              add items to the inventory",
     "render-distance N              chunks, 2..128",
-    "lod-distance N                 far surface chunks, 0 disables, up to 1024",
     "time TICKS                     set the time of day",
     "summon KIND [X Y Z] [baby]     spawn a mob (in front of the player without a position)",
     "mobs [RADIUS]                  list mobs near the player with their AI state",
@@ -193,7 +192,6 @@ impl crate::game::ClientGame<'_> {
             taa: s.sunrise.taa,
             upscale: s.sunrise.upscaling.ratio(),
             render_distance: self.client.streaming.radius,
-            lod_distance: self.far_terrain_choice().0,
             resources: self.common.options.resources.clone(),
             atlas: sunrise_client::gfx::capture::AtlasCheck::of(&self.client.client_pack.render),
         }
@@ -546,9 +544,6 @@ impl crate::game::ClientGame<'_> {
         if let Some(value) = self.friends_control(&words)? {
             return Ok(Some(value));
         }
-        if let Some(value) = self.studio_control(&words)? {
-            return Ok(Some(value));
-        }
         match self.agent_command(&words, line, reply, event_loop)? {
             super::agent::Handled::Reply(value) => return Ok(Some(value)),
             super::agent::Handled::Deferred => return Ok(None),
@@ -571,7 +566,6 @@ impl crate::game::ClientGame<'_> {
                 .chain(super::pad::HELP)
                 .chain(super::input_trace::HELP)
                 .chain(super::repro::HELP)
-                .chain(super::studio::HELP)
                 .collect::<Vec<_>>() }))),
             "setblock" | "fill" | "particle" | "signedit" => self.render_command(&words),
             "section-draws" => {
@@ -631,9 +625,7 @@ impl crate::game::ClientGame<'_> {
                     let r = self.client.renderer.0.as_mut().ok_or("no renderer")?;
                     if !r.keeps_capture_copies() {
                         r.keep_capture_copies(true);
-                        // The copies start empty: every section and far tile is meshed
-                        // again, as after a relayout.
-                        self.clear_lod();
+                        // The copies start empty: mesh every section again.
                         self.all_sections_changed();
                     }
                     Ok(Some(json!({ "ok": true, "keeping": true })))
@@ -711,8 +703,7 @@ impl crate::game::ClientGame<'_> {
                         // Auto starts from off and decides from the frames that follow.
                         self.client.gpu_culling_auto.reset();
                         r.set_gpu_culling(mode == "on")?;
-                        // The setting, as its switch sets it; not saved here (as
-                        // `lod-distance`): settings changes and new renderers keep it.
+                        // Settings changes and new renderers keep this unsaved choice.
                         self.client.settings.sunrise.gpu_culling = match mode {
                             "on" => sunrise_client::graphics::GpuCullingMode::On,
                             "auto" => sunrise_client::graphics::GpuCullingMode::Auto,
@@ -1086,19 +1077,6 @@ impl crate::game::ClientGame<'_> {
                 self.apply_settings();
                 ok()
             }
-            "lod-distance" => {
-                let n: u32 = arg(1)?.parse()?;
-                if n > sunrise_client::lod::MAX_CHUNKS {
-                    return Err(format!(
-                        "LOD distance must be 0..{}",
-                        sunrise_client::lod::MAX_CHUNKS
-                    )
-                    .into());
-                }
-                self.client.settings.sunrise.lod_distance = n;
-                self.apply_settings();
-                ok()
-            }
             "time" => {
                 let time: i64 = arg(1)?.parse()?;
                 self.common.world.day_time = time;
@@ -1295,7 +1273,6 @@ impl crate::game::ClientGame<'_> {
                     "graphics-advanced" => Page::GraphicsAdvanced,
                     "graphics-hdr" => Page::GraphicsHdr,
                     "extras" => Page::Extras,
-                    "pvp" => Page::Pvp,
                     "credits" => Page::Credits,
                     "sunrise" => Page::Sunrise,
                     "agent" => Page::Agent,
@@ -1565,7 +1542,6 @@ impl crate::game::ClientGame<'_> {
             Screen::Win => "win",
             Screen::DebugOptions => "debug-options",
             Screen::Mod => "mod",
-            Screen::HudEditor => "hud-editor",
         }
     }
 
@@ -1667,7 +1643,6 @@ impl crate::game::ClientGame<'_> {
                 "arena_bytes": arena_bytes,
                 "section_vertex_bytes": section_vertex_bytes,
                 "packed_layout": r.packed_layout(),
-                "vertex_bytes_split": r.vertex_bytes_split(),
                 "gpu_allocated_bytes": memory.as_ref().map(|m| m.total_allocated_bytes),
                 "gpu_reserved_bytes": memory.as_ref().map(|m| m.total_reserved_bytes),
             })
@@ -1680,20 +1655,6 @@ impl crate::game::ClientGame<'_> {
             .map(|k| format!("{k:?}"))
             .collect();
         physical_keys.sort();
-        let lod = json!({
-            "distance": self.client.settings.sunrise.lod_distance,
-            "effective_distance": self.lod_distance(),
-            "terrain_distance": self.terrain_distance(),
-            "source": if self.client.lod.0.is_none() { "none" } else if self.client.integrated.is_some() { "integrated" } else if self.server_far_terrain().is_some() { "server" } else if self.client.remote.is_some() { "server-terrain" } else { "local" },
-            "source_attempted": self.client.lod_source_attempted,
-            "active_tiles": self.client.lod.0.as_ref().map_or(0, |lod| lod.stats().0),
-            "cached_tiles": self.client.lod.0.as_ref().map_or(0, |lod| lod.stats().1),
-            "far_detail": self.client.settings.sunrise.far_detail.name(),
-            "resident_quads": self.client.renderer.0.as_ref().map_or(0, |r| r.lod_quads()),
-            "levels": self.client.renderer.0.as_ref().map_or_else(Vec::new, |r| r.lod_levels()),
-            "pending_observations": self.client.lod_observe.len(),
-            "refined_samples": self.client.lod.0.as_ref().map_or(0, |lod| lod.refined_samples()),
-        });
         // The other players' cracks this client draws (LevelRenderer.destroyingBlocks).
         let destroying: Vec<_> = self
             .client
@@ -1794,29 +1755,9 @@ impl crate::game::ClientGame<'_> {
             });
         status["fishing"] = json!(fishing);
         status["fight"] = fight;
-        status["lod"] = lod;
         // Parallel Tick: the setting, whether the next tick shares its work, and Auto's state.
         let (setting, on, auto) = sunrise_sim::parallel::status();
         status["parallel_tick"] = json!({ "setting": setting, "on": on, "auto": auto });
-        let (target, sampled) = self
-            .client
-            .lod
-            .0
-            .as_ref()
-            .map_or((0, 0), |lod| lod.progress());
-        status["lod"]["target_tiles"] = target.into();
-        status["lod"]["sampled_target_tiles"] = sampled.into();
-        let (kept, kept_bytes) = self.client.lod.0.as_ref().map_or((0, 0), |lod| lod.kept());
-        status["lod"]["kept_tiles"] = kept.into();
-        status["lod"]["kept_mb"] = (kept_bytes >> 20).into();
-        let (wanted, refined) = self
-            .client
-            .lod
-            .0
-            .as_ref()
-            .map_or((0, 0), |lod| lod.detail_progress());
-        status["lod"]["detail_target_columns"] = wanted.into();
-        status["lod"]["refined_target_columns"] = refined.into();
         status["pending_uploads"] = self.client.pending_uploads.0.len().into();
         status["destroying"] = json!(destroying);
         status["physical_keys"] = json!(physical_keys);

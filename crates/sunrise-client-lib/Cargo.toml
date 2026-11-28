@@ -143,7 +143,7 @@ windows-segment-heap = []
 workspace = true
 
 [dev-dependencies]
-sunrise-client-lib = { path = ".", default-features = false, features = ["test-dry-side", "test-payload-probe"] }
+sunrise-client-lib = { path = ".", default-features = false, features = ["test-dry-side", "test-payload-probe", "test-publication-scope"] }
 sunrise-threads = { path = "../sunrise-threads", features = ["test-allocation-probe", "test-game-dir"] }
 tempfile = "3"
 mod_platform = { package = "sunrise-mod-api", path = "../sunrise-mod-api", features = ["testing"] }
@@ -151,6 +151,7 @@ mod_api = { package = "sunrise-mod-vocab", path = "../sunrise-mod-vocab", featur
 # ui_theme's unit tests draw text in the design system's fonts.
 sunrise-theme = { path = "../sunrise-theme" }
 sunrise-client-render = { path = "../sunrise-client-render", features = ["test-support"] }
+sunrise-core = { path = "../sunrise-core", features = ["test-support"] }
 sunrise-items = { path = "../sunrise-items", features = ["test-support"] }
 sunrise-sim = { path = "../sunrise-sim", features = ["test-support"] }
 sunrise-world = { path = "../sunrise-world", features = ["test-support"] }
@@ -243,6 +244,10 @@ path = "../sunrise-client/tests/custom_component_wire.rs"
 [[test]]
 name = "custom_bundle_wire"
 path = "../sunrise-client/tests/custom_bundle_wire.rs"
+
+[[test]]
+name = "custom_registry_join"
+path = "../sunrise-client/tests/custom_registry_join.rs"
 
 [[test]]
 name = "datapack_join"

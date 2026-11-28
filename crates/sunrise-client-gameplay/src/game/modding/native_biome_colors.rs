@@ -9,8 +9,8 @@ use std::sync::Arc;
 // Native mods call it; nothing in Sunrise does.
 impl ClientGame<'_> {
     /// Asks `native_biome_colors` again for every biome and, when the colours
-    /// differ from those in use, rebuilds every loaded section and the far
-    /// terrain with them (`LevelRenderer.allChanged`, as changing Biome Blend
+    /// differ from those in use, rebuilds every loaded section
+    /// (`LevelRenderer.allChanged`, as changing Biome Blend
     /// does). Call it when your colours change (a new season, a new day of a
     /// slow fade) and once when the player joins, not every frame: a rebuild
     /// takes the workers a few seconds.
@@ -37,11 +37,8 @@ impl ClientGame<'_> {
             self.client.client_pack.context = self.client.client_pack.context_with(biomes);
         }
         let context = self.worker_context();
-        self.side_clear_lod();
         self.client
             .streaming
             .reload_resources(&mut self.common.world, context);
     }
 }
-
-use sunrise_gameplay_common::game::side_ops::presentation::PresentationSideGameExt as _;

@@ -54,7 +54,7 @@ fn a_mod_takes_the_weather_effects_over() {
                         .insert((cx, cz), Arc::new(Chunk::empty(cx, cz)));
                 }
             }
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 65.0, 8.5)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 65.0, 8.5)));
             let stone = game
                 .pack
                 .assets

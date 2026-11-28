@@ -78,8 +78,10 @@ fn the_end_fight_hooks_cancel_answer_and_hear_the_fight() {
                 }),
                 "set up as the End opens"
             );
-            game.common.player =
-                Some(PlayerMotion::new(game.common.motion, Vec3::new(0.5, 128.0, 0.5)).unwrap());
+            game.common.player = Some(PlayerMotion::new(
+                game.common.motion,
+                Vec3::new(0.5, 128.0, 0.5),
+            ));
             // The chunks `EnderDragonFight.isArenaLoaded` waits for.
             {
                 let streaming = &mut game.server.streaming;

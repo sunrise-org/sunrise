@@ -64,7 +64,7 @@ pub(crate) mod destroyed_contents_tests {
             std::sync::Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)),
         );
         let feet = Vec3::new(8.5, 70.0, 8.5);
-        game.player = Some(sunrise_sim::motion::PlayerMotion::new(game.motion, feet).unwrap());
+        game.player = Some(sunrise_sim::motion::PlayerMotion::new(game.motion, feet));
         game.update_chunk_tickets();
         let boxed = sunrise_items::item_data::parse_stack(
             r#"{id:"minecraft:shulker_box",count:1,components:{"minecraft:container":[
@@ -112,7 +112,7 @@ pub(crate) mod escape_tests {
         let mut game_resources = None;
         let mut game = server_game(&mut game_resources);
         let feet = sunrise_core::geometry::Vec3::new(8.5, 70.0, 8.5);
-        game.player = Some(sunrise_sim::motion::PlayerMotion::new(game.motion, feet).unwrap());
+        game.player = Some(sunrise_sim::motion::PlayerMotion::new(game.motion, feet));
         crate::game::native_entity_refs::tests::prepare_entity_ticking_neighborhood(
             &mut game,
             sunrise_core::position::ChunkPos::new(0, 0),
@@ -462,8 +462,10 @@ pub(crate) mod expire_tests {
             with_game(|game| {
                 expiry_level(game);
                 prepare_entity_ticking_neighborhood(game, ChunkPos::new(0, 0));
-                game.player =
-                    Some(PlayerMotion::new(game.motion, Vec3::new(AT[0], AT[1], AT[2])).unwrap());
+                game.player = Some(PlayerMotion::new(
+                    game.motion,
+                    Vec3::new(AT[0], AT[1], AT[2]),
+                ));
                 game.update_chunk_tickets();
                 assert!(game.entity_ticking_area()(2, 2));
 

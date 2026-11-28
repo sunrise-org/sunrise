@@ -53,7 +53,7 @@ pub(crate) fn run_a_bolt_summoned_with_nbt_strikes_and_goes() {
         prepare_entity_ticking_neighborhood(game, ChunkPos::new(0, 0));
         prepare_entity_ticking_neighborhood(game, ChunkPos::new(15, 0));
         prepare_entity_ticking_neighborhood(game, ChunkPos::new(16, 0));
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 230.0, 8.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 230.0, 8.5)));
         bind_local_player(game, 1, ORACLE_PLAYER_UUID);
         game.creative = true;
         game.ui.difficulty = 2;

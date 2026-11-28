@@ -28,7 +28,7 @@ pub(crate) mod tests {
             remote.logged_in = true;
             remote.entity_id = 7;
             remote.profile = 42;
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             let me = game.living(game.entity(7).unwrap()).unwrap();
             assert_eq!(
                 me.effect_blend_factor(

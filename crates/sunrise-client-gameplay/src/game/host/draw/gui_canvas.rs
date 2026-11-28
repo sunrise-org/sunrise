@@ -3,8 +3,8 @@
 use super::text_layout::LabelLayout;
 use crate::game::ClientGame;
 use mod_api::{
-    GuiBlitRegion, GuiCanvas, GuiDrawError, GuiSpriteRegion, GuiVertex, ItemStack, Text,
-    TextLayoutSize, TextLayoutSpec,
+    GuiBlitRegion, GuiCanvas, GuiDrawError, GuiEntity, GuiEntityError, GuiEntityView,
+    GuiSpriteRegion, GuiVertex, ItemStack, Text, TextLayoutSize, TextLayoutSpec,
 };
 use sunrise_client::{
     hud::{GuiSprite, HudAtlas, HudBatch},
@@ -225,6 +225,38 @@ fn check_blit_region(dst: [f32; 4], uv: [f32; 2], tex: [i32; 2]) -> Result<(), G
         return Err(GuiDrawError::BadBlitRegion);
     }
     Ok(())
+}
+
+/// A refused entity draw as the canvas reports it: no game to draw in is the canvas's own
+/// `Unavailable`, every other cause its `Entity` refusal.
+fn entity_error(error: GuiEntityError) -> GuiDrawError {
+    match error {
+        GuiEntityError::Unavailable => GuiDrawError::Unavailable,
+        error => GuiDrawError::Entity(error),
+    }
+}
+
+/// The screen bounds (`[x0, y0, x1, y1]`) of box `[x0, y0, x1, y1]` under `pose`.
+fn posed_bounds(pose: Pose, [x0, y0, x1, y1]: [f32; 4]) -> Result<[f32; 4], GuiDrawError> {
+    let corners = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(|p| pose_point(pose, p));
+    if !corners.as_flattened().iter().all(|v| v.is_finite()) {
+        return Err(GuiDrawError::NotFinite);
+    }
+    let mut bounds = [
+        f32::INFINITY,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::NEG_INFINITY,
+    ];
+    for [x, y] in corners {
+        bounds = [
+            bounds[0].min(x),
+            bounds[1].min(y),
+            bounds[2].max(x),
+            bounds[3].max(y),
+        ];
+    }
+    Ok(bounds)
 }
 
 /// The API count is nonzero, but vanilla also treats air as an empty stack.
@@ -563,6 +595,29 @@ impl GuiCanvas for GameGuiCanvas<'_, '_> {
             self.paint(|batch, atlas| {
                 paint_player_face(batch, atlas, skin, dst, hat, flip, argb);
             })
+        })
+    }
+
+    fn entity(&mut self, entity: &GuiEntity, view: GuiEntityView) -> Result<(), GuiDrawError> {
+        if !view.is_drawable() {
+            return Err(GuiDrawError::Entity(GuiEntityError::BadView));
+        }
+        let game = self.game.ok_or(GuiDrawError::Unavailable)?;
+        // The entity's own depth pass is cut at the posed box, as `DrawContext::entity` cuts it
+        // at the box; the group's scissor still applies on top.
+        let pose = self.pose;
+        let clip = posed_bounds(pose, view.rect)?;
+        self.paint_in_pose(pose, |batch, _| {
+            let start = batch.vertices.len();
+            game.native_draw_entity_clipped(batch, entity, view, clip)
+                .map_err(entity_error)?;
+            // The depth pass's cut is an axis-aligned rectangle of the screen: exact for a pose
+            // that keeps the axes, but a turned one would let the model spill from the box into
+            // the corners of its bounds. Cut the geometry to the box before the pose turns it.
+            if pose[1] != 0.0 || pose[2] != 0.0 {
+                batch.crop_since(start, view.rect);
+            }
+            Ok(())
         })
     }
 }
@@ -1291,5 +1346,183 @@ mod tests {
                 ([10.0, 26.0], 0x0099_8877),
             ]
         );
+    }
+
+    /// With no game (the renderer-only canvas), `entity` answers `Unavailable`, after refusing a
+    /// view that can't be drawn as the game would; neither draws anything.
+    #[test]
+    fn entity_needs_a_game_and_refuses_an_undrawable_view_first() {
+        let atlas = HudAtlas::build(&ResourceSource::directory(
+            "/nonexistent/sunrise-test-assets".into(),
+        ))
+        .unwrap();
+        let mut batch = HudBatch::scratch([320, 240]);
+        let zombie = GuiEntity::kind("minecraft:zombie");
+        let look = mod_api::GuiEntityLook::At([8.0, 8.0]);
+        GameGuiCanvas::draw(&mut batch, &atlas, None, None, &mut |root| {
+            let view = GuiEntityView::new([0.0, 0.0, 16.0, 16.0], 8.0, 0.0, look);
+            assert_eq!(root.entity(&zombie, view), Err(GuiDrawError::Unavailable));
+            let empty = GuiEntityView::new([0.0, 0.0, 0.0, 16.0], 8.0, 0.0, look);
+            assert_eq!(
+                root.entity(&zombie, empty),
+                Err(GuiDrawError::Entity(GuiEntityError::BadView))
+            );
+            Ok(())
+        })
+        .unwrap();
+        assert!(batch.vertices.is_empty());
+        assert!(batch.blends.is_empty());
+    }
+
+    /// An item decorator's canvas draws a mob over the slot (#6023): the faces
+    /// `DrawContext::entity` draws for the same view, moved by the canvas's pose, with the
+    /// entity's depth pass cut at the posed box and the scope's scissor over it. A refused call
+    /// leaves the batch as it was.
+    #[test]
+    #[ignore = "daily"]
+    fn an_item_decorator_canvas_draws_a_mob_in_its_pose_and_scissor() {
+        const NAME: &str = "game::host::draw::gui_canvas::tests::an_item_decorator_canvas_draws_a_mob_in_its_pose_and_scissor";
+        // The fixture publishes game keys, particle providers and language state in its
+        // process: a fresh child runs this test alone.
+        if crate::game::native_entity_refs::tests::run_fresh_cases(
+            NAME,
+            "SUNRISE_GUI_CANVAS_ENTITY",
+            &["run"],
+        ) {
+            return;
+        }
+        crate::game::native_entity_refs::tests::with_client_game(|game| {
+            let look = mod_api::GuiEntityLook::Turned {
+                yaw: 30.0,
+                pitch: 0.0,
+            };
+            let view = GuiEntityView::new([0.0, 0.0, 16.0, 16.0], 8.0, 0.0, look);
+            let zombie = GuiEntity::kind("minecraft:zombie");
+            let mut plain = HudBatch::scratch([320, 240]);
+            game.native_draw_entity(&mut plain, &zombie, view).unwrap();
+            assert!(!plain.vertices.is_empty(), "the zombie's model is drawn");
+
+            let mut batch = HudBatch::scratch([320, 240]);
+            let game = &*game;
+            GameGuiCanvas::draw_root(
+                &mut batch,
+                &game.client.gui.atlas,
+                Some(game),
+                None,
+                true,
+                &mut |root| {
+                    root.scope(
+                        &[PoseOp::Translate(40.0, 30.0)],
+                        Some([0.0, 0.0, 16.0, 16.0]),
+                        &mut |slot| slot.entity(&zombie, view),
+                    )
+                },
+            )
+            .unwrap();
+            assert_eq!(batch.vertices.len(), plain.vertices.len());
+            for (drawn, want) in batch.vertices.iter().zip(&plain.vertices) {
+                assert_eq!(drawn.pos, [want.pos[0] + 40.0, want.pos[1] + 30.0]);
+                assert_eq!(
+                    (drawn.uv, drawn.color, drawn.depth),
+                    (want.uv, want.color, want.depth)
+                );
+            }
+            let n = batch.vertices.len() as u32;
+            assert_eq!(
+                batch.scissors_in(0..n).collect::<Vec<_>>(),
+                [(0..n, Some([40.0, 30.0, 56.0, 46.0]))]
+            );
+            let device = |v: f32| (v * batch.scale).max(0.0) as u32;
+            let (x0, y0) = (device(40.0), device(30.0));
+            let clip = [x0, y0, device(56.0) - x0, device(46.0) - y0];
+            assert_eq!(batch.runs(), [(0..n, HudBlend::Depth(clip))]);
+
+            let blends = batch.blends.clone();
+            GameGuiCanvas::draw_root(
+                &mut batch,
+                &game.client.gui.atlas,
+                Some(game),
+                None,
+                true,
+                &mut |root| {
+                    let empty = GuiEntityView::new([0.0, 0.0, 0.0, 16.0], 8.0, 0.0, look);
+                    assert_eq!(
+                        root.entity(&zombie, empty),
+                        Err(GuiDrawError::Entity(GuiEntityError::BadView))
+                    );
+                    let huge = GuiEntityView::new([0.0, 0.0, 16.0, 16.0], f32::MAX, 0.0, look);
+                    assert_eq!(
+                        root.entity(&zombie, huge),
+                        Err(GuiDrawError::Entity(GuiEntityError::BadView))
+                    );
+                    assert_eq!(
+                        root.entity(&GuiEntity::kind("minecraft:no_such_mob"), view),
+                        Err(GuiDrawError::Entity(GuiEntityError::UnknownType))
+                    );
+                    // A pose that takes the box out of finite range.
+                    root.scope(&[PoseOp::Scale(f32::MAX, 1.0)], None, &mut |wide| {
+                        assert_eq!(wide.entity(&zombie, view), Err(GuiDrawError::NotFinite));
+                        Ok(())
+                    })
+                },
+            )
+            .unwrap();
+            assert_eq!(batch.vertices.len(), n as usize);
+            assert_eq!(batch.blends, blends);
+
+            // A turned pose and an oversized model: the box is cut as the box turns, and the
+            // scope's scissor, with bounds of its own, applies over that.
+            let turned = [PoseOp::Translate(90.0, 70.0), PoseOp::Rotate(0.6)];
+            let mut pose = IDENTITY;
+            turned.into_iter().for_each(|op| pose_apply(&mut pose, op));
+            let big = GuiEntityView::new([0.0, 0.0, 16.0, 16.0], 40.0, 0.0, look);
+            let mut plain = HudBatch::scratch([320, 240]);
+            game.native_draw_entity(&mut plain, &zombie, big).unwrap();
+            let outside =
+                |[x, y]: [f32; 2]| !(0.0..=16.0).contains(&x) || !(0.0..=16.0).contains(&y);
+            assert!(
+                plain.vertices.iter().any(|v| outside(v.pos)),
+                "the model overflows its box"
+            );
+            let mut batch = HudBatch::scratch([320, 240]);
+            GameGuiCanvas::draw_root(
+                &mut batch,
+                &game.client.gui.atlas,
+                Some(game),
+                None,
+                true,
+                &mut |root| {
+                    // The outer scissor is screen [60, 40, 120, 100], unlike the posed box's bounds.
+                    root.scope(&[], Some([60.0, 40.0, 60.0, 60.0]), &mut |outer| {
+                        outer.scope(&turned, None, &mut |slot| slot.entity(&zombie, big))
+                    })
+                },
+            )
+            .unwrap();
+            assert!(!batch.vertices.is_empty());
+            // Back through the pose, every surviving vertex lies in the local box.
+            let det = pose[0] * pose[3] - pose[1] * pose[2];
+            for v in &batch.vertices {
+                let (dx, dy) = (v.pos[0] - pose[4], v.pos[1] - pose[5]);
+                let local = [
+                    (pose[3] * dx - pose[2] * dy) / det,
+                    (pose[0] * dy - pose[1] * dx) / det,
+                ];
+                assert!(
+                    local.iter().all(|c| (-0.01..=16.01).contains(c)),
+                    "{local:?} is outside the local box"
+                );
+            }
+            let n = batch.vertices.len() as u32;
+            assert_eq!(
+                batch.scissors_in(0..n).collect::<Vec<_>>(),
+                [(0..n, Some([60.0, 40.0, 120.0, 100.0]))]
+            );
+            let [x0, y0, x1, y1] = posed_bounds(pose, [0.0, 0.0, 16.0, 16.0]).unwrap();
+            let device = |v: f32| (v * batch.scale).max(0.0) as u32;
+            let (x0, y0) = (device(x0), device(y0));
+            let clip = [x0, y0, device(x1) - x0, device(y1) - y0];
+            assert_eq!(batch.runs(), [(0..n, HudBlend::Depth(clip))]);
+        });
     }
 }

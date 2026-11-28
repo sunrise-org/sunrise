@@ -1,18 +1,17 @@
 use super::*;
 #[test]
+#[ignore = "daily"]
 fn real_rail_mips_do_not_change_with_larger_array_layers() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../.local/sunrise-client")
-        .join(sunrise_core::VANILLA_VERSION);
-    if !root
-        .join("assets/minecraft/textures/block/rail.png")
-        .exists()
-    {
-        return;
-    }
-    let mut sprites = crate::sprites::Sprites::new(
-        crate::resource_source::ResourceSource::directory(root.clone()),
-    );
+    let root = crate::prepared_test_root::prepared_root(&[&[
+        "assets/minecraft/textures/block/rail.png",
+        "assets/minecraft/textures/block/powered_rail.png",
+        "assets/minecraft/textures/block/powered_rail_on.png",
+        "assets/minecraft/textures/block/detector_rail.png",
+        "assets/minecraft/textures/block/activator_rail.png",
+        "assets/minecraft/textures/block/oak_sign.png",
+    ]]);
+    let mut sprites =
+        crate::sprites::Sprites::new(crate::resource_source::ResourceSource::directory(root));
     let layers: Vec<_> = [
         "rail",
         "powered_rail",
@@ -27,6 +26,10 @@ fn real_rail_mips_do_not_change_with_larger_array_layers() {
     let native: Vec<_> = layers
         .iter()
         .map(|&layer| {
+            assert_eq!(
+                sprites.mips[layer as usize].native_size, 16,
+                "rail layer {layer} must be a decoded 16px sprite"
+            );
             let start = layer as usize * 16 * 16 * 4;
             mip_chain(
                 &sprites.pixels[start..start + 16 * 16 * 4],

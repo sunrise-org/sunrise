@@ -67,7 +67,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (name, json) in resources {
         tags.apply_json(&name, "vanilla", &json)?;
     }
-    let built = tags.build(|name, _| registry.default_state(name).map(|_| name.to_owned()))?;
+    let built = tags.bind(|name, _| registry.default_state(name).map(|_| name.to_owned()));
     assert!(built.missing.is_empty());
     let members = |name: &str| -> BTreeSet<String> {
         built.tags.get(name).unwrap().iter().cloned().collect()

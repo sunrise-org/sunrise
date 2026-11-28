@@ -24,8 +24,7 @@ fn glide(hand: usize, creative: bool, components: Option<&str>) -> u32 {
             let body = sunrise_sim::motion::PlayerMotion::new(
                 game.motion,
                 sunrise_core::geometry::Vec3::new(3.0, 80.0, 5.0),
-            )
-            .unwrap();
+            );
             game.server
                 .lan
                 .as_mut()

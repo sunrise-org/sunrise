@@ -1,9 +1,8 @@
 //! Membership and revisions of block entities attached to section meshes.
 use super::*;
 impl Renderer {
-    /// What goes with section `key`'s new mesh, before its quads go in: its old mesh is
-    /// released. The fade it keeps.
-    pub(super) fn before_mesh(&mut self, key: SectionKey, mesh: &MeshFacts) -> Option<Instant> {
+    /// Update the metadata for the new mesh and release the old one.
+    pub(super) fn before_mesh(&mut self, key: SectionKey, mesh: &MeshFacts) {
         self.occlusion.load_column(key.0, key.2);
         self.occlusion.set(key, mesh.visibility);
         let changed = self.block_entities.update(key, mesh.block_entities);
@@ -21,29 +20,16 @@ impl Renderer {
             self.block_entity_section_revisions
                 .insert(key, next_block_entity_revision());
         }
-        if !self.lod_retiring.is_empty() {
-            self.lod_retiring.remove(&key);
-        }
         if mesh.translucent && !self.sections.contains(key) {
             // New translucent terrain, not an edit's remesh: large pages wait for it.
             self.shrink_gate.wait(Instant::now(), SHRINK_SETTLE);
         }
-        let fading = match self.sections.find(key) {
-            Some(old) => old.fading,
-            None if !self.lods.is_empty() => {
-                let now = std::time::Instant::now();
-                self.newest_lod_fade = Some(now);
-                Some(now)
-            }
-            None => None,
-        };
-        if fading.is_none() && !self.section_uploaded.contains_key(&key) {
+        if let std::collections::hash_map::Entry::Vacant(entry) = self.section_uploaded.entry(key) {
             let now = std::time::Instant::now();
-            self.section_uploaded.insert(key, now);
+            entry.insert(now);
             self.newest_upload = Some(now);
         }
         self.release_section(key);
-        fading
     }
 
     /// A moving payload must disappear immediately, before the asynchronous remesh arrives.

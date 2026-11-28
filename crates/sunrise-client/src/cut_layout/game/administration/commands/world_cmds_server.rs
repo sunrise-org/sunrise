@@ -20,8 +20,7 @@ pub(crate) mod allay_owner_damage_tests {
             game.build_registries();
             let actual = [101, 102, 103, 104];
             let other = [10, 20, 30, 40];
-            let mut player =
-                sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::ZERO).unwrap();
+            let mut player = sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::ZERO);
             player.entity_id = 7;
             game.player = Some(player);
             game.level.player_uuid = Some(actual);
@@ -225,7 +224,7 @@ pub(crate) mod vehicle_damage_command_tests {
         use sunrise_gameplay_common::game::commands_common::Target;
         use sunrise_sim::motion::PlayerMotion;
         with_game(|game| {
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 100.0, 4.5)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 100.0, 4.5)));
             sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 1, 99);
             game.creative = true;
             assert!(game.run_command("fill 0 99 0 15 99 15 stone"));
@@ -353,7 +352,7 @@ pub(crate) mod vehicle_damage_command_tests {
         use sunrise_core::geometry::Vec3;
         use sunrise_sim::motion::PlayerMotion;
         with_game(|game| {
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 200.0, 4.5)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 200.0, 4.5)));
             sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 1, 99);
             assert!(
                 game.run_command("summon pig 6.5 200 4.5 {UUID:[I;82,0,0,1],NoAI:1b,NoGravity:1b}")

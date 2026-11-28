@@ -261,10 +261,59 @@ impl ClientGame<'_> {
         menu: MenuRef,
         slot: usize,
     ) -> Option<Option<ItemStack>> {
-        let name = self.native_client_menu_name(menu)?;
-        let index =
-            sunrise_gameplay_common::game::inventory_screen_slot(name, i32::try_from(slot).ok()?)?;
+        let index = self.client_menu_game_slot(menu, slot)?;
         Some(self.slot_view(index))
+    }
+
+    /// `Slot.mayPlace`, then `Slot.getMaxStackSize`, of the local player's open menu as this
+    /// client's click prediction asks them: the menu is built as a click builds it, with the
+    /// mods' `menu_slot_rules` and `can_equip` Parts lent. None for a stale or foreign menu, an
+    /// index outside it, or a menu the client's prediction does not model.
+    pub(in crate::game) fn menu_slot_holds(
+        &self,
+        menu: MenuRef,
+        slot: usize,
+        stack: &ItemStack,
+    ) -> Option<u32> {
+        self.with_client_menu_slot(menu, slot, |built, env| built.slot_holds(env, slot, stack))
+    }
+
+    /// `Slot.mayPickup` of the local player's open menu as this client's click prediction asks
+    /// it, with the stack the slot holds. None as for [`Self::menu_slot_holds`].
+    pub(in crate::game) fn menu_slot_gives(&self, menu: MenuRef, slot: usize) -> Option<bool> {
+        self.with_client_menu_slot(menu, slot, |built, env| built.slot_gives(env, slot))
+    }
+
+    /// Ask the local player's live menu, built as a click builds it, about menu index `slot`.
+    /// The built menu numbers its slots as vanilla's menu does (the indices `ContainerClick`
+    /// carries), so `slot` is asked as it is, the crafter's inert result slot included. None
+    /// when the built menu is not the one `menu` names (another registry menu type: a window the
+    /// client's prediction does not model) or has no such slot.
+    fn with_client_menu_slot<R>(
+        &self,
+        menu: MenuRef,
+        slot: usize,
+        ask: impl FnOnce(&sunrise_sim::menu::Menu, &sunrise_sim::menu::Env) -> R,
+    ) -> Option<R> {
+        use sunrise_gameplay_common::game::{native_menu_ids, remote};
+        let name = self.native_client_menu_name(menu)?;
+        self.with_client_menu(false, |built, env| {
+            let built = &built.menu;
+            let models = match name {
+                "inventory" => built.registry_id() == Some(sunrise_sim::menu::INVENTORY_MENU),
+                mount if mount.starts_with(remote::MOUNT_MENU) => {
+                    built.registry_id() == Some(native_menu_ids::MOUNT_MENU)
+                }
+                other => built.registry_id() == Some(other),
+            };
+            (models && slot < built.slot_count()).then(|| ask(built, env))
+        })?
+    }
+
+    /// The game slot that menu index `slot` of the local player's live menu shows.
+    fn client_menu_game_slot(&self, menu: MenuRef, slot: usize) -> Option<usize> {
+        let name = self.native_client_menu_name(menu)?;
+        sunrise_gameplay_common::game::inventory_screen_slot(name, i32::try_from(slot).ok()?)
     }
 }
 pub(in crate::game) fn client_click_ops(
@@ -473,13 +522,10 @@ pub mod tests {
             // In the world, past the level load: the inventory is a screen hooks see.
             game.client.remote.as_mut().unwrap().level_load.finish();
             game.client.title.0 = None;
-            game.player = Some(
-                sunrise_sim::motion::PlayerMotion::new(
-                    game.motion,
-                    sunrise_core::geometry::Vec3::new(0.5, 64.0, 0.5),
-                )
-                .unwrap(),
-            );
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                sunrise_core::geometry::Vec3::new(0.5, 64.0, 0.5),
+            ));
             game.client.screen = super::super::Screen::Inventory;
             let menu = game
                 .player_container_menu(game.local_player().unwrap())
@@ -593,8 +639,7 @@ pub mod tests {
         let mut body = sunrise_sim::motion::PlayerMotion::new(
             game.common.motion,
             sunrise_core::geometry::Vec3::ZERO,
-        )
-        .unwrap();
+        );
         body.entity_id = remote.entity_id;
         game.player = Some(body);
         event_loop

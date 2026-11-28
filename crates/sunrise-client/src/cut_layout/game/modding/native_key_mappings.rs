@@ -6,13 +6,10 @@ mod tests {
     fn opening_and_closing_a_direct_screen_discards_pending_clicks() {
         crate::game::server_side::native_entity_refs::tests::with_client_game(|game| {
             game.client.title.0 = None;
-            game.player = Some(
-                sunrise_sim::motion::PlayerMotion::new(
-                    game.motion,
-                    sunrise_core::geometry::Vec3::ZERO,
-                )
-                .unwrap(),
-            );
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                sunrise_core::geometry::Vec3::ZERO,
+            ));
             game.client
                 .mod_keys
                 .bind([sunrise_client::keymapping::ModBinding {
@@ -30,9 +27,12 @@ mod tests {
                 false,
                 0,
             );
-            game.open_hud_editor(false);
-            assert!(matches!(game.client.screen, crate::game::Screen::HudEditor));
-            game.close_hud_editor();
+            game.open_advancements(false);
+            assert!(matches!(
+                game.client.screen,
+                crate::game::Screen::Advancements
+            ));
+            game.close_advancements();
             assert!(!pending.consume_click(game).unwrap());
         });
     }

@@ -34,7 +34,7 @@ pub(crate) fn saved_attributes(game: &mut sunrise_gameplay::game::ServerGame<'_>
 #[ignore = "daily"]
 fn failed_modifier_value_get_leaves_the_attribute_store_and_its_save_alone() {
     with_game(|game| {
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 100.0, 4.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 100.0, 4.5)));
         game.reset_entity_residency();
         sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 1, 1);
         let key = game

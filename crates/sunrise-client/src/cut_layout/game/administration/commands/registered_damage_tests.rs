@@ -497,7 +497,10 @@ pub(crate) fn run_live_damage_and_blast_creaking_reactions_and_timed_player_cred
         );
         assert_eq!(creaking_state(game), (start_health, 8, 100));
         assert_eq!(heart_emitter(game), 100);
-        assert_eq!(game.server.lan_entity_events, [(creaking_id as i32, 66)]);
+        assert_eq!(
+            game.server.lan_queues.entity_events,
+            [(creaking_id as i32, 66)]
+        );
         let events = TEST_POSTED_EVENTS.with(|events| events.borrow_mut().take().unwrap());
         assert_eq!(
             events.first(),
@@ -632,7 +635,7 @@ pub(crate) fn run_live_damage_and_blast_creaking_reactions_and_timed_player_cred
             }
         });
         game.server.pending_sounds.clear();
-        game.server.lan_entity_events.clear();
+        game.server.lan_queues.entity_events.clear();
         TEST_POSTED_EVENT_ORDER.with(|order| *order.borrow_mut() = Some(Vec::new()));
         let reaction = |game: &sunrise_gameplay::game::ServerGame<'_>| {
             let sounds = &game.server.pending_sounds;
@@ -642,7 +645,7 @@ pub(crate) fn run_live_damage_and_blast_creaking_reactions_and_timed_player_cred
                     "minecraft:entity.creaking.sway" | "minecraft:entity.arrow.hit"
                 )
             };
-            let flashes = game.server.lan_entity_events.as_slice();
+            let flashes = game.server.lan_queues.entity_events.as_slice();
             let is_flash = |event: &(i32, i8)| *event == (creaking_id as i32, 66);
             let action = TEST_POSTED_EVENT_ORDER.with(|order| {
                 order

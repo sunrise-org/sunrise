@@ -346,13 +346,10 @@ pub(crate) mod interact_vibration_tests {
             crate::game::profile_resolver,
         )
         .unwrap();
-        game.player = Some(
-            sunrise_sim::motion::PlayerMotion::new(
-                game.motion,
-                sunrise_core::geometry::Vec3::new(10.5, 64.0, -3.25),
-            )
-            .unwrap(),
-        );
+        game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+            game.motion,
+            sunrise_core::geometry::Vec3::new(10.5, 64.0, -3.25),
+        ));
         game.reset_entity_residency();
         game.native_lifecycle
             .begin_open(Some(mod_api::Authority::IntegratedServer));
@@ -510,8 +507,7 @@ pub(crate) mod interact_vibration_tests {
                 let mut player = sunrise_sim::motion::PlayerMotion::new(
                     game.motion,
                     sunrise_core::geometry::Vec3::new(0.5, 65.0, 0.5),
-                )
-                .unwrap();
+                );
                 player.entity_id = 41;
                 player.health.food.food = 10;
                 game.player = Some(player);
@@ -616,7 +612,7 @@ pub(crate) mod interact_vibration_tests {
                 remote.logged_in = true;
                 remote.profile = REMOTE;
                 remote.entity_id = 55;
-                let mut player = PlayerMotion::new(game.motion, Vec3::new(0.5, 65.0, 0.5)).unwrap();
+                let mut player = PlayerMotion::new(game.motion, Vec3::new(0.5, 65.0, 0.5));
                 player.entity_id = 55;
                 player.health.food.food = 20;
                 player.health.food.saturation = 2.5;

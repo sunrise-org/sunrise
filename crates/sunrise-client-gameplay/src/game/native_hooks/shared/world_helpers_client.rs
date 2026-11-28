@@ -76,16 +76,6 @@ impl crate::game::ClientGame<'_> {
             }
         }
     }
-    /// Whether a box in `corner` shows: F3's debug screen takes both top
-    /// corners (its left and right columns), and a bottom corner while one
-    /// of its charts is drawn there.
-    pub(crate) fn native_corner_shown(&self, corner: Corner) -> bool {
-        let charts = self
-            .client
-            .debug_charts
-            .corners(!self.has_singleplayer_server());
-        !debug_takes(corner, self.client.debug, charts)
-    }
 }
 
 impl<'g> crate::game::ClientGame<'g> {
@@ -236,5 +226,3 @@ impl GuiLayerWrapContext for GuiLayerWrapFrame<'_, '_, '_> {
             .draw_gui_layer_body(self.batch, self.previous, self.vanilla.as_deref_mut());
     }
 }
-
-use sunrise_gameplay_common::game::integrated_common::IntegratedCommonGameExt1 as _;

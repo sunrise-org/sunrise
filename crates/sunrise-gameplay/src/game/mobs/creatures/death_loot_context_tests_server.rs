@@ -270,8 +270,10 @@ fn death_loot_uses_call_scoped_source_and_hand() {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.player =
-                Some(sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                Vec3::ZERO,
+            ));
             crate::game::native_entity_refs::tests::bind_local_player(game, 11, 123);
             // Reserve the fixture's explicit IDs before spawning experience orbs.
             game.server.next_entity = 1000;

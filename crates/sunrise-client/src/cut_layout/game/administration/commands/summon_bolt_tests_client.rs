@@ -18,7 +18,7 @@ fn silent_bolt_suppresses_sound_and_posts_strike_event_on_first_tick() {
     );
     with_game(|game| {
         prepare_entity_ticking_neighborhood(game, ChunkPos::new(0, 0));
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 230.0, 8.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 230.0, 8.5)));
         bind_local_player(game, 1, ORACLE_PLAYER_UUID);
         game.creative = true;
         game.ui.difficulty = 2;

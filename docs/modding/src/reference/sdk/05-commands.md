@@ -7,7 +7,7 @@ folder.
 | Command | What it does |
 |---|---|
 | `new <path> --template native [--sunrise <build>]` | Makes a code mod pinned to the current Nightly's build, or the one named, and fetches its SDK. Without `--template` it makes a content mod, which has no SDK. `--sunrise` requires `--template native`. Both templates scaffold [`page.toml` and `page/`](../../how-to/publish.md#your-mods-page) and the [release workflow caller](#release). |
-| `build [--with <path>]…` | Compiles a native mod and its [declared libraries](../../concepts/dependencies.md) against the pinned SDK, then packs only the project into a `.smod` with its [`uses.json`](04-fit.md#usesjson). For content-only mods it just packs the project. If the project has `page.toml`, writes the page and its named images separately to `target/sunrise-mod/<id>.page.tar`. See [`build` for a native mod](#build-for-a-native-mod). |
+| `build [--with <path>]… [--timings] [--verbose \| -v]` | Compiles a native mod and its [declared libraries](../../concepts/dependencies.md) against the pinned SDK, then packs only the project into a `.smod` with its [`uses.json`](04-fit.md#usesjson). For content-only mods it just packs the project. If the project has `page.toml`, writes the page and its named images separately to `target/sunrise-mod/<id>.page.tar`. See [`build` for a native mod](#build-for-a-native-mod). |
 | [`release [<version>\|patch\|minor\|major] [--check] [--pull-request]`](#release) | Checks a mod in a registered repository, commits the version bump, and pushes the branch and tag. `--check` previews without changing the checkout; `--pull-request` commits on a new `release/<tag>` branch instead. |
 | [`release setup`](#release) | Updates only the shared workflow caller and removes old release files. No registration or commit required. |
 | [`collection [--check]`](../../how-to/collections.md) | Checks the registry collection kept in this folder with the registry's rules, pushes it to your fork of sunrise-org/sunrise-mods and prints the link that opens its pull request. Without `collection.toml` it writes one listing this repository's published projects from the signed registry index. `--check` stops after the checks. |
@@ -51,6 +51,13 @@ A mod with crates.io dependencies and no `Cargo.lock` gets one; `build --update-
 a content mod. `build` uses the same compiler as [`native-build`](08-native-build.md), with registry crates approved
 (the mod's own `Cargo.toml`), for the `client` side. It prints `Built <library>` and the build log's path, and exits
 non-zero with the error on failure.
+
+`build --timings` reports the path of the retained Cargo HTML report on stderr after a successful Cargo
+build. The report measures Cargo units, not a separate linker interval; direct compiler routes say that
+no Cargo ran. `build --verbose` (or `-v`) mirrors compiler stderr live while keeping the build log and
+failure diagnostics, and is refused when the SDK's pinned tool must compile lower-crate copies, where
+`--timings` stays allowed. Both options are refused for content-only mods. `build` does not pass arbitrary
+arguments to Cargo.
 
 In `build`, `run` and project `check`, repeat `--with <path>` for local mod projects or `.smod` files.
 Optional libraries must be supplied with `--with`. For required dependencies not supplied locally, the tool

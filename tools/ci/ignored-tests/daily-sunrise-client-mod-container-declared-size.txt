@@ -1,0 +1,3 @@
+# Checks that a mod container keeps to its declared inventory size when it loads and when loot fills it.
+sunrise-client cut_layout::game::container_loot_table_tests::a_longer_backing_list_does_not_widen_the_loot_fill lib daily child-process
+sunrise-client cut_layout::game::container_loot_table_tests::a_saved_sparse_mod_container_pads_to_its_declared_size lib daily child-process

@@ -365,30 +365,29 @@ fn check_fit(
     build_data: &mut Option<PathBuf>,
     private: Option<&Path>,
 ) -> Result<(), String> {
-    use sunrise_native_build::{
-        check::{self, Unlisted, Verdict},
-        contract::CONTRACT,
-    };
+    use sunrise_native_build::check::{self, Unlisted, Verdict};
     let build = &sdk.index.build.commit;
     let pin = &manifest.native.as_ref().expect("native library").sunrise;
     let id = &manifest.id;
-    let mut plan = check::Plan {
-        contract: CONTRACT,
-        mods: root.to_owned(),
-        build: build.clone(),
-        surface: Some(sdk.surface()),
-        build_data: build_data.clone(),
-    };
     let refused =
         |why: String| format!("library {id} pins {pin} and cannot be built for {build}: {why}");
-    let judge = |plan: &check::Plan| {
-        check::check(plan)?
+    let surface = || {
+        sdk.surface.get().map_err(|e| {
+            let path = sdk
+                .dir
+                .join(crate::sdk_fetch::METADATA_DIR)
+                .join(crate::sdk_fetch::SURFACE);
+            format!("{}: {e}", path.display())
+        })
+    };
+    let judge = |data: Option<&Path>| {
+        check::check_with_surface(root, build, surface, data)?
             .mods
             .into_iter()
             .next()
             .ok_or_else(|| "native-check returned no verdict for this library".to_owned())
     };
-    let mut row = judge(&plan).map_err(refused)?;
+    let mut row = judge(build_data.as_deref()).map_err(refused)?;
     if row.needs == Some("build-data") {
         // A release judges with build data fetched from the signed SDK into its private build
         // folder, never the project's own cache, which the checkout can edit.
@@ -407,8 +406,7 @@ fn check_fit(
             }
             None => crate::sdk_fetch::build_data(project, build).map_err(refused)?,
         });
-        plan.build_data = build_data.clone();
-        row = judge(&plan).map_err(refused)?;
+        row = judge(build_data.as_deref()).map_err(refused)?;
     }
     match row.verdict {
         Some(verdict) if verdict.usable() => (),

@@ -76,7 +76,6 @@ impl Renderer {
         let split = check_layers(&adapter, layers)?;
         let info = adapter.get_info();
         surface_setup::log_sprite_split(&info, split, layers);
-        crate::graphics::suggest_reduced_far_detail(crate::graphics::lod_capped(&info));
         let size = window.inner_size();
         let max_side = device.limits().max_texture_dimension_2d;
         let configured = match (&surface, configured) {
@@ -164,6 +163,7 @@ impl Renderer {
         // A renderer on the same device takes the previous one's shader
         // modules, layouts and pipelines where they come out the same.
         let reuse = previous.map_or_else(Default::default, |r| r.reuse.clone());
+        let device_id = previous.map_or_else(next_device_id, |r| r.device_id);
         let generation = reuse.begin();
         let kept = reuse.on(&device);
         let pipelines_step = crate::spans::startup::step("renderer.pipelines_textures");
@@ -2285,13 +2285,13 @@ impl Renderer {
             mod_gpu::ModFrameState {
                 entity_atlas: atlas_view.clone(),
                 lightmap: lightmap_view.clone(),
-                world_depth: depth.clone(),
                 entity_quad_capacity: EntityQuadCapacity::from_limits(
                     &device.limits(),
                     entity_skin.is_some(),
                 ),
                 pack_iris: false,
             },
+            depth.clone(),
             previous.map(|renderer| renderer.mod_gpu()),
         );
         Ok(Self {
@@ -2321,6 +2321,7 @@ impl Renderer {
             queue: submit::Queue::new(queue, submit::wanted()),
             deferred: None,
             device_lost,
+            device_id,
             config,
             solid,
             solid_opaque,
@@ -2333,8 +2334,6 @@ impl Renderer {
             cull_on: cull.is_some(),
             sides_on: true,
             gpu_culling: None,
-            sourced: Default::default(),
-            gpu_sourced_frame: false,
             gpu_culling_offer,
             gpu_frame: false,
             #[cfg(debug_assertions)]
@@ -2416,6 +2415,9 @@ impl Renderer {
             stars,
             custom_sky,
             custom_sky_draws: Vec::new(),
+            custom_lightmap: None,
+            lightmap_weather: None,
+            lightmap_drawn: core_lightmap::Drawn::Native,
             entity_outline,
             panorama,
             border_pipeline,
@@ -2492,18 +2494,7 @@ impl Renderer {
             outline,
             depth,
             sections: resident::Resident::default(),
-            lods: FxHashMap::default(),
-            lod_vertex_bytes: 0,
-            lod_cells: lod::TileGrid::default(),
-            lod_cull_free: Vec::new(),
-            lod_cull_next: 0,
-            lod_cutout: Default::default(),
-            lod_retiring: Default::default(),
-            lod_leaving: Vec::new(),
-            lod_pending: None,
-            lod_settled: None,
             detail_columns: Default::default(),
-            detail_revision: 0,
             arena,
             translucent_arena,
             translucent_batching,
@@ -2516,13 +2507,11 @@ impl Renderer {
             indirect_capacity: 1024,
             multi_draw,
             visible: Vec::new(),
-            visible_lods: Vec::new(),
             visible_renderable_sections: Vec::new(),
             visible_renderable_scratch: Vec::new(),
             hook_geometry: Default::default(),
             hook_entities_scratch: Vec::new(),
             hook_see_through_scratch: Vec::new(),
-            translucent_lods: Vec::new(),
             shadow_visible: Vec::new(),
             translucent_draws: Vec::new(),
             translucent_tests: Vec::new(),
@@ -2542,7 +2531,6 @@ impl Renderer {
             block_entity_membership_revisions: Default::default(),
             section_uploaded: Default::default(),
             newest_upload: None,
-            newest_lod_fade: None,
             block_entity_revision: next_block_entity_revision(),
             occlusion: occlusion::Occlusion::new(crate::chunk::MIN_Y, crate::chunk::HEIGHT / 16),
             layout: crate::chunk::ColumnLayout::VANILLA,
@@ -2561,12 +2549,15 @@ impl Renderer {
             hdr_driver,
             pack_post: None,
             pack_loading: None,
+            retired_pack_builds: Default::default(),
             pack_generation: 0,
             pass_timing: false,
             pass_detail: false,
             pass_timing_gap: std::time::Duration::ZERO,
             keep_timed_frames: false,
             own_timing: None,
+            #[cfg(feature = "test-support")]
+            test_hooks: Default::default(),
             pack_entity_rest: Vec::new(),
             cloud_bindings,
             pack_weather: None,
@@ -2587,7 +2578,6 @@ impl Renderer {
             outline_lines_scratch: Vec::new(),
             debug_lines_scratch: Vec::new(),
             screen_vertices_scratch: Vec::new(),
-            lod_leaving_scratch: crate::fast_hash::FxHashSet::default(),
             shadow_boxed_scratch: Vec::new(),
             shadow_seen_scratch: crate::fast_hash::FxHashSet::default(),
             shadow_translucent_scratch: Vec::new(),
@@ -2605,19 +2595,19 @@ impl Renderer {
             section_draw_calls: 0,
             frame_serial: 0,
             stats_frame: 0,
-            stats_halves: Default::default(),
             uploaded_bytes: 0,
             started: Instant::now(),
             screenshot: None,
             screenshot_result: None,
             pack_hdr: None,
+            pack_hdr_pick: String::new(),
+            pack_served: None,
             screenshot_readbacks: screenshot_readback::Readbacks::default(),
             screenshot_quality: 1,
             screenshot_halvings: 0,
             gamma: 0.5,
             improved_transparency: false,
             oit: None,
-            fullbright: false,
             animated_textures: true,
             present_modes,
             capture_copies: std::env::var_os("SUNRISE_RENDER_CAPTURE")
@@ -2627,4 +2617,11 @@ impl Renderer {
             capture_result: None,
         })
     }
+}
+
+/// The number of a newly opened device: each `RendererDevice::New` or `Opened` (the start, a
+/// device recovery) takes one, never given twice in the process.
+fn next_device_id() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }

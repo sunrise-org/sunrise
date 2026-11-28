@@ -171,9 +171,6 @@ pub mod extras;
 #[path = "mobs/fangs_client.rs"]
 pub mod fangs_client;
 #[cfg(feature = "client")]
-#[path = "world/far_terrain_edits.rs"]
-pub(in crate::game) mod far_terrain_edits;
-#[cfg(feature = "client")]
 #[path = "entities/fireworks_client.rs"]
 pub mod fireworks_client;
 #[cfg(feature = "client")]
@@ -234,9 +231,6 @@ pub(in crate::game) mod held_items_client;
 #[cfg(feature = "client")]
 #[path = "modding/hotbar_items.rs"]
 pub(in crate::game) mod hotbar_items;
-#[cfg(feature = "client")]
-#[path = "interface/hud_editor.rs"]
-pub(in crate::game) mod hud_editor;
 #[cfg(feature = "client")]
 #[path = "interface/hud_room.rs"]
 pub(in crate::game) mod hud_room;
@@ -444,6 +438,10 @@ pub(in crate::game) mod pack_layers;
 #[cfg(feature = "client")]
 #[path = "mobs/part_shearing_client.rs"]
 pub(in crate::game) mod part_shearing_client;
+#[cfg(feature = "client")]
+#[cfg(test)]
+#[path = "interface/shader_options_device_tests.rs"]
+mod shader_options_device_tests;
 #[path = "entities/stock_layer_mask.rs"]
 pub(in crate::game) mod stock_layer_mask;
 #[cfg(feature = "client")]
@@ -621,9 +619,6 @@ pub mod potions;
 #[path = "interface/profile_capture.rs"]
 pub(in crate::game) mod profile_capture;
 #[cfg(feature = "client")]
-#[path = "entities/pvp.rs"]
-pub(in crate::game) mod pvp;
-#[cfg(feature = "client")]
 #[path = "interface/quick_actions.rs"]
 pub(in crate::game) mod quick_actions;
 #[cfg(feature = "client")]
@@ -671,8 +666,6 @@ pub(in crate::game) mod render_control;
 pub(in crate::game) mod render_settings;
 #[path = "interface/render_tick.rs"]
 pub(in crate::game) mod render_tick;
-#[path = "runtime/replay.rs"]
-pub(in crate::game) mod replay;
 #[cfg(feature = "client")]
 #[path = "runtime/repro.rs"]
 pub(in crate::game) mod repro;
@@ -712,8 +705,20 @@ pub(in crate::game) mod server_links;
 pub mod server_packs;
 #[cfg(feature = "client")]
 #[cfg(test)]
+#[path = "interface/shader_pack_display_tests.rs"]
+pub(in crate::game) mod shader_pack_display_tests;
+#[cfg(feature = "client")]
+#[cfg(test)]
+#[path = "interface/shader_pack_hdr_tests.rs"]
+pub(in crate::game) mod shader_pack_hdr_tests;
+#[cfg(feature = "client")]
+#[cfg(test)]
 #[path = "interface/shader_pack_switch_tests.rs"]
 pub(in crate::game) mod shader_pack_switch_tests;
+#[cfg(feature = "client")]
+#[cfg(test)]
+#[path = "interface/shader_pack_teardown_tests.rs"]
+mod shader_pack_teardown_tests;
 #[cfg(feature = "client")]
 #[path = "interface/shader_packs.rs"]
 pub mod shader_packs;
@@ -764,9 +769,6 @@ pub(in crate::game) mod storage;
 #[cfg(feature = "client")]
 #[path = "administration/structure_edit.rs"]
 pub(in crate::game) mod structure_edit;
-#[cfg(feature = "client")]
-#[path = "interface/studio.rs"]
-pub(in crate::game) mod studio;
 #[cfg(feature = "client")]
 #[path = "interface/subtitle_hud.rs"]
 pub(in crate::game) mod subtitle_hud;
@@ -1140,6 +1142,9 @@ pub(in crate::game) mod tables_client;
 #[cfg(feature = "client")]
 #[path = "administration/test_instances_client.rs"]
 pub(in crate::game) mod test_instances_client;
+#[cfg(all(feature = "client", any(test, feature = "test-support")))]
+#[path = "runtime/test_resource_cache.rs"]
+pub mod test_resource_cache;
 #[cfg(feature = "client")]
 #[path = "interface/toast_manager_client.rs"]
 pub(in crate::game) mod toast_manager_client;
@@ -1191,8 +1196,6 @@ pub struct ClientState {
     pub(in crate::game::client_side) realm_session: bool,
     /// The current connection came from the LAN list (`ServerData.isLan`).
     pub(in crate::game::client_side) lan_session: bool,
-    /// Replay playback (game/replay.rs), and Sunrise Studio's editor on it (game/studio.rs).
-    pub(in crate::game::client_side) replay: replay::Replay,
     /// Single player's server thread, which `remote` is connected to.
     pub integrated: Option<integrated_client::Integrated>,
     /// The open world is shared behind an invite code (game/network/friends.rs).
@@ -1255,12 +1258,6 @@ pub struct ClientState {
         sunrise_client::item_activation::ItemActivation,
     pub(in crate::game::client_side) weather_parameters: sunrise_client::weather::ParameterCache,
     pub(in crate::game::client_side) panorama_rotation: sunrise_client::gfx::panorama::Rotation,
-    pub(in crate::game::client_side) lod_source_attempted: bool,
-    pub(in crate::game::client_side) lod_observe: sunrise_level::fast_hash::FxHashSet<(i32, i32)>,
-    /// The server level far terrain keeps the chunks of.
-    pub(in crate::game::client_side) lod_level: Option<String>,
-    /// The detail revision, centre and radius `Lod::update` last had covered for.
-    pub(in crate::game::client_side) lod_covered_at: Option<(u64, (i32, i32), i32)>,
     /// Whether the view's columns have all arrived, and how new it is: large
     /// translucent pages wait for both before they shrink (`set_terrain_loading`).
     pub(in crate::game::client_side) view_arrival: sunrise_level::chunk_streamer::ViewArrival,
@@ -1666,8 +1663,6 @@ pub struct ClientState {
     )>,
     /// Settings and HUD state: `game/interface/extras.rs`.
     pub(in crate::game) extras: extras::ExtrasState,
-    /// The PvP & HUD options' state (`game/entities/pvp.rs`).
-    pub(in crate::game::client_side) pvp: pvp::PvpState,
     /// The item panel beside container screens (`game/modding/native_panel.rs`).
     pub panel: native_panel::Panel,
     /// Sunrise's own shader pack, while one is picked (`game/modding/native_shaders.rs`).
@@ -1696,7 +1691,6 @@ pub struct ClientState {
     pub(in crate::game::client_side) retry_due: Option<sunrise_hooks::connection::Server>,
     /// What the window's title last showed: its session part and the language (window_title.rs).
     pub(in crate::game::client_side) window_title: Option<(Option<&'static str>, u64)>,
-    pub(in crate::game::client_side) studio: studio::Studio,
     /// The Social Interactions screen and the players whose chat is hidden (game/network/social.rs).
     pub social: social::Social,
     /// Chat Settings opened from RestrictionsScreen: Done returns to World Options.
@@ -1786,10 +1780,6 @@ pub struct ClientState {
     /// This game's resource packs (`reload_packs` replaces them).
     pub pending_initial_models: ClientOnly<Option<Box<initial_client_models::PendingClientStart>>>,
     pub(in crate::game::client_side) stitching_block_atlas: ClientOnly<Option<Arc<RenderAssets>>>,
-    pub lod: ClientOnly<Option<sunrise_client::lod::Lod>>,
-    /// The server's BlueMap far terrain draws from, when the player named one.
-    pub(in crate::game::client_side) lod_blue_map:
-        ClientOnly<Option<Arc<sunrise_client::bluemap::BlueMap>>>,
     /// The monitor whose video modes `settings.video_modes` holds.
     pub(in crate::game::client_side) video_modes: ClientOnly<sunrise_client::window::VideoModeList>,
     pub screen_state: ClientOnly<screen_build::ScreenState>,
@@ -1988,7 +1978,6 @@ impl ClientState {
             remote: None,
             realm_session: false,
             lan_session: false,
-            replay: Default::default(),
             integrated: None,
             #[cfg(feature = "friends")]
             friends: None,
@@ -2023,10 +2012,6 @@ impl ClientState {
             item_activation: Default::default(),
             weather_parameters: Default::default(),
             panorama_rotation: Default::default(),
-            lod_source_attempted: false,
-            lod_observe: Default::default(),
-            lod_level: None,
-            lod_covered_at: None,
             view_arrival: Default::default(),
             drop_spam_throttler: Default::default(),
             rope_rot_old: (0.0, 10.0),
@@ -2238,7 +2223,6 @@ impl ClientState {
             pending_uploads_order: None,
             upload_pace: Default::default(),
             extras: Default::default(),
-            pvp: Default::default(),
             panel: Default::default(),
             native_shaders: Default::default(),
             mod_keys: Default::default(),
@@ -2248,7 +2232,6 @@ impl ClientState {
             pending_retry: None,
             retry_due: None,
             window_title: None,
-            studio: Default::default(),
             options_to_world_options: false,
             test_highlights: HashMap::new(),
             social: effects.social,
@@ -2294,8 +2277,6 @@ impl ClientState {
             dialogs: wc.dialogs,
             pending_initial_models: wc.pending_initial_models,
             stitching_block_atlas: wc.stitching_block_atlas,
-            lod: wc.lod,
-            lod_blue_map: wc.lod_blue_map,
             video_modes: wc.video_modes,
             screen_state: wc.screen_state,
             window: wc.window,

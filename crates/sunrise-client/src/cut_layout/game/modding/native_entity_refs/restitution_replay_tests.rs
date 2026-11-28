@@ -53,8 +53,7 @@ fn replayed_landing_reads_restitution_again_and_moves_identically() {
                 .unwrap();
             game.world.set(3, 64, 5, glass).unwrap();
             let mut run = |replay| {
-                let mut player =
-                    PlayerMotion::new(game.motion, Vec3::new(3.5, 65.25, 5.5)).unwrap();
+                let mut player = PlayerMotion::new(game.motion, Vec3::new(3.5, 65.25, 5.5));
                 player.velocity.y = -1.0;
                 let meta = game.side_game_side_meta();
                 let side = game_side!(

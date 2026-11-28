@@ -62,7 +62,7 @@ pub(crate) fn game<'a>(
             .add_empty_chunk(ChunkPos::new(x, 0))
             .unwrap();
     }
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(12.5, 201.0, 2.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(12.5, 201.0, 2.5)));
     for command in [
         "forceload add 0 0 31 15",
         "fill 0 200 0 31 200 15 stone",

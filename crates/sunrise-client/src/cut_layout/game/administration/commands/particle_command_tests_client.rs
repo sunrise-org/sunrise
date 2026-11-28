@@ -1,5 +1,5 @@
 pub(crate) use crate::game::server_side::commands::world_cmds::particle_command_tests::game;
-use mod_api::client::particles::PositionSource;
+use mod_api::PositionSource;
 use std::sync::Arc;
 use sunrise_client::particles::ParticleLevel;
 use sunrise_level::chunk::Chunk;

@@ -39,8 +39,9 @@ pub struct TrackedWaypoint {
     /// `waypoint_operation`.
     pub operation: i32,
     pub id: WaypointId,
-    /// Waypoint.Icon: the style (a `waypoint_style_asset` key) and an RGB colour.
-    pub style: String,
+    /// Waypoint.Icon: the style (a `waypoint_style_asset` key, validated as it is read) and
+    /// an RGB colour.
+    pub style: sunrise_core::identifier::Identifier,
     pub color: Option<i32>,
     pub target: WaypointTarget,
 }
@@ -56,7 +57,7 @@ impl Codec<TrackedWaypoint> for TrackedWaypoint {
         } else {
             WaypointId::Name(r.string(32767)?)
         };
-        let style = Ident::read(r)?;
+        let style = Ident::read_identifier(r)?;
         // ByteBufCodecs.RGB_COLOR: three bytes, read back as an opaque ARGB colour.
         let color = if r.bool()? {
             let [red, green, blue] = [r.u8()?, r.u8()?, r.u8()?].map(i32::from);
@@ -91,7 +92,7 @@ impl Codec<TrackedWaypoint> for TrackedWaypoint {
                 w.string(name);
             }
         }
-        w.string(&v.style);
+        w.string(v.style.as_str());
         w.bool(v.color.is_some());
         if let Some(color) = v.color {
             for shift in [16, 8, 0] {

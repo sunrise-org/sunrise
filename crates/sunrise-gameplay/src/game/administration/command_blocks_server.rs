@@ -42,7 +42,11 @@ impl crate::game::ServerGame<'_> {
             let state = self.world.block(pos.0, pos.1, pos.2);
             let block = self.res.behaviours().block(state);
             self.after_commit(After::LevelWrite(Box::new(PendingWrite::BlockTick(
-                self.dim, at, block, 1,
+                self.dim,
+                at,
+                block,
+                1,
+                sunrise_core::ticks::TickPriority::Normal,
             ))));
         } else {
             self.with_level(|b, level, ticks| b.schedule_tick(level, ticks, at, 1));
@@ -333,7 +337,7 @@ impl crate::game::ServerGame<'_> {
         else {
             return;
         };
-        let allowed = g.creative() && g.permission >= 2;
+        let allowed = g.abilities.instabuild && g.permission >= 2;
         let edit = CommandBlockEdit {
             pos: (p.pos[0], p.pos[1], p.pos[2]),
             command: p.command,
@@ -360,7 +364,7 @@ impl crate::game::ServerGame<'_> {
         if !host
             .hub
             .guest(conn)
-            .is_some_and(|g| g.creative() && g.permission >= 2)
+            .is_some_and(|g| g.abilities.instabuild && g.permission >= 2)
         {
             return;
         }

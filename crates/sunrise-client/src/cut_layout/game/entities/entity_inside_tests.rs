@@ -32,9 +32,10 @@ fn a_mob_presses_a_plate_only_inside_the_simulation_distance() {
         // The player in chunk (0, 0); a zombie on a plate in chunk (2, 0), inside
         // the simulation distance, and another in chunk (8, 0): loaded and in
         // view, but past it.
-        game.player = Some(
-            sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(8.5, 65.0, 8.5)).unwrap(),
-        );
+        game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+            game.motion,
+            Vec3::new(8.5, 65.0, 8.5),
+        ));
         for (cx, x, id) in [(2, 40, 1), (8, 136, 2)] {
             game.world
                 .chunks

@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 
-from tests import git_history
+from tests.git_fixture import git_in, isolated_git_env, merge_pull_request
 from tools.ci import check_launcher_mirrors as mirrors
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,6 +20,7 @@ class MirrorCheckout:
         directory = tempfile.TemporaryDirectory()
         test.addCleanup(directory.cleanup)
         self.root = Path(directory.name)
+        self._git = git_in(self.root)
         for script in ("tools/ci/check_launcher_mirrors.py", "tools/rust_tokens.py", "tools/merge_base.py"):
             (self.root / script).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(ROOT / script, self.root / script)
@@ -29,7 +30,7 @@ class MirrorCheckout:
                    'version = 1\n\n[[mirror]]\nlauncher = "mirror"\nsources = ["crates/mirror/src"]\n\n'
                    '[[mirror]]\nlauncher = "mirror2"\nsources = ["crates/mirror2/src"]\n')
         self.check("--write")
-        self.git("init", "-q")
+        self.git("init", "-q", "--template=")
         self.git("add", ".")
         self.git("commit", "-qm", "base")
         self.base = self.git("rev-parse", "HEAD").strip()
@@ -39,11 +40,11 @@ class MirrorCheckout:
         (self.root / path).write_text(text, encoding="utf-8", newline="\n")
 
     def git(self, *arguments):
-        return git_history.git(self.root, *arguments).stdout
+        return self._git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", *arguments)
 
     def run(self, *command):
         """A `python3 ...` command line, run in this checkout."""
-        return subprocess.run([sys.executable, *command[1:]], cwd=self.root, env=git_history.clean_env(),
+        return subprocess.run([sys.executable, *command[1:]], cwd=self.root, env=isolated_git_env(),
                               capture_output=True, text=True, encoding="utf-8")
 
     def check(self, *arguments):
@@ -64,7 +65,7 @@ class MirrorCheckout:
     def merge_pull_request(self, main_change=lambda: None, pr_change=lambda: None):
         """HEAD becomes CI's pull-request merge (two parents) over `self.base`: the pull request makes `pr_change`,
         main moved on with `main_change` (which may record a new surface). `self.base` stays the event's stale base."""
-        return git_history.merge_pull_request(self.root, self.base, ("crates", "tools"), main_change, pr_change)
+        return merge_pull_request(self.root, self.base, ("crates", "tools"), main_change, pr_change)
 
     def change_privately(self):
         self.write("crates/mirror/src/lib.rs", "pub fn a() { let _ = 1; }\nfn hidden() {}\n")

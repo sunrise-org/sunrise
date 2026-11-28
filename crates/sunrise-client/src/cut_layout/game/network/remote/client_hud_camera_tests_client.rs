@@ -42,7 +42,7 @@ fn a_watched_rider_gets_hearts_for_the_dragon_and_local_player_but_not_a_boat() 
                 super::spawn_menu_test(game);
                 game.client.remote.as_mut().unwrap().level_load.finish();
                 game.client.screen = Screen::Playing;
-                game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+                game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
                 // LivingEntity.getMaxHealth converts to f32 before Hud adds the half point.
                 attributes(game, LOCAL, &[("minecraft:max_health", 31.499_999_9)]);
                 game.handle_packet(C::SetHealth(play::SetHealth {
@@ -156,7 +156,7 @@ pub(in crate::game) fn set_up(
     remote.logged_in = true;
     remote.entity_id = LOCAL;
     remote.level_load.finish();
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
 
     // The viewer's own state: what the local hotbar and bars would show.
     game.selected = case["selected"].as_u64().unwrap() as usize;

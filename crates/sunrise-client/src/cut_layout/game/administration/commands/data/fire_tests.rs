@@ -121,7 +121,7 @@ pub(crate) fn run_fire_changes_on_eyes_fangs_spawners_clouds_and_bullets() {
     with_game(|game| {
         prepare_entity_ticking_neighborhood(game, ChunkPos::new(0, 0));
         prepare_entity_ticking_neighborhood(game, ChunkPos::new(20, 0));
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
         game.update_chunk_tickets();
         bind_local_player(game, 1, 99);
         game.set_allow_commands(true);

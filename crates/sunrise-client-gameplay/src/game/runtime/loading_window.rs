@@ -109,6 +109,7 @@ pub(in crate::game) fn build_renderer(
     // waiting for `Game::apply_settings` after the handoff.
     renderer.set_present_mode(vsync, settings.present_mode);
     renderer.pack_hdr = shader_pack.hdr;
+    renderer.pack_hdr_pick = shader_pack.pick;
     renderer.hud.sprite_animations = atlas.renderer_animations();
     let gui_text = renderer.hud.set_text_shader(&renderer.device, {
         let text = &atlas.text_shaders;
@@ -136,6 +137,7 @@ pub(in crate::game) fn build_renderer(
         .into_iter()
         .collect::<std::result::Result<(), String>>();
     renderer.set_custom_sky(&*client_pack.custom_sky);
+    renderer.set_custom_lightmap(client_pack.custom_lightmap.clone());
     renderer.set_shared_material_maps(&atlas.material_maps);
     let cit_glints = client_pack
         .item_renderer
@@ -255,7 +257,6 @@ pub(in crate::game) fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         outline: Vec::new(),
         outline_after_terrain: false,
         outline_high_contrast: false,
-        pvp: Default::default(),
         debug_lines: &[],
         debug_lines_on_top: &[],
         debug_crosshair: &[],

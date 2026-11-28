@@ -55,8 +55,7 @@ fn a_changed_inventory_is_heard_once_with_its_41_slots_isolated() {
                 game.world
                     .chunks
                     .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
-                game.player =
-                    Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+                game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)));
                 let me = game.native_acting_id();
                 let heard = || std::mem::take(&mut *heard_values.lock().unwrap());
 

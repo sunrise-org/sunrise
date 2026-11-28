@@ -34,16 +34,16 @@ impl ServerGame<'_> {
     /// `Player.hasInfiniteMaterials`: the `instabuild` ability, which
     /// creative mode gives.
     pub(in crate::game) fn player_has_infinite_materials(&self, player: PlayerRef) -> Option<bool> {
-        self.player_is_creative(player)
+        Some(self.player_handle_read(player)?.instabuild())
     }
-    /// `Player.canUseGameMasterBlocks`: creative and a permission level of
-    /// at least 2, as command blocks, structure blocks and jigsaws ask.
+    /// `Player.canUseGameMasterBlocks`: `abilities.instabuild` and a permission
+    /// level of at least 2, as command blocks, structure blocks and jigsaws ask.
     pub(in crate::game) fn player_can_use_game_master_blocks(
         &self,
         player: PlayerRef,
     ) -> Option<bool> {
-        let creative = self.player_is_creative(player)?;
-        Some(creative && self.player_permission_level(player)? >= 2)
+        let instabuild = self.player_handle_read(player)?.instabuild();
+        Some(instabuild && self.player_permission_level(player)? >= 2)
     }
     /// `ServerPlayerGameMode.getPreviousGameModeForPlayer`: the mode the
     /// player last left (`previousPlayerGameType`, saved with the player), or
@@ -102,3 +102,51 @@ use sunrise_gameplay_common::game::game_mode_common::GameModeCommonGameExt1 as _
 use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt5 as _;
 
 use sunrise_gameplay_common::game::native_server::NativeServerGameExt1 as _;
+
+#[cfg(test)]
+mod instabuild_tests {
+    use super::*;
+    use crate::game::native_guest_turn_tests::with_guests;
+
+    #[ignore = "daily"]
+    #[test]
+    fn survival_with_instabuild_and_creative_without_instabuild_follow_instabuild() {
+        mod_platform::__private::test_platform::install();
+        with_guests(|game| {
+            let (a, b) = (game.player(12).unwrap(), game.player(13).unwrap());
+            game.server.lan.as_mut().unwrap().hub.guests.update(0, |g| {
+                g.game_mode = 0;
+                g.permission = 2;
+                g.abilities.update_for_mode(0);
+                g.abilities.instabuild = true;
+            });
+            assert_eq!(a.has_infinite_materials(&*game), Some(true));
+            assert_eq!(a.can_use_game_master_blocks(&*game), Some(true));
+            assert_eq!(
+                game.as_guest(12, |game| (
+                    a.has_infinite_materials(&*game),
+                    a.can_use_game_master_blocks(&*game),
+                ))
+                .unwrap(),
+                (Some(true), Some(true))
+            );
+
+            game.server.lan.as_mut().unwrap().hub.guests.update(1, |g| {
+                g.game_mode = 1;
+                g.permission = 2;
+                g.abilities.update_for_mode(1);
+                g.abilities.instabuild = false;
+            });
+            assert_eq!(b.has_infinite_materials(&*game), Some(false));
+            assert_eq!(b.can_use_game_master_blocks(&*game), Some(false));
+            assert_eq!(
+                game.as_guest(13, |game| (
+                    b.has_infinite_materials(&*game),
+                    b.can_use_game_master_blocks(&*game),
+                ))
+                .unwrap(),
+                (Some(false), Some(false))
+            );
+        });
+    }
+}

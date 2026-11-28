@@ -86,6 +86,8 @@ pub struct PartRegistrar {
     pub(crate) biome_modifiers: Vec<BiomeModifierDeclaration>,
     pub(crate) biome_regions: Vec<BiomeRegionDeclaration>,
     pub(crate) datapack_registries: Vec<crate::DatapackRegistryDeclaration>,
+    pub(crate) custom_registries: Vec<PendingCustomRegistry>,
+    pub(crate) type_identities: TypeIdentityTable,
     pub(crate) configs: Vec<mod_vocab::__private::RegisteredConfig>,
     pub(crate) consume_effects: Vec<RegisteredConsumeEffect>,
     pub(crate) menu_screen_factories: HashMap<String, MenuScreenRegistration>,
@@ -154,6 +156,7 @@ pub struct PartRegistrar {
 impl PartRegistrar {
     pub(crate) fn new(mod_id: &'static str) -> Self {
         let _ = crate::__private::initialize();
+        let (parts, type_identities) = Self::capability_parts();
         Self {
             menu_screen_factories: HashMap::new(),
             menu_recipe_books: HashMap::new(),
@@ -163,6 +166,8 @@ impl PartRegistrar {
             biome_modifiers: Vec::new(),
             biome_regions: Vec::new(),
             datapack_registries: Vec::new(),
+            custom_registries: Vec::new(),
+            type_identities,
             configs: Vec::new(),
             consume_effects: Vec::new(),
             recipe_book_types: HashMap::new(),
@@ -178,7 +183,7 @@ impl PartRegistrar {
             mod_index: 0,
             mod_type: None,
             registered: 0,
-            parts: Self::capability_parts(),
+            parts,
             tags: TagParts::default(),
             block_entity_types: Vec::new(),
             block_entity_ticker_selectors: Vec::new(),
@@ -379,6 +384,7 @@ pub(crate) fn install_registrar(
     registrar.validate_recipe_types();
     registrar.skip_absent_effect_parts();
     registrar.order_tooltip_appenders();
+    let custom_registries = registrar.validate_and_freeze_custom_registries();
     if !registrar.refused.is_empty() {
         return Err(registrar.refused);
     }
@@ -394,6 +400,7 @@ pub(crate) fn install_registrar(
             regions
         },
         datapack_registries: registrar.datapack_registries,
+        custom_registries,
         configs: registrar.configs,
         consume_effects: registrar.consume_effects,
         menu_screen_factories: registrar.menu_screen_factories,

@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::OnceLock;
 use sunrise_mod_package::{internals::ListedInternal, manifest::Native, sdk::Mixins};
-use sunrise_native_build::{check as checks, contract, discover, host, rust::Unpacked};
+use sunrise_native_build::{
+    BuildDiagnostics, check as checks, contract, discover, host, rust::Unpacked,
+};
 
 /// The plan's build folder, the host's root.
 static WORK: OnceLock<PathBuf> = OnceLock::new();
@@ -29,7 +31,12 @@ pub fn run(args: &[String]) -> ExitCode {
         }
     };
     install_host(&plan.work);
-    match contract::run(&plan, &mut input, &mut std::io::stdout().lock()) {
+    match contract::run(
+        &plan,
+        &mut input,
+        &mut std::io::stdout().lock(),
+        BuildDiagnostics::default().with_env(),
+    ) {
         Ok(()) => ExitCode::SUCCESS,
         Err(_) => ExitCode::FAILURE,
     }

@@ -1,4 +1,6 @@
+import tempfile
 import unittest
+from pathlib import Path
 
 from tests.hotspots_repo import Repo
 from tools.hotspots import measure
@@ -161,6 +163,56 @@ class MeasureTest(unittest.TestCase):
         _, raw = self.run_measure("--days", "3")
         self.assertEqual(raw["prs"], 1)
         self.assertNotIn("other.txt", raw["files"])
+
+    def test_the_report_lists_the_watched_splits_with_their_growth(self):
+        r = self.repo
+        # The baseline comes from the split's own landing commit, not a number
+        # written next to the path: this commit has three lines, main has four.
+        landing = r.commit("split-1", {"src/list.rs": "pub use a::{\n    A,\n};\n"}, base="main")
+        gone = r.commit("split-2", {"src/gone.rs": "1\n2\n3\n4\n5\n"}, base="main")
+        r.pull(1, r.commit("pr-1", {"y.txt": "p1\n"}, base="main"))
+        r.merge("main", "pr-1", "Merge pull request #1 from o/pr-1")
+        git, raw = self.run_measure()
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, "list.toml").write_text(
+                f'path = "src/list.rs"\nsplit = "#1"\nlanding = "{landing}"\n')
+            Path(directory, "gone.toml").write_text(
+                f'path = "src/gone.rs"\nsplit = "#2"\nlanding = "{gone}"\n')
+            body = measure.report(git, raw, min_rollup=99, min_prs=1,
+                                  watched=measure.watched_rows(Path(directory)))
+        self.assertIn("### Watched splits", body)
+        self.assertIn("`src/list.rs`: 4 lines (+1 since the split in #1)", body)
+        self.assertIn("`src/gone.rs`: gone at", body)
+        # The nightly publisher keeps only the report's first 60,000 bytes, so
+        # the watched section goes before the unbounded conflict details.
+        self.assertLess(body.index("### Watched splits"), body.index("### `y.txt`"))
+
+    def test_a_watched_file_whose_landing_commit_cannot_be_read_surfaces(self):
+        git, raw = self.run_measure()
+        with self.assertRaises(SystemExit) as raised:
+            measure.report(git, raw, min_rollup=99, min_prs=99,
+                           watched=[("src/list.rs", "#1", "0" * 40, "src/list.rs")])
+        self.assertIn("git show", str(raised.exception))
+
+    def test_a_watched_file_that_moved_keeps_its_landing_baseline(self):
+        r = self.repo
+        landing = r.commit("split-1", {"old/list.rs": "pub use a::{\n    A,\n};\n"}, base="main")
+        git, raw = self.run_measure()
+        body = measure.report(git, raw, min_rollup=99, min_prs=99,
+                              watched=[("src/list.rs", "#1", landing, "old/list.rs")])
+        # main's src/list.rs has four lines; the baseline is the moved file's three.
+        self.assertIn("`src/list.rs`: 4 lines (+1 since the split in #1)", body)
+
+    def test_a_malformed_watched_descriptor_names_its_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            good = Path(directory, "list.toml")
+            good.write_text('path = "src/list.rs"\nsplit = "#1"\nlanding = "abc"\n')
+            bad = Path(directory, "bad.toml")
+            bad.write_text('path = "src/list.rs"\nsplit = "#1"\n')
+            with self.assertRaises(SystemExit) as raised:
+                measure.watched_rows(Path(directory))
+            self.assertIn(str(bad), str(raised.exception))
+            self.assertIn("landing", str(raised.exception))
 
 
 if __name__ == "__main__":

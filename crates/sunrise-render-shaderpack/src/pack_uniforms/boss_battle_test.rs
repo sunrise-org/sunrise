@@ -26,8 +26,8 @@ fn boss_battle_is_the_inputs_kind() {
             Value::F(_) => panic!("bossBattle is an int"),
         }
     }
-    assert!(index_in("bossBattle", false).is_some());
-    assert!(index_in("bossBattle", true).is_some());
+    assert!(index_in("bossBattle", false, false).is_some());
+    assert!(index_in("bossBattle", true, false).is_some());
     let value = boss_battle(&u);
     assert!(value.read_as("bossBattle", "int"));
     assert!(value.read_as("bossBattle", "bool"));

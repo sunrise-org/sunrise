@@ -6,7 +6,7 @@
 //! Snapshots live in the game's own cache folder ([`set_dir`]), never in the
 //! resource folder: that one is shared by worktrees and copied between installed
 //! versions by the launcher. Its key is the format version plus a hash of the
-//! resources the snapshot is resolved from, so no build input decides it.
+//! filesystem and embedded resources the snapshot is resolved from.
 use super::*;
 use crate::registry::snapshot as registry_snapshot;
 use serde::{Deserialize, Serialize};
@@ -21,7 +21,7 @@ use std::{
     time::SystemTime,
 };
 
-// Bump a version, and its file name, with any change to how its snapshot is resolved, stored or restored.
+// Bump a version and its file name for format changes or resolution changes not reflected by the fingerprint.
 const MAGIC: &[u8; 8] = b"HZBEHAV\0";
 const VERSION: u32 = 8;
 const FILE_NAME: &str = "behaviours-v8.bin";
@@ -31,13 +31,32 @@ const REGISTRY_FILE_NAME: &str = "registry-v1.bin";
 const MAX_FILE_BYTES: usize = 128 * 1024 * 1024;
 const MAX_DECODED_BYTES: usize = 256 * 1024 * 1024;
 static NEXT_TEMP: AtomicU32 = AtomicU32::new(0);
-static DIR: OnceLock<PathBuf> = OnceLock::new();
+static CACHE: OnceLock<Cache> = OnceLock::new();
+
+/// Snapshot directory and its per-cache source-digest memo.
+struct Cache {
+    dir: PathBuf,
+    /// Source hashes already computed for this cache: the client's tables and
+    /// the world generator's are loaded from the same folder, and hashing its
+    /// 70 MB again took a third of a second on a 4-thread laptop. A file whose
+    /// length or modification time changed is read again.
+    sources: Mutex<Vec<Sources>>,
+}
+
+impl Cache {
+    fn new(dir: PathBuf) -> Self {
+        Self {
+            dir,
+            sources: Mutex::new(Vec::new()),
+        }
+    }
+}
 
 /// Keep snapshots in `dir` (the client passes `<game folder>/.sunrise-cache`).
 /// Without it (tests, tools, servers), `Behaviours::load` and `load_registry`
 /// always use the source loaders.
 pub(in crate::level) fn set_dir(dir: PathBuf) {
-    let _ = DIR.set(dir);
+    let _ = CACHE.set(Cache::new(dir));
 }
 
 #[derive(Serialize, Deserialize)]
@@ -138,90 +157,98 @@ struct Item {
     game_master: bool,
 }
 
-fn fingerprint(registry: &BlockRegistry, root: &Path) -> io::Result<[u8; 32]> {
-    let mut hasher = Sha256::new();
-    hasher.update(b"sunrise resolved behaviours 2");
-    hasher.update(sources_digest(root)?);
-    // The registry argument may be modified independently of facts.json.
-    hasher.update((registry.len() as u64).to_le_bytes());
-    let mut seen = std::collections::HashSet::new();
-    for index in 0..registry.len() {
-        let state = registry
-            .state(BlockStateId(index as u32))
-            .ok_or_else(|| invalid("missing registry state"))?;
-        hash_str(&mut hasher, &state.name);
-        let mut props: Vec<_> = state.properties.iter().collect();
-        props.sort_by_key(|(key, _)| *key);
-        hasher.update((props.len() as u32).to_le_bytes());
-        for (key, value) in props {
-            hash_str(&mut hasher, key);
-            hash_str(&mut hasher, value);
-        }
-        if seen.insert(state.name.as_str()) {
-            let default = registry
-                .default_state(&state.name)
-                .ok_or_else(|| invalid("missing default state"))?;
-            hasher.update(default.0.to_le_bytes());
-        }
-    }
-    Ok(hasher.finalize().into())
-}
-
 /// The source files the snapshot is resolved from, as their lengths and
 /// modification times, and the hash of their contents.
 type Sources = (Vec<(PathBuf, u64, Option<SystemTime>)>, [u8; 32]);
-/// Source hashes already computed by this process: the client's tables and
-/// the world generator's are loaded from the same folder, and hashing its
-/// 70 MB again took a third of a second on a 4-thread laptop. A file whose
-/// length or modification time changed is read again.
-static SOURCES: Mutex<Vec<Sources>> = Mutex::new(Vec::new());
 
-fn sources_digest(root: &Path) -> io::Result<[u8; 32]> {
-    let mut paths: Vec<PathBuf> = [
-        "facts.json",
-        "block-behaviours.json",
-        "gameplay-facts.json",
-        "block-tags.json",
-        "cached-collision.nbt",
-    ]
-    .iter()
-    .map(|relative| root.join(relative))
-    .collect();
-    let mut fluids: Vec<PathBuf> = fs::read_dir(root.join("data/minecraft/tags/fluid"))?
-        .map(|entry| entry.map(|entry| entry.path()))
-        .collect::<io::Result<_>>()?;
-    fluids.sort();
-    paths.extend(fluids);
-    paths_digest(root, &paths)
-}
+const RESOLVED_INPUT_FILES: &[&str] = &[
+    "facts.json",
+    "block-behaviours.json",
+    "gameplay-facts.json",
+    "block-tags.json",
+    "cached-collision.nbt",
+];
+const FLUID_TAGS_DIR: &str = "data/minecraft/tags/fluid";
 
-/// `paths` as the hash of their names (relative to `root`), lengths and
-/// contents. Digests already computed by this process are kept by the files'
-/// lengths and modification times in [`SOURCES`]: a file that changed is read
-/// again.
-fn paths_digest(root: &Path, paths: &[PathBuf]) -> io::Result<[u8; 32]> {
-    let stamps = paths
-        .iter()
-        .map(|path| {
-            let meta = fs::metadata(path)?;
-            Ok((path.clone(), meta.len(), meta.modified().ok()))
-        })
-        .collect::<io::Result<Vec<_>>>()?;
-    let known = SOURCES.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((_, digest)) = known.iter().find(|(s, _)| *s == stamps) {
-        return Ok(*digest);
+impl Cache {
+    fn fingerprint(&self, registry: &BlockRegistry, root: &Path) -> io::Result<[u8; 32]> {
+        let mut hasher = Sha256::new();
+        hasher.update(b"sunrise resolved behaviours 2");
+        hasher.update(self.sources_digest(root)?);
+        for kind in ["block", "fluid"] {
+            let entries = crate::tag_layers::convention::json_entries(kind);
+            hash_str(&mut hasher, kind);
+            hasher.update((entries.len() as u64).to_le_bytes());
+            for (id, json) in entries {
+                hash_str(&mut hasher, id);
+                hash_str(&mut hasher, json);
+            }
+        }
+        // The registry argument may be modified independently of facts.json.
+        hasher.update((registry.len() as u64).to_le_bytes());
+        let mut seen = std::collections::HashSet::new();
+        for index in 0..registry.len() {
+            let state = registry
+                .state(BlockStateId(index as u32))
+                .ok_or_else(|| invalid("missing registry state"))?;
+            hash_str(&mut hasher, &state.name);
+            let mut props: Vec<_> = state.properties.iter().collect();
+            props.sort_by_key(|(key, _)| *key);
+            hasher.update((props.len() as u32).to_le_bytes());
+            for (key, value) in props {
+                hash_str(&mut hasher, key);
+                hash_str(&mut hasher, value);
+            }
+            if seen.insert(state.name.as_str()) {
+                let default = registry
+                    .default_state(&state.name)
+                    .ok_or_else(|| invalid("missing default state"))?;
+                hasher.update(default.0.to_le_bytes());
+            }
+        }
+        Ok(hasher.finalize().into())
     }
-    drop(known);
-    let mut hasher = Sha256::new();
-    for path in paths {
-        hash_file(&mut hasher, root, path)?;
+
+    fn sources_digest(&self, root: &Path) -> io::Result<[u8; 32]> {
+        let mut paths: Vec<PathBuf> = RESOLVED_INPUT_FILES
+            .iter()
+            .map(|relative| root.join(relative))
+            .collect();
+        let mut fluids: Vec<PathBuf> = fs::read_dir(root.join(FLUID_TAGS_DIR))?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<io::Result<_>>()?;
+        fluids.sort();
+        paths.extend(fluids);
+        self.paths_digest(root, &paths)
     }
-    let digest: [u8; 32] = hasher.finalize().into();
-    SOURCES
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .push((stamps, digest));
-    Ok(digest)
+
+    /// `paths` as the hash of their names (relative to `root`), lengths and
+    /// contents. Digests already computed for this cache are kept by the files'
+    /// lengths and modification times: a file that changed is read again.
+    fn paths_digest(&self, root: &Path, paths: &[PathBuf]) -> io::Result<[u8; 32]> {
+        let stamps = paths
+            .iter()
+            .map(|path| {
+                let meta = fs::metadata(path)?;
+                Ok((path.clone(), meta.len(), meta.modified().ok()))
+            })
+            .collect::<io::Result<Vec<_>>>()?;
+        let known = self.sources.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((_, digest)) = known.iter().find(|(s, _)| *s == stamps) {
+            return Ok(*digest);
+        }
+        drop(known);
+        let mut hasher = Sha256::new();
+        for path in paths {
+            hash_file(&mut hasher, root, path)?;
+        }
+        let digest: [u8; 32] = hasher.finalize().into();
+        self.sources
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((stamps, digest));
+        Ok(digest)
+    }
 }
 
 fn hash_str(hasher: &mut Sha256, text: &str) {
@@ -849,153 +876,150 @@ fn write_snapshot(
     result
 }
 
-pub(super) fn load(registry: &BlockRegistry, root: &Path) -> Option<Behaviours> {
-    load_from(DIR.get()?, registry, root)
-}
-
-fn load_from(dir: &Path, registry: &BlockRegistry, root: &Path) -> Option<Behaviours> {
-    let bytes = fs::read(dir.join(FILE_NAME)).ok()?;
-    let fingerprint = fingerprint(registry, root).ok()?;
-    let expanded = decode_snapshot(&bytes, MAGIC, VERSION, &fingerprint)?;
-    let snapshot: Snapshot = postcard::from_bytes(&expanded).ok()?;
-    snapshot.restore(registry).ok()
-}
-
-pub(super) fn store(registry: &BlockRegistry, root: &Path, behaviours: &Behaviours) {
-    if let Some(dir) = DIR.get() {
-        let _ = write(dir, registry, root, behaviours);
-    }
-}
-
-fn write(
-    dir: &Path,
-    registry: &BlockRegistry,
-    root: &Path,
-    behaviours: &Behaviours,
-) -> io::Result<()> {
-    let fingerprint = fingerprint(registry, root)?;
-    let snapshot = Snapshot::capture(behaviours);
-    let serialized = postcard::to_allocvec(&snapshot).map_err(|e| invalid(e.to_string()))?;
-    write_snapshot(dir, FILE_NAME, MAGIC, VERSION, &fingerprint, &serialized)
-}
-
-/// `facts.json` is the registry's only source.
-fn registry_fingerprint(root: &Path) -> io::Result<[u8; 32]> {
-    let mut hasher = Sha256::new();
-    hasher.update(b"sunrise block registry 1");
-    hasher.update(paths_digest(root, &[root.join("facts.json")])?);
-    Ok(hasher.finalize().into())
-}
-
 /// The registry and each state's `(air, fluid)` facts.json columns.
 type RegistryLoad = (BlockRegistry, Vec<(bool, bool)>);
 
-pub(super) fn load_registry(root: &Path) -> Option<RegistryLoad> {
-    load_registry_from(DIR.get()?, root)
+impl Cache {
+    fn load(&self, registry: &BlockRegistry, root: &Path) -> Option<Behaviours> {
+        let bytes = fs::read(self.dir.join(FILE_NAME)).ok()?;
+        let fingerprint = self.fingerprint(registry, root).ok()?;
+        let expanded = decode_snapshot(&bytes, MAGIC, VERSION, &fingerprint)?;
+        let snapshot: Snapshot = postcard::from_bytes(&expanded).ok()?;
+        snapshot.restore(registry).ok()
+    }
+
+    fn write(
+        &self,
+        registry: &BlockRegistry,
+        root: &Path,
+        behaviours: &Behaviours,
+    ) -> io::Result<()> {
+        let fingerprint = self.fingerprint(registry, root)?;
+        let snapshot = Snapshot::capture(behaviours);
+        let serialized = postcard::to_allocvec(&snapshot).map_err(|e| invalid(e.to_string()))?;
+        write_snapshot(
+            &self.dir,
+            FILE_NAME,
+            MAGIC,
+            VERSION,
+            &fingerprint,
+            &serialized,
+        )
+    }
+
+    /// `facts.json` is the registry's only source.
+    fn registry_fingerprint(&self, root: &Path) -> io::Result<[u8; 32]> {
+        let mut hasher = Sha256::new();
+        hasher.update(b"sunrise block registry 1");
+        hasher.update(self.paths_digest(root, &[root.join("facts.json")])?);
+        Ok(hasher.finalize().into())
+    }
+
+    fn load_registry(&self, root: &Path) -> Option<RegistryLoad> {
+        let bytes = fs::read(self.dir.join(REGISTRY_FILE_NAME)).ok()?;
+        let fingerprint = self.registry_fingerprint(root).ok()?;
+        let expanded = decode_snapshot(&bytes, REGISTRY_MAGIC, REGISTRY_VERSION, &fingerprint)?;
+        let snapshot: registry_snapshot::Snapshot = postcard::from_bytes(&expanded).ok()?;
+        registry_snapshot::restore(snapshot).ok()
+    }
+
+    fn write_registry(
+        &self,
+        root: &Path,
+        registry: &BlockRegistry,
+        flags: &[(bool, bool)],
+    ) -> io::Result<()> {
+        if flags.len() != registry.len() {
+            return Err(invalid("registry flags do not match its states"));
+        }
+        let fingerprint = self.registry_fingerprint(root)?;
+        let snapshot = registry_snapshot::capture(registry, flags);
+        let serialized = postcard::to_allocvec(&snapshot).map_err(|e| invalid(e.to_string()))?;
+        write_snapshot(
+            &self.dir,
+            REGISTRY_FILE_NAME,
+            REGISTRY_MAGIC,
+            REGISTRY_VERSION,
+            &fingerprint,
+            &serialized,
+        )
+    }
 }
 
-fn load_registry_from(dir: &Path, root: &Path) -> Option<RegistryLoad> {
-    let bytes = fs::read(dir.join(REGISTRY_FILE_NAME)).ok()?;
-    let fingerprint = registry_fingerprint(root).ok()?;
-    let expanded = decode_snapshot(&bytes, REGISTRY_MAGIC, REGISTRY_VERSION, &fingerprint)?;
-    let snapshot: registry_snapshot::Snapshot = postcard::from_bytes(&expanded).ok()?;
-    registry_snapshot::restore(snapshot).ok()
+pub(super) fn load(registry: &BlockRegistry, root: &Path) -> Option<Behaviours> {
+    CACHE.get()?.load(registry, root)
+}
+
+pub(super) fn store(registry: &BlockRegistry, root: &Path, behaviours: &Behaviours) {
+    if let Some(cache) = CACHE.get() {
+        let _ = cache.write(registry, root, behaviours);
+    }
+}
+
+pub(super) fn load_registry(root: &Path) -> Option<RegistryLoad> {
+    CACHE.get()?.load_registry(root)
 }
 
 pub(super) fn store_registry(root: &Path, registry: &BlockRegistry, flags: &[(bool, bool)]) {
-    if let Some(dir) = DIR.get() {
-        let _ = write_registry(dir, root, registry, flags);
+    if let Some(cache) = CACHE.get() {
+        let _ = cache.write_registry(root, registry, flags);
     }
-}
-
-fn write_registry(
-    dir: &Path,
-    root: &Path,
-    registry: &BlockRegistry,
-    flags: &[(bool, bool)],
-) -> io::Result<()> {
-    if flags.len() != registry.len() {
-        return Err(invalid("registry flags do not match its states"));
-    }
-    let fingerprint = registry_fingerprint(root)?;
-    let snapshot = registry_snapshot::capture(registry, flags);
-    let serialized = postcard::to_allocvec(&snapshot).map_err(|e| invalid(e.to_string()))?;
-    write_snapshot(
-        dir,
-        REGISTRY_FILE_NAME,
-        REGISTRY_MAGIC,
-        REGISTRY_VERSION,
-        &fingerprint,
-        &serialized,
-    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::prepared_test_root;
     use std::sync::atomic::AtomicU32;
 
     static NEXT_FIXTURE: AtomicU32 = AtomicU32::new(0);
 
     struct FixtureDir(PathBuf);
+    impl FixtureDir {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "sunrise-{name}-test-{}-{}",
+                std::process::id(),
+                NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed),
+            ));
+            fs::create_dir(&dir).unwrap();
+            Self(dir)
+        }
+    }
     impl Drop for FixtureDir {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
     }
 
-    fn fixture() -> Option<FixtureDir> {
-        let source = std::env::var_os("SUNRISE_RESOURCES")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/sunrise-client/26.3")
-            });
-        if !source.join("block-behaviours.json").exists() {
-            eprintln!("skipping behaviour cache tests: no client resources");
-            return None;
+    fn fixture() -> FixtureDir {
+        let source = prepared_test_root::prepared_root(&[RESOLVED_INPUT_FILES, &[FLUID_TAGS_DIR]]);
+        let dir = FixtureDir::new("behaviour-cache");
+        fs::create_dir_all(dir.0.join(FLUID_TAGS_DIR)).unwrap();
+        for file in RESOLVED_INPUT_FILES {
+            fs::copy(source.join(file), dir.0.join(file)).unwrap();
         }
-        let dir = std::env::temp_dir().join(format!(
-            "sunrise-behaviour-cache-test-{}-{}",
-            std::process::id(),
-            NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed),
-        ));
-        fs::create_dir_all(dir.join("data/minecraft/tags/fluid")).unwrap();
-        for file in [
-            "facts.json",
-            "block-behaviours.json",
-            "gameplay-facts.json",
-            "block-tags.json",
-            "cached-collision.nbt",
-        ] {
-            fs::copy(source.join(file), dir.join(file)).unwrap();
-        }
-        for entry in fs::read_dir(source.join("data/minecraft/tags/fluid")).unwrap() {
+        for entry in fs::read_dir(source.join(FLUID_TAGS_DIR)).unwrap() {
             let entry = entry.unwrap();
             if entry.file_type().unwrap().is_file() {
                 fs::copy(
                     entry.path(),
-                    dir.join("data/minecraft/tags/fluid")
-                        .join(entry.file_name()),
+                    dir.0.join(FLUID_TAGS_DIR).join(entry.file_name()),
                 )
                 .unwrap();
             }
         }
-        Some(FixtureDir(dir))
+        dir
     }
 
     /// The key is the format version and the resource bytes: no resources needed.
     #[test]
     fn key_follows_the_format_version_and_the_resource_bytes() {
-        let dir = std::env::temp_dir().join(format!(
-            "sunrise-snapshot-key-test-{}-{}",
-            std::process::id(),
-            NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed),
-        ));
-        fs::create_dir_all(&dir).unwrap();
-        let dir = FixtureDir(dir);
+        let dir = FixtureDir::new("snapshot-key");
+        let cache = Cache::new(dir.0.clone());
         fs::write(dir.0.join("facts.json"), b"[1]").unwrap();
-        let key = registry_fingerprint(&dir.0).unwrap();
-        assert_eq!(key, registry_fingerprint(&dir.0).unwrap());
+        let key = cache.registry_fingerprint(&dir.0).unwrap();
+        assert_eq!(key, cache.registry_fingerprint(&dir.0).unwrap());
         write_snapshot(
             &dir.0,
             "k.bin",
@@ -1010,14 +1034,13 @@ mod tests {
         assert_eq!(read(REGISTRY_VERSION).as_deref(), Some(&b"payload"[..]));
         assert!(read(REGISTRY_VERSION + 1).is_none());
         fs::write(dir.0.join("facts.json"), b"[1, 2]").unwrap();
-        assert_ne!(key, registry_fingerprint(&dir.0).unwrap());
+        assert_ne!(key, cache.registry_fingerprint(&dir.0).unwrap());
     }
 
     #[test]
+    #[ignore = "daily"]
     fn resolved_snapshot_roundtrips_all_fields() {
-        let Some(root) = fixture() else {
-            return;
-        };
+        let root = fixture();
         let registry = super::super::load_registry(&root.0).unwrap();
         let original = super::super::load_uncached(&registry, &root.0).unwrap();
         let captured = Snapshot::capture(&original);
@@ -1032,7 +1055,7 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn declared_vegetation_survives_a_warm_cache() {
-        let root = fixture().expect("prepared block behaviour resources");
+        let root = fixture();
         let path = root.0.join("block-behaviours.json");
         let mut behaviour: serde_json::Value =
             serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
@@ -1050,9 +1073,9 @@ mod tests {
         let ordinary = registry.default_state("minecraft:stone").unwrap();
         let cold = super::super::load_uncached(&registry, &root.0).unwrap();
         assert!(cold.data(vegetation).declared_vegetation);
-        let dir = root.0.join("game/.sunrise-cache");
-        write(&dir, &registry, &root.0, &cold).unwrap();
-        let warm = load_from(&dir, &registry, &root.0).expect("cache hit");
+        let cache = Cache::new(root.0.join("game/.sunrise-cache"));
+        cache.write(&registry, &root.0, &cold).unwrap();
+        let warm = cache.load(&registry, &root.0).expect("cache hit");
         assert!(warm.data(vegetation).declared_vegetation);
         assert!(!warm.data(ordinary).declared_vegetation);
     }
@@ -1061,52 +1084,56 @@ mod tests {
     /// file rewritten at the same length is hashed again.
     #[test]
     fn sources_are_hashed_once_until_a_file_changes() {
-        let Some(root) = fixture() else {
-            return;
-        };
-        let entries = || {
-            SOURCES
-                .lock()
-                .unwrap()
-                .iter()
-                .filter(|(stamps, _)| stamps[0].0.starts_with(&root.0))
-                .count()
-        };
-        let first = sources_digest(&root.0).unwrap();
-        assert_eq!(sources_digest(&root.0).unwrap(), first);
+        let root = FixtureDir::new("sources-digest");
+        let cache = Cache::new(root.0.clone());
+        fs::create_dir_all(root.0.join(FLUID_TAGS_DIR)).unwrap();
+        for file in RESOLVED_INPUT_FILES {
+            fs::write(root.0.join(file), b"[]").unwrap();
+        }
+        let entries = || cache.sources.lock().unwrap().len();
+        let first = cache.sources_digest(&root.0).unwrap();
+        assert_eq!(cache.sources_digest(&root.0).unwrap(), first);
         assert_eq!(entries(), 1);
         let tags = root.0.join("block-tags.json");
         let mut bytes = fs::read(&tags).unwrap();
         bytes[0] ^= 1;
         fs::write(&tags, bytes).unwrap();
-        assert_ne!(sources_digest(&root.0).unwrap(), first);
+        // The cache keys on metadata, so make the same-length rewrite visible even on
+        // filesystems whose timestamp resolution is coarser than the test's writes.
+        fs::File::options()
+            .write(true)
+            .open(&tags)
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH)
+            .unwrap();
+        assert_ne!(cache.sources_digest(&root.0).unwrap(), first);
         assert_eq!(entries(), 2);
     }
 
     #[test]
+    #[ignore = "daily"]
     fn cache_invalidates_sources_and_recovers_from_corruption() {
-        let Some(root) = fixture() else {
-            return;
-        };
+        let root = fixture();
         // The game's cache folder, apart from the resources.
         let dir = root.0.join("game/.sunrise-cache");
+        let cache = Cache::new(dir.clone());
         let registry = super::super::load_registry(&root.0).unwrap();
         // What `data::load` does once `set_dir` gave it a folder.
         let load_or_build = || {
-            load_from(&dir, &registry, &root.0).unwrap_or_else(|| {
+            cache.load(&registry, &root.0).unwrap_or_else(|| {
                 let built = super::super::load_uncached(&registry, &root.0).unwrap();
-                write(&dir, &registry, &root.0, &built).unwrap();
+                cache.write(&registry, &root.0, &built).unwrap();
                 built
             })
         };
-        assert!(load_from(&dir, &registry, &root.0).is_none());
+        assert!(cache.load(&registry, &root.0).is_none());
         let initial = load_or_build();
         assert!(dir.join(FILE_NAME).is_file());
         assert!(
             !root.0.join(FILE_NAME).exists(),
             "the resource folder stays untouched"
         );
-        let hit = load_from(&dir, &registry, &root.0).expect("cache hit");
+        let hit = cache.load(&registry, &root.0).expect("cache hit");
         assert_eq!(initial.table.state_count(), hit.table.state_count());
         let tags = root.0.join("block-tags.json");
         fs::OpenOptions::new()
@@ -1116,12 +1143,12 @@ mod tests {
             .write_all(b"\n")
             .unwrap();
         assert!(
-            load_from(&dir, &registry, &root.0).is_none(),
+            cache.load(&registry, &root.0).is_none(),
             "changed resource must invalidate"
         );
         load_or_build();
         assert!(
-            load_from(&dir, &registry, &root.0).is_some(),
+            cache.load(&registry, &root.0).is_some(),
             "fallback should replace cache"
         );
         let cache_file = dir.join(FILE_NAME);
@@ -1129,17 +1156,17 @@ mod tests {
         bytes[80] ^= 0x80;
         fs::write(&cache_file, bytes).unwrap();
         assert!(
-            load_from(&dir, &registry, &root.0).is_none(),
+            cache.load(&registry, &root.0).is_none(),
             "checksum failure must invalidate"
         );
         load_or_build();
-        assert!(load_from(&dir, &registry, &root.0).is_some());
+        assert!(cache.load(&registry, &root.0).is_some());
         // A snapshot written under another key (another build of the game,
         // other resources) is never trusted.
         let mut other = fs::read(&cache_file).unwrap();
         other[12] ^= 1;
         fs::write(&cache_file, other).unwrap();
-        assert!(load_from(&dir, &registry, &root.0).is_none());
+        assert!(cache.load(&registry, &root.0).is_none());
     }
 
     /// The content digest depends on the bytes alone: a small file is its
@@ -1160,44 +1187,31 @@ mod tests {
     }
 
     /// `facts.json` alone is a registry fixture's whole resource root.
-    fn facts_fixture() -> Option<FixtureDir> {
-        let source = std::env::var_os("SUNRISE_RESOURCES")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/sunrise-client/26.3")
-            });
-        if !source.join("facts.json").exists() {
-            eprintln!("skipping registry cache test: no client resources");
-            return None;
-        }
-        let dir = std::env::temp_dir().join(format!(
-            "sunrise-registry-cache-test-{}-{}",
-            std::process::id(),
-            NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed),
-        ));
-        fs::create_dir_all(&dir).unwrap();
-        fs::copy(source.join("facts.json"), dir.join("facts.json")).unwrap();
-        Some(FixtureDir(dir))
+    fn facts_fixture() -> FixtureDir {
+        let source = prepared_test_root::prepared_root(&[&["facts.json"]]);
+        let dir = FixtureDir::new("registry-cache");
+        fs::copy(source.join("facts.json"), dir.0.join("facts.json")).unwrap();
+        dir
     }
 
     #[test]
+    #[ignore = "daily"]
     fn registry_snapshot_roundtrips_and_recovers_from_corruption() {
-        let Some(root) = facts_fixture() else {
-            return;
-        };
+        let root = facts_fixture();
         let (registry, flags) = BlockRegistry::from_facts_json_with_flags(
             std::fs::File::open(root.0.join("facts.json")).unwrap(),
         )
         .unwrap();
         // The game's cache folder, apart from the resources.
         let dir = root.0.join("game/.sunrise-cache");
-        assert!(load_registry_from(&dir, &root.0).is_none());
-        write_registry(&dir, &root.0, &registry, &flags).unwrap();
+        let cache = Cache::new(dir.clone());
+        assert!(cache.load_registry(&root.0).is_none());
+        cache.write_registry(&root.0, &registry, &flags).unwrap();
         assert!(
             !root.0.join(REGISTRY_FILE_NAME).exists(),
             "the resource folder stays untouched"
         );
-        let (hit, hit_flags) = load_registry_from(&dir, &root.0).expect("cache hit");
+        let (hit, hit_flags) = cache.load_registry(&root.0).expect("cache hit");
         assert_eq!(hit.len(), registry.len());
         assert_eq!(hit_flags, flags);
         let mut names = std::collections::BTreeSet::new();
@@ -1218,24 +1232,24 @@ mod tests {
             .write_all(b"\n")
             .unwrap();
         assert!(
-            load_registry_from(&dir, &root.0).is_none(),
+            cache.load_registry(&root.0).is_none(),
             "changed resource must invalidate"
         );
-        write_registry(&dir, &root.0, &registry, &flags).unwrap();
-        assert!(load_registry_from(&dir, &root.0).is_some());
+        cache.write_registry(&root.0, &registry, &flags).unwrap();
+        assert!(cache.load_registry(&root.0).is_some());
         let cache_file = dir.join(REGISTRY_FILE_NAME);
         let mut bytes = fs::read(&cache_file).unwrap();
         bytes[80] ^= 0x80;
         fs::write(&cache_file, bytes).unwrap();
         assert!(
-            load_registry_from(&dir, &root.0).is_none(),
+            cache.load_registry(&root.0).is_none(),
             "checksum failure must invalidate"
         );
         // A snapshot written under another key is never trusted.
-        write_registry(&dir, &root.0, &registry, &flags).unwrap();
+        cache.write_registry(&root.0, &registry, &flags).unwrap();
         let mut other = fs::read(&cache_file).unwrap();
         other[12] ^= 1;
         fs::write(&cache_file, other).unwrap();
-        assert!(load_registry_from(&dir, &root.0).is_none());
+        assert!(cache.load_registry(&root.0).is_none());
     }
 }

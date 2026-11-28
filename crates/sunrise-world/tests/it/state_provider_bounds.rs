@@ -46,14 +46,12 @@ fn bound_recursive_providers_and_registry_lists_before_sampling() {
     let branching = serde_json::json!({"if_true":{"type":"all_of","predicates":vec![serde_json::json!({"type":"true"});7]},"then":{"id":"stone"}});
     let oversized = serde_json::json!({"type":"rule_based","rules":vec![branching;8192]});
     assert!(BlockStateProvider::from_json(&oversized.to_string(), &bindings).is_err());
-    // Content mods' blocks join shared tags: the cap is 2^20 blocks.
+    // Content mods' blocks join shared tags: a resolved named tag has no
+    // member ceiling (`HolderSetCodec.lookupTag` returns the registered set).
     let tags = BTreeMap::from([("sunrise:large".into(), vec!["stone".into(); 8193])]);
     assert!(StateProviderBindings::new(&registry, BTreeSet::new(), &tags).is_ok());
-    let tags = BTreeMap::from([(
-        "sunrise:oversized".into(),
-        vec!["stone".into(); (1 << 20) + 1],
-    )]);
-    assert!(StateProviderBindings::new(&registry, BTreeSet::new(), &tags).is_err());
+    let tags = BTreeMap::from([("sunrise:huge".into(), vec!["stone".into(); (1 << 20) + 1])]);
+    assert!(StateProviderBindings::new(&registry, BTreeSet::new(), &tags).is_ok());
     let tags = BTreeMap::from([("tag".into(), vec![]), ("minecraft:tag".into(), vec![])]);
     assert!(StateProviderBindings::new(&registry, BTreeSet::new(), &tags).is_err());
     let definitions = BTreeMap::from([

@@ -32,6 +32,9 @@ pub struct Script {
     pub take_clicked: Option<u32>,
     pub dirt_rule: Option<(bool, u32)>,
     pub write_scoreboard: bool,
+    /// Read the acting player's `container_menu` and the clicked slot's `slot_backing`
+    /// into `MENU_SEEN`.
+    pub probe_menu: bool,
 }
 
 thread_local! {
@@ -41,6 +44,10 @@ thread_local! {
     pub static PLAYER: std::cell::Cell<u128> = const { std::cell::Cell::new(0) };
     /// How often the menu type's `menu_slot_rules` part was asked.
     pub static ASKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// What `probe_menu` saw each time: whether `container_menu` answered a menu, and that
+    /// menu's backing of the event's slot.
+    pub static MENU_SEEN: RefCell<Vec<(bool, Option<mod_api::MenuSlotBacking>)>> =
+        const { RefCell::new(Vec::new()) };
 }
 
 pub(in crate::game) struct Rules;
@@ -59,6 +66,7 @@ impl mod_api::MenuPart for Rules {
 
 pub fn script(script: Script) {
     SEEN.with(|seen| seen.borrow_mut().clear());
+    MENU_SEEN.with(|seen| seen.borrow_mut().clear());
     SCRIPT.with(|s| *s.borrow_mut() = script);
 }
 pub fn dispatches() -> usize {
@@ -107,6 +115,17 @@ impl Hooks for Listener {
         );
         SEEN.with(|seen| seen.borrow_mut().push(counts));
         let s = SCRIPT.with(|s| s.borrow().clone());
+        if s.probe_menu
+            && let HostSide::Server(host) = &mut host
+        {
+            let host = &**host;
+            let player = host
+                .player(PLAYER.get())
+                .expect("the acting fixture player");
+            let menu = player.container_menu(host);
+            let backing = menu.and_then(|menu| menu.slot_backing(host, event.click.slot));
+            MENU_SEEN.with(|seen| seen.borrow_mut().push((menu.is_some(), backing)));
+        }
         if let (Some(slot), HostSide::Server(host)) = (s.write_dirt, &mut host) {
             let place = ItemPlace::PlayerSlot {
                 player: PLAYER.get(),
@@ -597,10 +616,11 @@ pub(in crate::game) mod families {
 
     /// Opens the menu, then clicks a slot with stone 3 on the cursor: the hook fires once with the
     /// frozen cursor and the set cursor applies; then with a listener that only allows, the hook
-    /// fires again and the plain click follows (`plain_cursor` is what it leaves on the cursor).
+    /// fires again and the plain click follows. The `click` callback receives whether this is the
+    /// plain click; `plain_cursor` is what that click leaves on the cursor.
     fn family(
         open: impl FnOnce(&mut crate::game::ServerGame<'_>),
-        click: impl Fn(&mut crate::game::ServerGame<'_>),
+        click: impl Fn(&mut crate::game::ServerGame<'_>, bool),
         plain_cursor: Option<(&str, u32)>,
     ) {
         with_mod(|| {
@@ -624,14 +644,14 @@ pub(in crate::game) mod families {
                 };
                 give(game);
                 script(dirt_on_the_cursor());
-                click(game);
+                click(game, false);
                 assert_eq!(dispatches(), 1, "the hook fires on this menu");
                 assert_eq!(SEEN.with(|s| s.borrow()[0].0), 3, "with the frozen cursor");
                 assert_eq!(cursor(game), Some(("minecraft:dirt".to_owned(), 2)));
                 // A listener that only allows: asked again, and the plain click follows.
                 give(game);
                 script(Script::default());
-                click(game);
+                click(game, true);
                 assert_eq!(dispatches(), 1);
                 assert_eq!(
                     cursor(game),
@@ -657,9 +677,38 @@ pub(in crate::game) mod families {
                 let host = game.server.lan.as_ref().unwrap();
                 window.set(host.menus[&12].crafting.table.as_ref().unwrap().0);
             },
-            |game| game.lan_guest_packet(12, packet(window.get(), 1)),
+            |game, plain| {
+                if plain {
+                    // CraftingMenu slot 10 is the first main-inventory slot, unlike slot 10
+                    // in the inventory menu. The table must still be open during the hook.
+                    click_probing_menu(game, packet(window.get(), 10));
+                    let host = game.server.lan.as_ref().unwrap();
+                    assert_eq!(
+                        host.hub.guests[0].inventory[9],
+                        Some(ItemStack::new("minecraft:stone", 3))
+                    );
+                    assert!(host.menus[&12].crafting.table.is_some());
+                } else {
+                    game.lan_guest_packet(12, packet(window.get(), 1));
+                }
+            },
             None,
         );
+    }
+
+    fn click_probing_menu(game: &mut crate::game::ServerGame<'_>, packet: Serverbound) {
+        script(Script {
+            probe_menu: true,
+            ..Script::default()
+        });
+        game.lan_guest_packet(12, packet);
+        MENU_SEEN.with(|seen| {
+            assert_eq!(
+                seen.borrow().as_slice(),
+                &[(false, None)],
+                "container_menu refuses the open menu rather than answering inventory"
+            );
+        });
     }
 
     #[test]
@@ -729,7 +778,7 @@ pub(in crate::game) mod families {
                 let host = game.server.lan.as_ref().unwrap();
                 window.set(host.hub.guests[0].menu.as_ref().unwrap().window);
             },
-            |game| game.lan_guest_packet(12, packet(window.get(), 0)),
+            |game, _| game.lan_guest_packet(12, packet(window.get(), 0)),
             None,
         );
     }
@@ -850,7 +899,16 @@ pub(in crate::game) mod families {
                 let host = game.server.lan.as_ref().unwrap();
                 window.set(host.menus[&12].station.as_ref().unwrap().window);
             },
-            |game| game.lan_guest_packet(12, packet(window.get(), 0)),
+            |game, plain| {
+                let click = packet(window.get(), 0);
+                if plain {
+                    click_probing_menu(game, click);
+                    let host = game.server.lan.as_ref().unwrap();
+                    assert!(host.menus[&12].station.is_some());
+                } else {
+                    game.lan_guest_packet(12, click);
+                }
+            },
             None,
         );
     }
@@ -871,7 +929,7 @@ pub(in crate::game) mod families {
                 let host = game.server.lan.as_ref().unwrap();
                 window.set(host.play[&12].mount_window.as_ref().unwrap().window);
             },
-            |game| game.lan_guest_packet(12, packet(window.get(), 1)),
+            |game, _| game.lan_guest_packet(12, packet(window.get(), 1)),
             // The stone is no horse armor: the slot refuses it and the cursor keeps it.
             Some(("minecraft:stone", 3)),
         );
@@ -1202,7 +1260,7 @@ pub(in crate::game) mod families {
                         .window,
                 );
             },
-            |game| {
+            |game, _| {
                 let Serverbound::ContainerClick(click) = packet(window.get(), 0) else {
                     unreachable!()
                 };

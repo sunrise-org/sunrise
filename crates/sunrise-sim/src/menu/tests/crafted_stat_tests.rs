@@ -20,6 +20,7 @@ fn cut(env: &Env, menu: &mut Menu, item: &str) -> i32 {
 /// `StonecutterMenu.onTake` counts the taken result (`carried.onCraftedBy`)
 /// before `awardUsedRecipes` reports the recipe.
 #[test]
+#[ignore = "daily"]
 fn a_stonecutter_take_counts_the_item_crafted() {
     with_menu(Kind::Stonecutter, |env, menu| {
         menu.creative = false;
@@ -38,6 +39,7 @@ fn a_stonecutter_take_counts_the_item_crafted() {
 /// `SmithingMenu.onTake` counts the taken result before it awards the recipe
 /// and uses one of each input.
 #[test]
+#[ignore = "daily"]
 fn a_smithing_take_counts_the_item_crafted() {
     with_menu(Kind::Smithing, |env, menu| {
         menu.creative = false;
@@ -63,6 +65,7 @@ fn a_smithing_take_counts_the_item_crafted() {
 /// a shift-click that fits everything counts no crafted item at all, and
 /// `ItemStack.getItem` of that emptied stack is AIR.
 #[test]
+#[ignore = "daily"]
 fn a_stonecutter_shift_click_counts_no_item_crafted() {
     with_menu(Kind::Stonecutter, |env, menu| {
         menu.creative = false;
@@ -81,6 +84,7 @@ fn a_stonecutter_shift_click_counts_no_item_crafted() {
 /// one. A shift-click counts what moved (`onQuickCraft`), a hotbar swap the whole stack
 /// (`onSwapCraft`). Every take reports the recipe once (`awardUsedRecipes`).
 #[test]
+#[ignore = "daily"]
 fn a_crafting_result_take_counts_what_it_asked_for() {
     for (input, button, counted) in [
         (Input::Pickup, 0, 4),

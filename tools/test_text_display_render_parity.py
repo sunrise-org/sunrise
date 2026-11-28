@@ -10,6 +10,7 @@ decodes the same entity data from vanilla's wire bytes and lays the text out wit
 `sunrise_client::text_display`. Each case's pose must agree, and its quads
 [x, y, z, ARGB] in text units as multisets (Sunrise draws all shadows first): the
 depths keep the background behind the shadow, behind the glyph and its bold copy.
+Every coordinate and pose entry is compared as binary32 bits (both sides emit floats).
 
   test_text_display_render_parity.py [--count N] [--detail N]
 """
@@ -17,6 +18,7 @@ import argparse
 import json
 import os
 import random
+import struct
 
 import sys
 from pathlib import Path
@@ -96,8 +98,22 @@ def cases(count):
 
 
 def canonical(quads):
-    """Each quad as its sorted corners, rounded below the 0.001 bold step; the quads sorted."""
-    return sorted(tuple(sorted((round(x, 4), round(y, 4), round(z, 4), color) for x, y, z, color in q)) for q in quads)
+    """Each quad as its sorted corners, coordinates as binary32 bits; the quads sorted."""
+    return sorted(tuple(sorted((lab.f32_bits(x), lab.f32_bits(y), lab.f32_bits(z), color) for x, y, z, color in q)) for q in quads)
+
+
+def readable(quad):
+    """A canonical quad with its coordinates as floats again."""
+    f = lambda bits: struct.unpack('>f', struct.pack('>I', bits))[0]
+    return [(f(x), f(y), f(z), color) for x, y, z, color in quad]
+
+
+def pose_difference(a, b):
+    """Each differing pose entry: (index, vanilla, Sunrise, ULPs apart)."""
+    if len(a) != len(b):
+        return [('length', len(a), len(b), None)]
+    return [(i, x, y, lab.ulps(lab.f32_bits(x), lab.f32_bits(y))) for i, (x, y) in enumerate(zip(a, b))
+            if lab.f32_bits(x) != lab.f32_bits(y)]
 
 
 def main():
@@ -124,7 +140,7 @@ def main():
                        build, 'compile-java')
     harness.run_logged(['java', '-Xmx1G', '-Djava.awt.headless=true', '-cp', str(classes) + os.pathsep + dependencies,
                         'dev.sunriselab.parity.VanillaTextDisplayRenderOracle', inputs, build / 'vanilla.jsonl'], build, 'vanilla')
-    vanilla = [json.loads(l) for l in (build / 'vanilla.jsonl').read_text(encoding='utf-8').splitlines()]
+    vanilla = [lab.exact_json(l) for l in (build / 'vanilla.jsonl').read_text(encoding='utf-8').splitlines()]
     errors = [(c, v['error']) for c, v in zip(chosen, vanilla) if 'error' in v]
     for c, e in errors[:3]:
         print('ORACLE ERROR', json.dumps(c, ensure_ascii=False), e)
@@ -134,23 +150,23 @@ def main():
                             for c, v in zip(chosen, vanilla)))
     command = harness.build_probe(build, 'text_display_render_fixture')
     harness.run_logged([*command, lab.RESOURCES, wire, build / 'rust.jsonl'], build, 'rust')
-    rust = [json.loads(l) for l in (build / 'rust.jsonl').read_text(encoding='utf-8').splitlines()]
+    rust = [lab.exact_json(l) for l in (build / 'rust.jsonl').read_text(encoding='utf-8').splitlines()]
     assert len(vanilla) == len(rust) == len(chosen), (len(vanilla), len(rust), len(chosen))
     bad, quads = [], 0
     for c, v, r in zip(chosen, vanilla, rust):
         if 'error' in v:
             continue
         quads += len(v['quads'])
-        pose = all(abs(a - b) <= 2e-5 for a, b in zip(v['pose'], r['pose']))
+        pose = not pose_difference(v['pose'], r['pose'])
         if not pose or canonical(v['quads']) != canonical(r['quads']):
             bad.append((c, v, r, pose))
     for c, v, r, pose in bad[:args.detail]:
         print('MISMATCH', json.dumps(c, ensure_ascii=False))
         if not pose:
-            print('   pose vanilla', v['pose'], '\n   pose sunrise', r['pose'])
+            print('   pose (index, vanilla, Sunrise, ulp):', pose_difference(v['pose'], r['pose']))
         a, b = canonical(v['quads']), canonical(r['quads'])
-        only_v = [q for q in a if q not in b][:3]
-        only_r = [q for q in b if q not in a][:3]
+        only_v = [readable(q) for q in a if q not in b][:3]
+        only_r = [readable(q) for q in b if q not in a][:3]
         print(f'   {len(a)} vanilla quads, {len(b)} Sunrise; only vanilla {only_v}; only Sunrise {only_r}')
     print(f'{len(chosen) - len(bad) - len(errors)}/{len(chosen)} text display cases match ({quads} quads); '
           f'{len(errors)} oracle errors')

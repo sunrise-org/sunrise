@@ -266,6 +266,62 @@ fn group_only_changes_publish_current_blocks_and_never_add_vanilla_traffic() {
     assert_eq!(bodies(&rx_plain), got);
 }
 
+/// #6142: a view pass's incremental broadcast, before the level's block entities load, sends
+/// the deltas of other columns but leaves a column due to go whole, with its block and group
+/// changes, for the full broadcast after the loads. That column then carries the group a load
+/// published in between.
+#[test]
+fn an_incremental_broadcast_leaves_a_whole_column_with_its_changes_for_the_full_one() {
+    let (mut hub, rx_groups, rx_plain) = hub_with_sunrise_and_vanilla();
+    let mut world = grouped_world();
+    world.block_log = Some(Vec::new());
+    world.connection_group_log = Some(Default::default());
+    for i in 0..2 {
+        hub.guests.update(i, |g| {
+            g.sent_chunks.extend([(0, 0), (1, 0)]);
+        });
+    }
+    let (at, elsewhere) = ([3, 64, 5], [19, 64, 5]);
+    let state = sunrise_world::registry::BlockStateId(2);
+    world
+        .set_with_notification(19, 64, 5, state, false)
+        .unwrap();
+    world
+        .block_log
+        .as_mut()
+        .unwrap()
+        .extend([(3, 64, 5), (19, 64, 5)]);
+    assert!(world.set_connection_group(3, 64, 5, Some(100), true));
+    world.bulk_log.insert((0, 0));
+
+    hub.broadcast_incremental_block_changes(&mut world);
+    let plain = bodies(&rx_plain);
+    assert!(
+        matches!(plain.as_slice(), [body] if matches!(decode(body), C::BlockUpdate(b) if b.pos == elsewhere)),
+        "only the other column's change goes now"
+    );
+    assert_eq!(bodies(&rx_groups), plain);
+    assert!(world.bulk_log.contains(&(0, 0)));
+    assert_eq!(world.block_log.as_deref(), Some(&[(3, 64, 5)][..]));
+    assert!(
+        world
+            .connection_group_log
+            .as_ref()
+            .unwrap()
+            .contains(&(3, 64, 5))
+    );
+
+    // What a block entity's load publishes before the full broadcast goes with the column.
+    assert!(world.set_connection_group(3, 64, 5, Some(101), true));
+    hub.broadcast_block_changes(&mut world);
+    let (column, packet) = pair(&bodies(&rx_groups), &section(at, Some(101)));
+    assert!(matches!(packet, C::LevelChunkWithLight(c) if (c.x, c.z) == (0, 0)));
+    assert_eq!(bodies(&rx_plain), [column]);
+    assert!(world.bulk_log.is_empty());
+    assert_eq!(world.block_log.as_deref(), Some(&[][..]));
+    assert!(world.connection_group_log.as_ref().unwrap().is_empty());
+}
+
 #[test]
 fn chunk_snapshot_has_at_most_one_payload_for_each_occupied_section() {
     let mut chunk = Chunk::empty(0, 0);

@@ -80,13 +80,10 @@ pub(crate) mod tests {
         )
         .unwrap();
         game.creative = true;
-        game.player = Some(
-            sunrise_sim::motion::PlayerMotion::new(
-                game.motion,
-                sunrise_core::geometry::Vec3::new(10.5, 64.0, -3.25),
-            )
-            .unwrap(),
-        );
+        game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+            game.motion,
+            sunrise_core::geometry::Vec3::new(10.5, 64.0, -3.25),
+        ));
         let p = game.player.as_ref().expect("a player").position;
         game.start_audio_capture();
         (game, [p.x, p.y, p.z])

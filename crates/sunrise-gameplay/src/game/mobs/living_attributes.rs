@@ -144,7 +144,7 @@ impl ServerGame<'_> {
             .find(&self.common.mobs, id)
             .filter(|&i| self.common.mobs[i].join == join && !self.common.mobs[i].removed)
         {
-            let catalog = self.common.motion.attributes.clone();
+            let catalog = self.common.motion.attributes().clone();
             let items = server_world_items!(self);
             finalize::finish_equipment_tick(&mut self.common.mobs[i], &catalog, items, deltas);
         }
@@ -155,7 +155,7 @@ impl ServerGame<'_> {
         if !self.common.is_logical_server() {
             return;
         }
-        let catalog = self.common.motion.attributes.clone();
+        let catalog = self.common.motion.attributes().clone();
         let items = server_world_items!(self);
         for a in self.common.armor_stands.iter_mut() {
             if a.equipment.is_empty() && !a.live.has_worn() {
@@ -194,7 +194,7 @@ impl ServerGame<'_> {
             return None;
         }
         let mob = self.common.mobs.iter().find(|m| m.id == id && !m.removed)?;
-        snapshot(&self.common.motion.attributes, mob)
+        snapshot(self.common.motion.attributes(), mob)
     }
 
     /// Refresh equipment immediately, keeping the live diff if the caller took
@@ -207,7 +207,7 @@ impl ServerGame<'_> {
         if !self.common.is_logical_server() {
             return;
         }
-        let catalog = self.common.motion.attributes.clone();
+        let catalog = self.common.motion.attributes().clone();
         let items = server_world_items!(self);
         let Some(m) = self
             .common
@@ -468,7 +468,7 @@ impl ServerGame<'_> {
         name: &str,
         write: AttributeWrite,
     ) -> Option<bool> {
-        let catalog = self.common.motion.attributes.clone();
+        let catalog = self.common.motion.attributes().clone();
         let id = catalog.id(name)?;
         let default = match write {
             AttributeWrite::ResetBase => catalog.default_base(&self.target_type(t), id)?,
@@ -570,7 +570,7 @@ impl ServerGame<'_> {
         write: AttributeWrite,
         default: f64,
     ) {
-        let catalog = self.common.motion.attributes.clone();
+        let catalog = self.common.motion.attributes().clone();
         let (live, entity, seed) = match t {
             Target::Mob(id) => {
                 let Some(m) = self

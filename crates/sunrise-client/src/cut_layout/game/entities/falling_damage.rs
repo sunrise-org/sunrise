@@ -98,7 +98,7 @@ mod tests {
         log: &Mutex<Log>,
         helmet: Option<ItemStack>,
     ) {
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
         game.armor[0] = helmet;
         game.apply_equipment();
         game.refresh_armor_protection();

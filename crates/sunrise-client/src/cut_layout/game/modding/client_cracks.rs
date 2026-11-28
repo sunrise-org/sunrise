@@ -292,13 +292,10 @@ pub(crate) mod tests {
                 game.client.title.0 = None;
                 game.client.screen = sunrise_gameplay_common::game::Screen::Playing;
                 game.client.remote.as_mut().unwrap().loaded_sent = true;
-                game.player = Some(
-                    sunrise_sim::motion::PlayerMotion::new(
-                        game.motion,
-                        sunrise_core::geometry::Vec3::new(4.5, 65.0, 4.5),
-                    )
-                    .unwrap(),
-                );
+                game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                    game.motion,
+                    sunrise_core::geometry::Vec3::new(4.5, 65.0, 4.5),
+                ));
                 game.set_local_mode(sunrise_command::args::GameMode::Survival);
                 game.world.game_time = 519;
                 game.vanilla_key_mapping("key.attack")

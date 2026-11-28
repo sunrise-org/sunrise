@@ -231,3 +231,93 @@ fn location_check_reads_the_offset_block_entitys_full_data() {
         },
     );
 }
+
+/// A `LootData` whose `minecraft:weather_check` table is `table`, read through the
+/// same loader a world's tables go through (no pack stack).
+fn weather_loot_data(table: &str) -> sunrise_world::loot::LootData {
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path();
+    let dir = root.join("data/minecraft/loot_table");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("weather_check.json"), table).unwrap();
+    std::fs::write(root.join("items.json"), "{}").unwrap();
+    let defaults = sunrise_world::item_defaults::read(root).unwrap();
+    sunrise_world::loot::LootData::load_table_data(
+        root,
+        &sunrise_world::loot::PackOverlay::NONE,
+        &defaults,
+    )
+    .unwrap()
+}
+
+/// `WeatherCheck` reads the level a roll is in, which `loot_place_at` fills from
+/// `loot_weather`: at exactly `0.2_f32` the widened compare says raining, so the table's
+/// rainy pool is the one that drops. A plain `f32` comparison picks the dry pool instead.
+#[test]
+fn weather_check_at_exact_f32_threshold_picks_the_vanilla_drop() {
+    const TABLE: &str = r#"{"pools":[
+        {"rolls":1,"entries":[{"type":"minecraft:item","name":"minecraft:diamond"}],
+         "condition":{"type":"minecraft:weather_check","raining":true}},
+        {"rolls":1,"entries":[{"type":"minecraft:item","name":"minecraft:gold_ingot"}],
+         "condition":{"type":"minecraft:weather_check","raining":false}}
+    ]}"#;
+    let loot = weather_loot_data(TABLE);
+    let (raining, thundering) =
+        sunrise_gameplay_common::game::weather::loot_weather((0.2_f32, 0.9_f32), true);
+    assert_eq!((raining, thundering), (true, false));
+    let place = sunrise_world::loot::LootPlace {
+        origin: Some([2.5, 100.5, 2.5]),
+        level: Some(sunrise_world::loot::LootLevel {
+            raining,
+            thundering,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let mut random = sunrise_core::random::LegacyRandom::new(1);
+    let drops = sunrise_world::loot::with_native_loot_place(place, || {
+        loot.roll_split("minecraft:weather_check", &mut random)
+    });
+    let names: Vec<&str> = drops.iter().map(|stack| &*stack.item).collect();
+    assert_eq!(names, ["minecraft:diamond"]);
+}
+
+/// `WeatherCheck` rolls the drop from the level's weather as `Level.isRaining` reads it: the
+/// `f32` rain level widened to `f64` before comparing with 0.2 (vanilla 26.3
+/// `Level.isRaining`). At exactly `0.2_f32` the widening puts it above 0.2, where a plain
+/// `f32` comparison wrongly picks the dry drop.
+#[test]
+#[ignore = "daily"]
+fn weather_check_through_loot_place_at_picks_the_vanilla_drop() {
+    use crate::game::native_entity_refs::tests::{run_fresh_cases, with_game};
+
+    // Game setup touches process-wide save metadata; leave the test runner's state alone.
+    if run_fresh_cases(
+        "game::server_side::spill::loot_context_tests::weather_check_through_loot_place_at_picks_the_vanilla_drop",
+        "SUNRISE_WEATHER_LOOT_CONTEXT_CHILD",
+        &["weather_check"],
+    ) {
+        return;
+    }
+
+    const TABLE: &str = r#"{"pools":[
+        {"rolls":1,"entries":[{"type":"minecraft:item","name":"minecraft:diamond"}],
+         "condition":{"type":"minecraft:weather_check","raining":true}},
+        {"rolls":1,"entries":[{"type":"minecraft:item","name":"minecraft:gold_ingot"}],
+         "condition":{"type":"minecraft:weather_check","raining":false}}
+    ]}"#;
+    // The loot data loads before `with_game`, which also installs the test platform.
+    mod_platform::__private::test_platform::install();
+    let loot = weather_loot_data(TABLE);
+    with_game(|game| {
+        game.world.weather.rain_level = (0.2_f32, 0.2_f32);
+        let place = game.common.loot_place_at([2.5, 100.5, 2.5], None);
+        assert_eq!(place.level.as_ref().map(|level| level.raining), Some(true));
+        let mut random = sunrise_core::random::LegacyRandom::new(1);
+        let drops = sunrise_world::loot::with_native_loot_place(place, || {
+            loot.roll_split("minecraft:weather_check", &mut random)
+        });
+        let names: Vec<&str> = drops.iter().map(|stack| &*stack.item).collect();
+        assert_eq!(names, ["minecraft:diamond"]);
+    });
+}

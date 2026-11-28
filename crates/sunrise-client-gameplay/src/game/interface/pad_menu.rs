@@ -388,11 +388,7 @@ impl crate::game::ClientGame<'_> {
     fn pad_pointer_screen(&self) -> bool {
         matches!(
             self.client.screen,
-            Screen::HudEditor
-                | Screen::Inventory
-                | Screen::Creative
-                | Screen::Stats
-                | Screen::Advancements
+            Screen::Inventory | Screen::Creative | Screen::Stats | Screen::Advancements
         ) || self.client.book.is_some()
             || (self.client.screen == Screen::Options
                 && self.client.chat_ui.options.page() == Page::Packs)

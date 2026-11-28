@@ -1,0 +1,1 @@
+sunrise-client-gameplay game::client_side::mount_menu::tests::vanilla_body_armour_still_fits_its_mobs lib daily resources

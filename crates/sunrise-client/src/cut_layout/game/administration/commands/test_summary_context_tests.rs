@@ -62,7 +62,7 @@ fn added_issuer_actor_missing_guest_and_restoration_controls() {
     ] {
         assert!(game.run_command(line));
     }
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(1.5, 200.0, 1.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(1.5, 200.0, 1.5)));
     game.lan_host(
         sunrise_gameplay::game::lan::LanSettings {
             port: 0,

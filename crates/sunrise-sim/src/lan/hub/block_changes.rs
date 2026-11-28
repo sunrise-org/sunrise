@@ -1,7 +1,7 @@
 //! `ChunkHolder.broadcastChanges`: the light and blocks that changed in the level in place, to
 //! the players sent those chunks, and, wrapped with the level, to the players whose client views
 //! it (`viewed_levels`).
-use super::{Guest, Hub};
+use super::Hub;
 use crate::{
     chunk::Chunk,
     fast_hash::FxHashSet,
@@ -265,29 +265,37 @@ impl Hub {
     }
 
     pub(in crate::lan) fn broadcast_block_changes(&mut self, world: &mut World) {
+        self.broadcast_block_changes_in(world, true);
+    }
+
+    /// [`Self::broadcast_block_changes`] without the whole-column sends: a column changed in
+    /// bulk or waiting for a resend keeps everything it would send (its block and group
+    /// changes too) for the next full broadcast. A view pass sends these before the level's
+    /// new block entities load, as `ChunkHolder.broadcastChanges` sends its deltas first, and
+    /// leaves whole columns until after, so they carry what the loads publish (#6142).
+    pub(in crate::lan) fn broadcast_incremental_block_changes(&mut self, world: &mut World) {
+        self.broadcast_block_changes_in(world, false);
+    }
+
+    fn broadcast_block_changes_in(&mut self, world: &mut World, whole: bool) {
+        // Columns whose whole send waits for the next full broadcast.
+        let deferred: crate::fast_hash::FxHashSet<(i32, i32)> = if whole {
+            Default::default()
+        } else {
+            (world.bulk_log.iter())
+                .chain(world.chunk_resends.keys())
+                .copied()
+                .collect()
+        };
         // Chunks changed in bulk (`World::edit_runs`) go whole to those who see them: one packet each, where a
         // change of each block would be thousands (the client lights and meshes them once, on its workers).
         let mut bulk = Vec::new();
-        if !world.bulk_log.is_empty() {
+        if whole && !world.bulk_log.is_empty() {
             bulk.extend(world.bulk_log.drain());
             bulk.sort_unstable();
-            // The single-player window's far terrain draws a column it isn't sent as the window last saw it: it is
-            // handed the column to summarize again (`handoff::changed`).
-            let unsent = |g: &Guest, key: &(i32, i32)| {
-                self.here(g)
-                    && g.address() == crate::lan::conn::MEMORY_ADDRESS
-                    && !g.sent_chunks.contains(key)
-            };
-            for key in &bulk {
-                if let Some(chunk) = world.chunks.get(key)
-                    && self.guests.iter().any(|g| unsent(g, key))
-                {
-                    crate::lan::handoff::changed(chunk);
-                }
-            }
         }
         let mut resends = Vec::new();
-        if !world.chunk_resends.is_empty() {
+        if whole && !world.chunk_resends.is_empty() {
             // Release only resends whose preceding light completion marker reached `Ready`
             // (`ChunkMap.waitForLightBeforeSending` / `ThreadedLevelLightEngine.waitForPendingTasks`).
             world.chunk_resends.retain(|&key, state| {
@@ -367,6 +375,9 @@ impl Hub {
             .as_mut()
             .map(std::mem::take)
             .unwrap_or_default();
+        let in_deferred = |p: &(i32, i32, i32)| deferred.contains(&(p.0 >> 4, p.2 >> 4));
+        let deferred_log: Vec<_> = log.extract_if(.., |p| in_deferred(p)).collect();
+        let deferred_groups: Vec<_> = group_changes.extract_if(|p| in_deferred(p)).collect();
         if !sent_whole.is_empty() {
             // (what changed in them one at a time went with them, but for one-shot fields: a chunk has none)
             log.retain(|p| {
@@ -507,7 +518,11 @@ impl Hub {
             }
         }
         if let Some(log) = &mut world.connection_group_log {
+            group_changes.extend(deferred_groups);
             *log = group_changes;
+        }
+        if let Some(log) = &mut world.block_log {
+            log.extend(deferred_log);
         }
     }
 

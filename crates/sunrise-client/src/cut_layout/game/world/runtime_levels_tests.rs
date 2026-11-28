@@ -1171,13 +1171,10 @@ fn a_level_with_a_player_in_it_is_not_unloaded() {
         let dim = Dim::extra("crowd:a").unwrap();
         game.enter_level(dim).unwrap();
         // The player stands in the level in place.
-        game.player = Some(
-            sunrise_sim::motion::PlayerMotion::new(
-                game.motion,
-                sunrise_core::geometry::Vec3::new(0.5, 80.0, 0.5),
-            )
-            .unwrap(),
-        );
+        game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+            game.motion,
+            sunrise_core::geometry::Vec3::new(0.5, 80.0, 0.5),
+        ));
         assert_eq!(
             unload_as(game, "crowd", "crowd:a"),
             Err(RuntimeLevelError::PlayersInside)
@@ -1456,13 +1453,10 @@ fn a_level_with_a_player_in_it_is_not_deleted() {
         game.apply_runtime_levels();
         let dim = Dim::extra("guest:a").unwrap();
         game.enter_level(dim).unwrap();
-        game.player = Some(
-            sunrise_sim::motion::PlayerMotion::new(
-                game.motion,
-                sunrise_core::geometry::Vec3::new(0.5, 80.0, 0.5),
-            )
-            .unwrap(),
-        );
+        game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+            game.motion,
+            sunrise_core::geometry::Vec3::new(0.5, 80.0, 0.5),
+        ));
         let marker = game.server.world_root.join("dimensions/guest/a/marker.txt");
         write_file(&marker);
         assert_eq!(

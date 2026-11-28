@@ -26,6 +26,16 @@ pub fn precipitation_at(
     biomes.get(id).snows_at(pos, sea_level)
 }
 
+/// The one `Level.isRaining` / `isThundering` reading of interpolated float strengths.
+pub use sunrise_level::world::weather_flags;
+
+/// `Level.isRaining` and `isThundering` for a level that can have weather: the strengths
+/// widened to `f64` before the compare, then gated by `Level.canHaveWeather` (#6201).
+pub fn loot_weather((rain, thunder): (f32, f32), can_have_weather: bool) -> (bool, bool) {
+    let (raining, thundering) = weather_flags((rain, thunder));
+    (can_have_weather && raining, can_have_weather && thundering)
+}
+
 /// What `Level.precipitationAt` reads of the level in place: it rains (the rain level above 0.2),
 /// the sky light is 15, the motion-blocking height, and the biome's precipitation there
 /// (`ClientLevel.getPrecipitationAt`'s zoomed biome; snow is `Some(true)` there).
@@ -178,7 +188,7 @@ pub trait WeatherGameExt<'__sg>: crate::game::SideGame<'__sg> {
             biomes: || world_biomes!(self).as_ref(),
             biome_zoom: || self.side_state().streaming_state().biome_zoom,
             sea_level: || self.weather_sea_level(),
-            rain: || self.weather_levels(1.0).0 > 0.2,
+            rain: || weather_flags(self.weather_levels(1.0)).0,
         };
         sunrise_world::level::weather::precipitation_at(&reads, p)
             == sunrise_world::level::PrecipitationKind::Rain

@@ -43,6 +43,8 @@ impl ClientGame<'_> {
             Arc::make_mut(enchantments).entity_tags = items.entity_type_tags.members().clone();
         }
         self.common.server_items = Some(Arc::new(items));
+        // A loaded shader pack's `%tag` ids follow these tags at once, not at the next frame.
+        self.sync_pack_ids();
         self.install_remote_registry_snapshots();
     }
 

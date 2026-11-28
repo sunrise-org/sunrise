@@ -70,7 +70,7 @@ fn packets_ask_client_level_before_playback_not_ui() {
     mod_platform::testing::with_mods(mods, || {
         with_sound_playback_client(|pair| {
             let game = &mut *pair.client;
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(3.0, 64.0, 4.0)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(3.0, 64.0, 4.0)));
             let inputs = Arc::new(LoadInputs::new(
                 Default::default(),
                 game.options.resources.clone(),

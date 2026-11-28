@@ -87,13 +87,10 @@ fn a_mod_names_the_guest_whose_visibility_it_is_asked() {
             assert_eq!(*heard.lock().unwrap(), [Some(uuid), None]);
             assert_eq!(uuid, 127, "guest 5's fixture UUID");
             // The host player, first acting, then in place with no turn running.
-            game.player = Some(
-                sunrise_sim::motion::PlayerMotion::new(
-                    game.motion,
-                    sunrise_core::geometry::Vec3::ZERO,
-                )
-                .unwrap(),
-            );
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                sunrise_core::geometry::Vec3::ZERO,
+            ));
             sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
             let host = |game: &mut sunrise_gameplay::game::ServerGame<'_>| {
                 game.scaled_visibility(|epoch| mod_api::EntityRef::new(epoch, 20), 900, 1.0);

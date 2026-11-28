@@ -432,7 +432,7 @@ impl ServerGame<'_> {
             kind,
             position,
             mob,
-            attributes: &self.common.motion.attributes,
+            attributes: self.common.motion.attributes(),
         }
     }
 
@@ -448,7 +448,7 @@ impl ServerGame<'_> {
             position,
             mob,
             items: server_world_items!(self),
-            attributes: &self.common.motion.attributes,
+            attributes: self.common.motion.attributes(),
         }
     }
 

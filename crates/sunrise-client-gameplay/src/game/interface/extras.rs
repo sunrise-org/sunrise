@@ -20,7 +20,7 @@ pub(in crate::game) struct ExtrasState {
 }
 
 impl crate::game::ClientGame<'_> {
-    /// Once per frame: update frame timing and the extra HUD state.
+    /// Once per frame: capture frame timing and dispatch frame preparation.
     pub fn extras_frame(&mut self, elapsed: Duration) {
         let (world_partial_tick, partial_tick) = self.frame_partial_ticks();
         self.client.extras.frame_partial_ticks = Some((world_partial_tick, partial_tick));
@@ -28,13 +28,11 @@ impl crate::game::ClientGame<'_> {
         // A clear a mod asked for (in this frame's `RenderFrameEvent.Pre`, or after the last
         // frame was drawn) lands before this frame's particles are drawn, paused or not.
         self.apply_mod_particle_clear();
-        self.pvp_frame();
         self.recipes_received_now();
     }
-    /// The PvP HUD widgets and Sunrise hook layers (hidden with F1 by the caller).
+    /// The Sunrise hook layers (hidden with F1 by the caller).
     pub(in crate::game::client_side) fn draw_extras(&mut self, batch: &mut HudBatch) {
         let mut corners = Corners::new(batch.width, batch.height, self.effect_rows_height());
-        self.draw_pvp_hud(batch, &mut corners);
         // The layers crates registered (`sunrise_hooks::hud`): none, no canvas.
         let layers = sunrise_hooks::hud::engine::all();
         if !layers.is_empty() {
@@ -46,7 +44,7 @@ impl crate::game::ClientGame<'_> {
     /// (`Hud.extractEffects`: beneficial at y 1, harmful at y 26).
     pub(in crate::game::client_side) fn effect_rows_height(&self) -> f32 {
         let effects = &self.common.potions.effects.list;
-        if effects.is_empty() || self.client.screen != Screen::Playing || self.pvp_effects_shown() {
+        if effects.is_empty() || self.client.screen != Screen::Playing {
             return 0.0;
         }
         let harmful = effects.iter().any(|e| {

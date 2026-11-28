@@ -24,7 +24,7 @@ use super::{InvalidBound, LegacyPositionalRandom, LegacyRandom, PositionalRandom
 use crate::position::BlockPos;
 
 macro_rules! owner_random {
-    ($(#[$doc:meta])* $name:ident, $positional:ident, $make:ident) => {
+    ($(#[$doc:meta])* $name:ident, $positional:ident, $make:ident, $level_owned:expr) => {
         $(#[$doc])*
         #[repr(transparent)]
         #[derive(Clone, Debug)]
@@ -34,7 +34,11 @@ macro_rules! owner_random {
             /// The one way to make this owner's random, so every site that
             /// wraps one can be found.
             #[inline]
-            pub const fn $make(random: LegacyRandom) -> Self { Self(random) }
+            pub const fn $make(random: LegacyRandom) -> Self {
+                #[cfg(feature = "rng-count")]
+                let random = random.with_level_owned($level_owned);
+                Self(random)
+            }
         }
 
         impl std::ops::Deref for $name {
@@ -98,15 +102,26 @@ owner_random!(
     /// (the module docs list them) are never wrapped as one.
     EntityRandom,
     EntityPositional,
-    own
+    own,
+    false
 );
 owner_random!(
     /// The level's random, vanilla's `Level.random`. The other owners
     /// (the module docs list them) are never wrapped as one.
     LevelRandom,
     LevelPositional,
-    for_level
+    for_level,
+    true
 );
+
+#[cfg(feature = "rng-count")]
+impl LevelRandom {
+    /// Wrap a temporary placeholder without counting draws on it as live level draws.
+    #[inline]
+    pub(super) const fn untracked(random: LegacyRandom) -> Self {
+        Self(random.with_level_owned(false))
+    }
+}
 
 #[cfg(test)]
 mod tests {

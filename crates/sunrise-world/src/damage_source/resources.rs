@@ -94,7 +94,7 @@ pub fn resource_tags<T: Clone + Ord>(
             }
         }
     }
-    let built = tags.build(lookup).map_err(|e| invalid(e.to_string()))?;
+    let built = tags.bind(lookup);
     for id in built.missing.keys() {
         log::warn!("Sunrise: damage tag {id} has unresolved required entries");
     }

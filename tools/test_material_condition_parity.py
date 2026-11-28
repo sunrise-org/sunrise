@@ -273,12 +273,11 @@ def main():
     (build/"noises.json").write_text(json.dumps(noises,separators=(",",":")),encoding="utf-8")
     biomes=biome.biome_resources(jars["server"])
     if not biomes or biomes!=biome.biome_resources(jars["client"]):raise ValueError("client/server biome definitions differ")
-    (build/"biomes.json").write_text(json.dumps(biomes,separators=(",",":")),encoding="utf-8")
+    biome_count=len(biomes)
     biome_tags=biome_tag_resources(jars["server"])
     if not biome_tags or biome_tags!=biome_tag_resources(jars["client"]):raise ValueError("client/server biome tags differ")
     biome_tag_count=len(biome_tags)
     biome_tags.update({"sunrise:empty":'{"values":[]}',"sunrise:chain":'{"values":["#minecraft:is_badlands","minecraft:plains",{"id":"minecraft:unknown","required":false}]}',"sunrise:duplicates":'{"values":["minecraft:plains","minecraft:plains"]}'})
-    (build/"biome_tags.json").write_text(json.dumps(biome_tags,separators=(",",":")),encoding="utf-8")
     conditions=condition_resources(jars["server"])
     if not conditions or conditions!=condition_resources(jars["client"]):raise ValueError("client/server material-condition resources differ")
     resource_count=len(conditions)
@@ -290,7 +289,31 @@ def main():
     sources=[oracle,anchor_oracle,biome_oracle,lab.ROOT/"tools/test_biome_temperature_parity.py",Path(__file__),lab.ROOT/"tools/test_worldgen_parity.py",lab.ROOT/"tools/test_rust_parity.py",lab.ROOT/"tools/lab.py",lab.ROOT/"Cargo.toml",lab.ROOT/"Cargo.lock",lab.ROOT/"crates/sunrise-core/Cargo.toml",lab.ROOT/"crates/sunrise-world/Cargo.toml",
              *sorted((lab.ROOT/"crates/sunrise-core/src").rglob("*.rs")),*sorted((lab.ROOT/"crates/sunrise-world/src").rglob("*.rs")),lab.ROOT/"crates/sunrise-world/examples/probe/material_condition_fixture.rs"]
     tested_sources=base.source_hashes(sources)
-    fixtures=[*corpus(),*codec_corpus(conditions),*rule_corpus(conditions),*noise_corpus(noises),*biome_corpus(biomes),*biome_tag_corpus(biomes,biome_tags),*preliminary_corpus(),*ore_corpus()];inputs=build/"inputs.txt";inputs.write_text("".join(json.dumps(f,separators=(",",":"))+"\n" for f in fixtures),encoding="utf-8")
+    fixtures=[*corpus(),*codec_corpus(conditions),*rule_corpus(conditions),*noise_corpus(noises),*biome_corpus(biomes),*biome_tag_corpus(biomes,biome_tags),*preliminary_corpus(),*ore_corpus()]
+
+    # Add the synthetic catalog after building the ordinary biome/tag corpora,
+    # so only this rule exercises the new keys. Both probes load the same files.
+    members = [f"sunrise:catalog/biome_{i}" for i in range(8193)]
+    nonmember = "sunrise:catalog/nonmember"
+    climate = '{"has_precipitation":false,"temperature":0.5,"downfall":0.0}'
+    biomes.update(dict.fromkeys([*members, nonmember], climate))
+    # 8192 x 8 padding memberships plus the wide tag cross both catalog
+    # bounds as well as the old 8192-member compilation limit for a named tag.
+    padding = json.dumps({"values": members[:8]})
+    biome_tags.update((f"sunrise:catalog/tag_{i}", padding) for i in range(8192))
+    biome_tags["sunrise:catalog/wide"] = json.dumps({"values": members})
+    tagged = ["json", json.dumps({"type": "biome", "biome_is": "#sunrise:catalog/wide"})]
+    ops = [["xz", 0, 0, 0, 0]]
+    for name in (members[-1], nonmember):
+        ops += [["biome", name], ["y", 0, 0, 0, 64], ["apply", 0, 64, 0]]
+    fixtures.append({
+        "seed": 0, "legacy": False, "context": [-64, 384, 63], "conditions": [],
+        "rules": [["sequence", [["if", tagged, ["block", 7]], ["block", 9]]]],
+        "ops": ops,
+    })
+    (build/"biomes.json").write_text(json.dumps(biomes,separators=(",",":")),encoding="utf-8")
+    (build/"biome_tags.json").write_text(json.dumps(biome_tags,separators=(",",":")),encoding="utf-8")
+    inputs=build/"inputs.txt";inputs.write_text("".join(json.dumps(f,separators=(",",":"))+"\n" for f in fixtures),encoding="utf-8")
     fixture_paths=[inputs,build/"noises.json",build/"conditions.json",build/"biomes.json",build/"biome_tags.json"];tested_fixtures=base.source_hashes(fixture_paths);classes=build/"classes";classes.mkdir(exist_ok=True)
     def run(command,name):
         with (build/(name+".log")).open("w",encoding="utf-8") as log:base.run(list(map(str,command)),stdout=log,stderr=subprocess.STDOUT)
@@ -310,7 +333,7 @@ def main():
     base.ensure_sources_unchanged(sources,tested_sources);base.ensure_sources_unchanged(fixture_paths,tested_fixtures)
     report={"schema":1,"minecraft":lock["minecraft"]["version"],"manifest_sha1":lock["minecraft"]["manifest_sha1"],"platform":platform.platform(),
             "java":subprocess.check_output(["java","--version"],text=True).splitlines()[0],"rustc":subprocess.check_output(["rustc","--version"],text=True).strip(),
-            "fixtures":len(fixtures),"initial_conditions":sum(len(f["conditions"]) for f in fixtures),"context_operations":sum(len(f["ops"]) for f in fixtures),"noise_resources":len(noises),"condition_resources":resource_count,"biome_resources":len(biomes),"biome_tag_resources":biome_tag_count,"biome_fixtures":sum("possible_biomes" in f for f in fixtures),"preliminary_fixtures":len(list(preliminary_corpus())),"ore_fixtures":sum("ore_values" in f for f in fixtures),"noise_fixtures":sum("real_noise" in f for f in fixtures),"initial_rules":sum(len(f.get("rules",[])) for f in fixtures),"codec_inputs":sum(len(f.get("json",[])) for f in fixtures),
+            "fixtures":len(fixtures),"initial_conditions":sum(len(f["conditions"]) for f in fixtures),"context_operations":sum(len(f["ops"]) for f in fixtures),"noise_resources":len(noises),"condition_resources":resource_count,"biome_resources":biome_count,"biome_tag_resources":biome_tag_count,"biome_fixtures":sum("possible_biomes" in f for f in fixtures),"preliminary_fixtures":len(list(preliminary_corpus())),"ore_fixtures":sum("ore_values" in f for f in fixtures),"noise_fixtures":sum("real_noise" in f for f in fixtures),"initial_rules":sum(len(f.get("rules",[])) for f in fixtures),"codec_inputs":sum(len(f.get("json",[])) for f in fixtures),
             "sources_sha256":tested_sources,"fixtures_sha256":tested_fixtures,"rust_output_sha256":lab.digest(build/"rust.txt","sha256"),"references":references,
             "scope":"Actual runtime constructors and compiled evaluators for hole, steep, Y, water, stone-depth, vertical-gradient, noise-threshold, biome-membership, temperature and negated conditions, with actual MaterialRuleContext updates and secondary-noise caching. Both world random algorithms and named positional gradient factories, boundary/overflow arithmetic, floor/ceiling selection, reversed/equal gradient bounds, late compilation and repeated/changed context evaluations. Context surfaceDepth is injected after native updateXZ and the secondary sampler is a traced constant-noise override; these supplied inputs isolate condition behavior, with full MaterialSystem surface inputs checked separately. Direct and holder condition codecs cover all eight bundled definitions, canonical encoding, forward and nested references, default namespaces, numeric wrapping/truncation, required fields, invalid types and nested anchor alternatives. Cycles and bounded resource limits are typed Rust errors, not compared to native stack overflow. Actual BlockRule, SequenceRule, ConditionRule and BandlandsRule compilation/application additionally cover ordered short circuiting, nested and empty/singleton sequences, independent context versus application coordinates, late compilation and seeded band results/failures. Noise-threshold conditions additionally cover shared/separate XZ and XYZ cached suppliers, all bundled named noise resources under both random modes, traced changing source inputs, repeated coordinates/updates, late binding, float promotion, NaN/infinite thresholds and values. Encoded JSON numbers are compared as canonical double bits, including nonfinite Gson output tokens. Biome membership and temperature conditions additionally cover all bundled biome climate settings, possible-biome constant folding (including empty sets), context biome caching and XZ/Y invalidation, shared temperature caches across contexts, null biome results, query failures and lazy-condition retry behavior. Named biome-tag holders additionally cover every bundled biome tag, native TagLoader resolution/binding versus Rust TagDefinitions, encoded tag identity, namespace aliases, empty/duplicate/nested/optional entries, membership and possible-biome folding, predicate errors and conditional-rule application. Preliminary-surface conditions additionally cover lazy unit-spaced XZ plane sampling versus scalar fallback, traced sample order, ignored source-volume strides/Y extent, column minimum caching, block-height changes, partial density failures and retained buffers, same-column failure retries, floor/nonfinite conversions and wrapping arithmetic. Provider error occurrence is compared, not exception class or message. Preliminary planes are bounded to 1,048,576 samples in Rust. Ore-vein rules additionally cover eager density/richness volumes, lazy gap sampling, exact strided lattice hits and scalar misses, shared context versus independent application/random coordinates, both positional random modes, ordered draws and short circuiting, mutable/NaN/infinite sources, raw-ore chances, failed compilation and provider retries. Rust requires precompiled density roots for the same world context; live registry/tag reloads, rule codecs, registry-owner validation, arbitrary provider failures and full surface-stage application remain pending."}
     lab.write_json(report_path,report);print(f"Scoped material-condition parity passed: {report_path}")

@@ -160,8 +160,10 @@ fn client_prediction_fires_item_smelted_with_client_host_and_no_xp() {
             remote.logged_in = true;
             remote.entity_id = 7;
             remote.profile = 42;
-            game.common.player =
-                Some(PlayerMotion::new(game.common.motion, Vec3::new(0.5, 65.0, 0.5)).unwrap());
+            game.common.player = Some(PlayerMotion::new(
+                game.common.motion,
+                Vec3::new(0.5, 65.0, 0.5),
+            ));
 
             let furnace_menu = game
                 .client

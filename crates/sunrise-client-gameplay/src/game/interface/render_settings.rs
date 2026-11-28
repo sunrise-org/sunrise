@@ -1,5 +1,5 @@
 //! The renderer and its settings: building it for the window, applying the video settings and a
-//! shader pack's translucent layers, and the far terrain (LOD) distances.
+//! shader pack's translucent layers.
 use super::*;
 
 #[derive(Default)]
@@ -98,7 +98,7 @@ impl crate::game::ClientGame<'_> {
                     .is_empty()
             });
         let outcome = if available {
-            native_shaders::outcome(&path)
+            native_shaders::outcome(&path, self.client.settings.sunrise.iris_compat_of(picked))
         } else {
             Some(false)
         };
@@ -125,7 +125,8 @@ impl crate::game::ClientGame<'_> {
             return;
         };
         let follows = renderer.frame_follows(&self.client.settings.sunrise, request);
-        if !shader_packs::reconcile_pack_hdr(follows, &mut renderer.pack_hdr, shape.hdr) {
+        let installed = (&mut renderer.pack_hdr_pick, &mut renderer.pack_hdr);
+        if !shader_packs::reconcile_pack_hdr(follows, installed, (&shape.pick, shape.hdr)) {
             return;
         }
         if let Err(e) = self.rebuild_renderer() {
@@ -244,51 +245,6 @@ impl crate::game::ClientGame<'_> {
         }
     }
 
-    /// LOD Distance and Far Detail Reduced as the player chose them, the
-    /// distance no farther than a server sampling far terrain for us allows.
-    pub(in crate::game::client_side) fn far_terrain_choice(&self) -> (u32, bool) {
-        let g = &self.client.settings.sunrise;
-        let reduced = g.far_detail == sunrise_client::graphics::FarDetail::Reduced;
-        let distance = match self.server_far_terrain() {
-            Some(offer) => g.lod_distance.min(offer.distance),
-            None => g.lod_distance,
-        };
-        (distance, reduced)
-    }
-
-    /// The far terrain another machine's server samples for us
-    /// (`lod_net`): a client of a dedicated server or of a LAN world, not of
-    /// its own server thread, which hands its generator over directly.
-    pub(in crate::game::client_side) fn server_far_terrain(
-        &self,
-    ) -> Option<sunrise_sim::lod_net::Offer> {
-        if self.client.integrated.is_some() {
-            return None;
-        }
-        self.client.remote.as_ref()?.far_terrain
-    }
-
-    /// LOD Distance as far terrain uses it (`graphics::lod_distance_capped`).
-    pub(in crate::game::client_side) fn lod_distance(&self) -> u32 {
-        let (distance, _) = self.far_terrain_choice();
-        match &self.client.renderer.0 {
-            Some(renderer) => {
-                sunrise_client::graphics::lod_distance_capped(distance, &renderer.info)
-            }
-            None => distance.min(sunrise_client::lod::MAX_CHUNKS),
-        }
-    }
-
-    /// Only enabled LOD worlds extend the renderer's range, never simulation.
-    pub fn terrain_distance(&self) -> i32 {
-        let distance = self.effective_render_distance();
-        if self.client.lod.0.is_some() {
-            distance.max(self.lod_distance() as i32)
-        } else {
-            distance
-        }
-    }
-
     /// The renderer for the window, with the current block sprites, GUI
     /// atlas and world border texture.
     /// A new renderer's atlas holds only the pack's sprites: what was drawn into it at run time
@@ -336,7 +292,6 @@ impl crate::game::ClientGame<'_> {
         self.bind_dynamic_textures();
         self.forget_atlas_slots();
         if !world_kept {
-            self.clear_lod();
             self.client.pending_uploads.0.clear();
             let context = self.worker_context();
             self.client
@@ -349,7 +304,6 @@ impl crate::game::ClientGame<'_> {
     /// `LevelExtractor.allChanged`: displayed sections and mesh work are
     /// discarded, then every loaded section is rebuilt.
     pub(in crate::game::client_side) fn all_sections_changed(&mut self) {
-        self.clear_lod();
         self.client.pending_uploads.0.clear();
         if let Some(renderer) = self.client.renderer.0.as_mut() {
             renderer.clear_sections(self.common.world.layout());
@@ -371,7 +325,7 @@ mod tests {
     fn a_new_hdr_request_alone_is_looked_at_again() {
         let mut attempts = FrameAttempt::default();
         let path = PathBuf::from("pack");
-        let mut installed = Some(Tonemap::Pack);
+        let (mut pick, mut installed) = ("pack".to_owned(), Some(Tonemap::Pack));
         let mut look =
             |hdr| look_again(&mut attempts, Some("8-bit"), path.clone(), Some(true), hdr);
         assert!(look(Some(Tonemap::Pack)));
@@ -379,8 +333,8 @@ mod tests {
         assert!(look(Some(Tonemap::Sunrise)));
         assert!(!reconcile_pack_hdr(
             true,
-            &mut installed,
-            Some(Tonemap::Sunrise)
+            (&mut pick, &mut installed),
+            ("pack", Some(Tonemap::Sunrise))
         ));
         assert_eq!(installed, Some(Tonemap::Sunrise));
         assert!(!look(Some(Tonemap::Sunrise)));

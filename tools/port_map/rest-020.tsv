@@ -99,9 +99,9 @@ Stats.makeRegistryStatType	skip:data		registration of stat types
 StatsCounter.increment	port	crates/sunrise-gameplay-common/src/stats.rs::Stats::add	saturating add, as vanilla's clamp at Integer.MAX_VALUE
 StatsCounter.getValue	port	crates/sunrise-gameplay-common/src/stats.rs::Stats::get	the count of a stat, 0 when missing
 BlockItemTagId.create	skip:data		tag key constructors; Sunrise reads tag files by name
-net/minecraft/tags/TagEntry#visitRequiredDependencies	inline	crates/sunrise-world/src/worldgen/tags.rs::TagDefinitions::build	the required tag edges built in TagDefinitions::build
-net/minecraft/tags/TagEntry#visitOptionalDependencies	inline	crates/sunrise-world/src/worldgen/tags.rs::TagDefinitions::build	the optional tag edges built in TagDefinitions::build
-net/minecraft/tags/TagEntry#verifyIfPresent	inline	crates/sunrise-world/src/worldgen/tags.rs::TagDefinitions::build	a missing required entry leaves its tag in the missing list
+net/minecraft/tags/TagEntry#visitRequiredDependencies	inline	crates/sunrise-world/src/worldgen/tags.rs::TagDefinitions::bind	the required tag edges supplied to dependency_order
+net/minecraft/tags/TagEntry#visitOptionalDependencies	inline	crates/sunrise-world/src/worldgen/tags.rs::TagDefinitions::bind	the optional tag edges supplied to dependency_order
+net/minecraft/tags/TagEntry#verifyIfPresent	inline	crates/sunrise-world/src/worldgen/tags.rs::TagDefinitions::bind	a missing required entry leaves its tag in the missing list
 net/minecraft/tags/TagEntry#toString	port	crates/sunrise-world/src/worldgen/tags.rs::TagEntry::display	the # prefix, the id and the ? for optional entries
 TagKey.hashedCodec	skip:java		codec for #tag names; TagEntry::from_json parses the same prefix
 TagLoader.load	port	crates/sunrise-items/src/items.rs::load_tags	gap: minor: the remove list of tag files is not read (TagFile has no remove field)
@@ -112,8 +112,8 @@ TagLoader.loadPendingTags	skip:data		pending-tag reload plumbing (Registry.Pendi
 TagLoader.buildUpdatedLookups	skip:data		registry lookup layer for reloads; Sunrise has none
 TagLoader.findTagsForRegistry	skip:data		lookup helper of the reload layer; Sunrise has none
 TagLoader.ElementLookup.fromGetters	skip:java		lookup adapter over the registry getters
-TagLoader.SortingEntry.visitRequiredDependencies	inline	crates/sunrise-world/src/worldgen/tags.rs::TagDefinitions::build	the edges of the sort in TagDefinitions::build
-TagLoader.SortingEntry.visitOptionalDependencies	inline	crates/sunrise-world/src/worldgen/tags.rs::TagDefinitions::build	the edges of the sort in TagDefinitions::build
+TagLoader.SortingEntry.visitRequiredDependencies	inline	crates/sunrise-world/src/worldgen/tags.rs::TagDefinitions::bind	the required tag edges supplied to dependency_order
+TagLoader.SortingEntry.visitOptionalDependencies	inline	crates/sunrise-world/src/worldgen/tags.rs::TagDefinitions::bind	the optional tag edges supplied to dependency_order
 TagNetworkSerialization.serializeToNetwork	port	crates/sunrise-sim/src/lan/data.rs::SyncData::load_tags	tag ids per registry, with # references expanded
 TagNetworkSerialization.deserializeTagsFromNetwork	missing		minor: the client never reads UpdateTags (only lan/conn.rs sends it), so tags from a server are not applied; Sunrise loads its own tag files (items.rs load_tag_lists)
 ARGB.linearChannelMean	port	crates/sunrise-client-render/src/mipmap.rs::mean_linear	the linear-light mean of four samples for one channel

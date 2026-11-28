@@ -184,8 +184,9 @@ impl ServerGame<'_> {
                 let owner = p.station.id();
                 Some((
                     owner,
+                    // Lifted, not taken: mods deciding the click still see the station open.
                     p.station
-                        .take_if(|s| window.is_none_or(|w| s.window == w))?,
+                        .lift_if(|s| window.is_none_or(|w| s.window == w))?,
                 ))
             })
         else {
@@ -506,6 +507,7 @@ impl ServerGame<'_> {
                     left: left.as_ref(),
                     right: right.as_ref(),
                     output,
+                    xp_cost: craft.cost,
                 });
             let player = (pre || post)
                 .then(|| self.server.lan.as_ref()?.hub.guests.get(gi))
@@ -600,8 +602,9 @@ impl ServerGame<'_> {
                 gs.menu.slot(0),
             )
         } else {
-            // EnchantmentLevelSetEvent for each row as getEnchantmentCost drew
-            // it; the offers are then made with the levels the mods left.
+            // EnchantmentLevelSetEvent for each row after slotsChanged cleared a
+            // cost below its row; the offers are then made with the levels the
+            // mods left.
             let mut drawn = [None; 3];
             sunrise_sim::stations::enchant_offers_leveled(
                 &self.stations().enchantments,
@@ -718,7 +721,7 @@ impl ServerGame<'_> {
             )
         });
         // Player.onEnchantmentPerformed, and EnchantmentMenu's awardStat(ENCHANT_ITEM).
-        self.as_guest(conn, |game| {
+        let entered = self.as_guest(conn, |game| {
             game.enchantment_performed(need);
             game.award_custom_stat("enchant_item", 1);
             if let Some(given) = &given {
@@ -727,6 +730,12 @@ impl ServerGame<'_> {
             // CriteriaTriggers.ENCHANTED_ITEM, with the levels it cost.
             game.trigger_enchanted_item(&enchanted, need);
         });
+        // The enchant commits as a whole or not at all: a refused turn (the guest missing,
+        // already in a turn, or its body not initialised) leaves the item, the lapis, the seed
+        // and the offers as they were (#6716).
+        if entered.is_none() {
+            return;
+        }
         let new_seed = self.common.world.random.next_int();
         if let Some(host) = self.server.lan.as_mut() {
             {
@@ -1244,3 +1253,80 @@ use sunrise_gameplay_common::game::transactions::TransactionsGameExt as _;
 use sunrise_gameplay_common::game::api_values_common::ApiValuesCommonGameExt1 as _;
 
 use sunrise_gameplay_common::game::bookshelves_common::BookshelvesCommonGameExt1 as _;
+
+#[cfg(test)]
+mod enchant_turn_tests {
+    use crate::game::server_side::native_guest_turn_tests::with_guests;
+    use sunrise_gameplay_common::game::stations_common::{Kind as StationKind, Station};
+    use sunrise_items::items::ItemStack;
+
+    /// #6716: an enchant whose guest turn is refused (here, the guest is already in a turn)
+    /// commits nothing: the item, the lapis and the seed stay. Outside a turn the same click
+    /// commits.
+    #[test]
+    #[ignore = "daily"]
+    fn a_refused_guest_turn_commits_no_enchant() {
+        sunrise_gameplay_common::game::in_own_process(
+            "game::server_side::lan_stations::enchant_turn_tests::a_refused_guest_turn_commits_no_enchant",
+            || {
+                with_guests(|game| {
+                    game.common.world.chunks.insert(
+                        (0, 0),
+                        std::sync::Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)),
+                    );
+                    let table = game
+                        .common
+                        .pack
+                        .assets
+                        .registry
+                        .default_state("minecraft:enchanting_table")
+                        .unwrap();
+                    game.common.world.set(1, 64, 1, table).unwrap();
+                    assert!(
+                        game.lan_open_station(
+                            12,
+                            &Station::new(StationKind::Enchanting, [1, 64, 1])
+                        )
+                    );
+                    let mut gs = game
+                        .server
+                        .lan
+                        .as_mut()
+                        .unwrap()
+                        .menus
+                        .get_mut(&12)
+                        .unwrap()
+                        .station
+                        .take()
+                        .unwrap();
+                    let sword = ItemStack::new("minecraft:diamond_sword", 1);
+                    let lapis = ItemStack::new("minecraft:lapis_lazuli", 3);
+                    gs.menu.load_slot(0, Some(sword.clone()));
+                    gs.menu.load_slot(1, Some(lapis.clone()));
+                    gs.menu.data[0] = 1;
+                    let gi = game.guest_index(12).unwrap();
+                    let seed = |game: &crate::game::ServerGame<'_>| {
+                        game.server.lan.as_ref().unwrap().hub.guests[gi].xp_seed
+                    };
+                    let before = seed(game);
+                    let offers = gs.menu.data.clone();
+
+                    // The guest's own turn is active, so the enchant's turn is refused.
+                    game.as_guest(12, |game| game.lan_enchant(gi, &mut gs, 0))
+                        .expect("the outer turn");
+                    assert_eq!(gs.menu.slot(0), Some(&sword), "the item stays");
+                    assert_eq!(gs.menu.slot(1), Some(&lapis), "the lapis stays");
+                    assert_eq!(seed(game), before, "the seed stays");
+                    assert_eq!(gs.menu.data, offers, "the offers stay");
+
+                    game.lan_enchant(gi, &mut gs, 0);
+                    assert!(
+                        gs.menu.slot(0).is_some_and(|item| item != &sword),
+                        "outside a turn the enchant commits"
+                    );
+                    assert_ne!(seed(game), before, "and the seed moves on");
+                });
+            },
+        );
+    }
+}

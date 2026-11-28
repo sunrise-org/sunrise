@@ -103,7 +103,7 @@ layout_fields!("slot" => $width);
     )+};
 }
 // `EntityTypeKey` derives its own `Wire`; `TagKey<K>` encodes its interned slot below.
-slot_keys!(u32; crate::GameEventKey, BlockEntityTypeKey, BlockKey, BoolGameRuleKey, IntGameRuleKey, DimensionKey, EffectKey, EnchantmentKey, FluidKey, ItemKey, MenuKey, crate::client::particle_keys::ParticleKey);
+slot_keys!(u32; crate::GameEventKey, BlockEntityTypeKey, BlockKey, BoolGameRuleKey, IntGameRuleKey, DimensionKey, EffectKey, EnchantmentKey, FluidKey, ItemKey, MenuKey, crate::world::particle_keys::ParticleKey);
 impl<K: 'static> Wire for TagKey<K> {
     layout_fields!("slot" => u32);
     const MIN: usize = <u32 as Wire>::MIN;
@@ -148,8 +148,8 @@ slot_keys!(registries;
     MenuKey => as_menu_key, "menu", |id: &crate::Identifier| {
         crate::content::registry_keys::resolved_menus().read().ok()?.as_ref()?.identifiers.get(id).copied()
     };
-    crate::client::particle_keys::ParticleKey => as_particle_key, "particle_type", |id: &crate::Identifier| {
-        crate::client::particle_keys::particle_key(id).map(|key| key.0)
+    crate::world::particle_keys::ParticleKey => as_particle_key, "particle_type", |id: &crate::Identifier| {
+        crate::world::particle_keys::particle_key(id).map(|key| key.0)
     };
 );
 impl Wire for UnresolvedFluid {

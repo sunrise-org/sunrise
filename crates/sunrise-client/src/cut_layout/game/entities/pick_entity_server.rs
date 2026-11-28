@@ -19,8 +19,7 @@ pub(crate) mod tests {
             "cut_layout::game::server_side::pick_entity_server::tests::an_entitys_pick_result_reads_through_its_handle",
             || {
                 with_game(|game| {
-                    game.player =
-                        Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 65.0, 0.5)).unwrap());
+                    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 65.0, 0.5)));
                     sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(
                         game, 20, 123,
                     );
@@ -91,8 +90,7 @@ pub(crate) mod tests {
             "cut_layout::game::server_side::pick_entity_server::tests::server_entity_pick_returns_lead_and_delegates_dragon_parts",
             || {
                 with_game(|game| {
-                    game.player =
-                        Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 65.0, 0.5)).unwrap());
+                    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 65.0, 0.5)));
                     let knot = game.tie_knot([0, 65, 2]);
                     let far_knot = game.tie_knot([0, 65, 10]);
                     let Some(Target::Other(explicit_knot)) = game

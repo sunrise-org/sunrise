@@ -528,6 +528,18 @@ impl PlayerRead<'_> {
         self.mode() == Some(1)
     }
 
+    /// `Player.getAbilities().instabuild`: creative mode sets it, but a mod or
+    /// a command can set it on another mode too, and only the ability counts.
+    pub fn instabuild(&self) -> bool {
+        match self {
+            Self::Acting {
+                abilities: Some(a), ..
+            } => a.instabuild,
+            Self::Guest(guest) => guest.abilities.instabuild,
+            Self::Acting { mode, .. } => *mode == Some(1),
+        }
+    }
+
     pub(in crate::game) fn may_build(&self) -> bool {
         match self {
             Self::Acting {
@@ -795,8 +807,7 @@ impl ScopedPlayerState {
         let mut motion = PlayerMotion::new(
             resources,
             sunrise_core::geometry::Vec3::new(position[0], position[1], position[2]),
-        )
-        .map_err(|_| ActionRefused::InvalidSetup)?;
+        );
         motion.shift_key_down = setup.secondary_use;
         let mut inventory = vec![None; 36];
         inventory[0] = setup
@@ -941,12 +952,6 @@ impl Drop for Acting {
         self.0.acting.store(false, Ordering::Relaxed);
         self.0.unswung.store(false, Ordering::Relaxed);
     }
-}
-
-/// The online mode a dedicated server's network config carries: it has an
-/// `OnlineMode` key (and so signs its logins) only in online mode.
-pub fn online_mode_of(config: &sunrise_sim::lan::NetConfig) -> bool {
-    config.online.is_some()
 }
 
 /// `Inventory`'s slot numbers past the 36 main slots (`EQUIPMENT_SLOT_MAPPING`).
@@ -2706,23 +2711,5 @@ pub mod fake_action_tests {
             assert_eq!(acting.blocked(), Some(FakeEffect::Sleep));
         }
         assert_eq!(Acting::start(&action).blocked(), None);
-    }
-}
-
-#[cfg(test)]
-pub(in crate::game) mod network_settings_tests {
-    use super::*;
-    #[test]
-    #[ignore = "daily"]
-    fn server_settings_follow_the_network_config() {
-        use sunrise_sim::lan::{NetConfig, OnlineMode};
-        let mut config = NetConfig::loopback(25565, String::new(), 20);
-        // online-mode=false: no key.
-        assert!(!online_mode_of(&config));
-        // online-mode=true: the server's key.
-        config.online = Some(std::sync::Arc::new(
-            OnlineMode::generate(false, std::sync::Arc::new(|_, _, _| Ok(None))).unwrap(),
-        ));
-        assert!(online_mode_of(&config));
     }
 }

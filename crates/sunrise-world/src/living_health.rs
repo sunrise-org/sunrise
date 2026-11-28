@@ -12,7 +12,8 @@ pub trait HealthWorld {
     fn dead_flag(&self) -> bool;
     fn dispatch_set_health(&mut self, value: f32) -> Result<(), Self::Error>;
 }
-fn clamp(value: f32, max: f32) -> f32 {
+/// Vanilla health and absorption clamp, including NaN and signed zero.
+pub fn clamp(value: f32, max: f32) -> f32 {
     if value < 0.0 {
         0.0
     } else if value.is_nan() || max.is_nan() {

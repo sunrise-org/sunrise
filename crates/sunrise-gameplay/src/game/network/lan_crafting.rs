@@ -1816,7 +1816,7 @@ impl crate::game::ServerGame<'_> {
             let (window, state, mut menu, pos) = host
                 .menus
                 .get_mut(&conn)
-                .and_then(|play| play.crafting.table.take_if(|(w, ..)| *w == container))?;
+                .and_then(|play| play.crafting.table.lift_if(|(w, ..)| *w == container))?;
             let placed = self.guest_menu_op(gi, &mut menu, apply)?;
             let host = self.server.lan.as_mut()?;
             *host.menus.entry(conn).or_default().crafting.table = Some((window, state, menu, pos));
@@ -1859,10 +1859,11 @@ impl crate::game::ServerGame<'_> {
         let Some(play) = host.menus.get_mut(&conn) else {
             return false;
         };
+        // Lifted, not taken: mods deciding the click still see the table open.
         let Some((window, mut state, mut menu, pos)) = play
             .crafting
             .table
-            .take_if(|(window, ..)| *window == p.container)
+            .lift_if(|(window, ..)| *window == p.container)
         else {
             return false;
         };

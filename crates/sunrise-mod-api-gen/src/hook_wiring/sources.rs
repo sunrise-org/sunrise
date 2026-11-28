@@ -6,7 +6,6 @@ use mod_source::{
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet},
-    fs,
     path::Path,
     rc::Rc,
 };
@@ -106,7 +105,10 @@ fn is_target_atom(atom: &str) -> bool {
     matches!(atom, "unix" | "windows") || atom.starts_with("target_")
 }
 
-type ModuleItems = Vec<(Vec<String>, Vec<Item>)>;
+struct PackageVariants {
+    variants: Vec<ModuleVariant>,
+    by_module: HashMap<String, Vec<usize>>,
+}
 
 const CRATES: &[(&str, &str)] = &[
     ("sunrise_client", ""),
@@ -122,11 +124,10 @@ const CRATES: &[(&str, &str)] = &[
 ];
 
 /// Index packages by Cargo's library roots (including client-lib's out-of-package root).
-/// Cache parsed bodies only for modules the check inspects.
+/// Keep the parsed module snapshot produced by discovery so lookups and semantic scans reuse it.
 pub(super) struct Sources<'a> {
     root: &'a Path,
-    files: HashMap<String, Result<Vec<ModuleVariant>, String>>,
-    modules: HashMap<(String, String), ModuleItems>,
+    files: HashMap<String, Result<PackageVariants, String>>,
 }
 
 impl<'a> Sources<'a> {
@@ -134,7 +135,6 @@ impl<'a> Sources<'a> {
         Self {
             root,
             files: HashMap::new(),
-            modules: HashMap::new(),
         }
     }
 
@@ -185,7 +185,7 @@ impl<'a> Sources<'a> {
             })
     }
 
-    pub(super) fn variants(&mut self, package: &str) -> Result<&[ModuleVariant], String> {
+    fn package_variants(&mut self, package: &str) -> Result<&PackageVariants, String> {
         let root = self.root;
         let parse = |path: &Path, text: &str| {
             let parsed = if package == "sunrise_mod_vocab" {
@@ -203,11 +203,26 @@ impl<'a> Sources<'a> {
                     .parent()
                     .expect("a library file has a folder")
                     .to_owned();
-                walk_module_variants(package.to_owned(), lib, dir, false, false, parse)
+                let variants =
+                    walk_module_variants(package.to_owned(), lib, dir, false, false, parse)?;
+                let mut by_module: HashMap<String, Vec<usize>> = HashMap::new();
+                for (index, variant) in variants.iter().enumerate() {
+                    by_module
+                        .entry(variant.file.module.clone())
+                        .or_default()
+                        .push(index);
+                }
+                Ok(PackageVariants {
+                    variants,
+                    by_module,
+                })
             })
             .as_ref()
-            .map(Vec::as_slice)
             .map_err(Clone::clone)
+    }
+
+    pub(super) fn variants(&mut self, package: &str) -> Result<&[ModuleVariant], String> {
+        Ok(&self.package_variants(package)?.variants)
     }
 
     pub(super) fn items<'s>(
@@ -216,50 +231,26 @@ impl<'a> Sources<'a> {
         package: &str,
         module: &str,
     ) -> Result<Option<impl Iterator<Item = &'s Item>>, String> {
-        let key = (package.to_owned(), module.to_owned());
-        if !self.modules.contains_key(&key) {
-            let root = self.root;
-            let parse = |path: &Path, text: &str| {
-                let parsed = if package == "sunrise_mod_vocab" {
-                    syn::parse_file(&crate::exports::expand(root, text)?)
-                } else {
-                    syn::parse_file(text)
-                };
-                parsed.map_err(|error| format!("{}: {error}", path.display()))
-            };
-            let files = self.variants(package)?;
-            let path = if module.is_empty() {
-                package.to_owned()
-            } else {
-                format!("{package}::{module}")
-            };
-            let mut variants = Vec::new();
-            for variant in files.iter().filter(|v| v.file.module == path) {
-                let path = &variant.file.path;
-                let text = fs::read_to_string(path)
-                    .map_err(|error| format!("{}: {error}", path.display()))?;
-                let mut items = parse(path, &text)?.items;
-                for &index in &variant.inline {
-                    // The walker recorded these indices in the same parsed file.
-                    let Item::Mod(declaration) = items.swap_remove(index) else {
-                        unreachable!()
-                    };
-                    items = declaration.content.expect("recorded inline module").1;
-                }
-                variants.push((variant.file.cfg.clone(), items));
-            }
-            self.modules.insert(key.clone(), variants);
-        }
-        let variants = &self.modules[&key];
+        let files = self.package_variants(package)?;
+        let path = if module.is_empty() {
+            package.to_owned()
+        } else {
+            format!("{package}::{module}")
+        };
+        let indices = files.by_module.get(&path).map(Vec::as_slice).unwrap_or(&[]);
         // Resolve aliases and globs only if there isn't a declared module at this path.
-        if !variants.iter().any(|(cfg, _)| build.permits(cfg)) {
+        if !indices
+            .iter()
+            .any(|&index| build.permits(&files.variants[index].file.cfg))
+        {
             return Ok(None);
         }
         Ok(Some(
-            variants
+            indices
                 .iter()
-                .filter(|(cfg, _)| build.permits(cfg))
-                .flat_map(|(_, items)| items),
+                .map(move |&index| &files.variants[index])
+                .filter(move |variant| build.permits(&variant.file.cfg))
+                .flat_map(|variant| &variant.items),
         ))
     }
 }

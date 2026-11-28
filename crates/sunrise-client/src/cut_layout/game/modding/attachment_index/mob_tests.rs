@@ -115,7 +115,7 @@ fn saved_mob_binding_survives_store_back_and_retires_at_sweep() {
         assert!(game.entity_discard(entity));
         assert_eq!(index.lock().unwrap().snapshot(&key).len(), 1);
         game.native_removals_flush();
-        game.server.tickets.0.update(None);
+        game.server.chunk_ticking.tickets.update(None);
         game.tick_creature_entities().unwrap();
         assert!(game.mobs.is_empty());
         assert!(index.lock().unwrap().snapshot(&key).is_empty());

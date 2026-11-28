@@ -23,6 +23,7 @@ struct Globals {
     // Sunrise Extras' dynamic lights: camera-relative position and level (dynamic_light.rs).
     dynamic_lights: array<vec4<f32>, 16>,
     colored_lights: array<vec4<f32>, 32>,
+    // x: coloured light count; yzw: padding.
     colored_count: vec4<u32>,
     emissive_layers: array<vec4<u32>, 128>,
     emissive_count: vec4<u32>,
@@ -94,9 +95,7 @@ fn entity_light(normal: vec3<f32>, nether: bool) -> f32 {
 // swelling). Alpha 1 changes nothing.
 fn overlay_texel(overlay: u32) -> vec4<f32> {
     if overlay == 1u || overlay == 8u {
-        // PvP & HUD's hit colour (pvp.rs `Hit::texel`) rides in colored_count.y; 0 is vanilla's.
-        let hit = globals.colored_count.y;
-        return select(HURT_OVERLAY, unpack4x8unorm(hit), hit != 0u);
+        return HURT_OVERLAY;
     }
     if overlay == 5u { return vec4(1.0, 1.0, 1.0, WHITE_OVERLAY_ALPHA[15]); }
     if overlay >= 16u && overlay < 32u { return vec4(1.0, 1.0, 1.0, WHITE_OVERLAY_ALPHA[overlay - 16u]); }
@@ -249,18 +248,11 @@ fn armor_glint_uv(model: vec2<f32>) -> vec2<f32> {
     return vec2(scaled.x * c - scaled.y * s - offset0,
                 scaled.x * s + scaled.y * c + offset1);
 }
-// PvP & HUD's glint colour (pvp.rs `Tweaks::glint_texel`, 0 for vanilla's): the sample's
-// brightest channel over the chosen colour, so the shimmer keeps its pattern and strength.
-fn tinted_glint(glint: vec4<f32>, packed: u32) -> vec4<f32> {
-    if packed == 0u { return glint; }
-    let tint = unpack4x8unorm(packed).rgb;
-    return vec4(max(glint.r, max(glint.g, glint.b)) * tint, glint.a);
-}
 // RenderPipelines.GLINT: the source colour is scaled by itself, so `GlintAlpha`
 // is squared along with the sample.
 fn glint_over(color: vec4<f32>, glint: vec4<f32>) -> vec4<f32> {
     let alpha = globals.fog_ends.w;
-    let g = alpha * tinted_glint(glint, globals.colored_count.z);
+    let g = alpha * glint;
     return vec4(color.rgb + g.rgb * g.rgb, max(color.a, alpha));
 }
 // CRUMBLING_UV_BEGIN
@@ -320,10 +312,7 @@ fn clipped_entity(in: Out, color: vec4<f32>) -> ClippedEntity {
 // samples the glint texture alone, fades by fog and `GlintAlpha`, and squares RGB
 // to match `BlendFunction.GLINT` (`SRC_COLOR, ONE, ZERO, ONE`) under additive colour blend.
 @fragment fn fs_glint(in: Out) -> @location(0) vec4<f32> {
-    let color = tinted_glint(
-        textureSample(glint_tex, glint_sampler, in.glint_uv),
-        globals.colored_count.z,
-    );
+    let color = textureSample(glint_tex, glint_sampler, in.glint_uv);
     if color.a < 0.1 { discard; }
     let f = max(linear_fog(in.fog_distance.x, globals.fog.x, globals.fog.y),
                 linear_fog(in.fog_distance.y, globals.fog.z, globals.fog.w));

@@ -744,9 +744,11 @@ fn bind_images(
         jobs: None,
         mod_depth_targets: &[],
         mod_uniforms: &[],
+        display_uniforms: false,
         mod_uniform_mismatches: &mod_uniform_mismatches,
         mod_depth_target: std::cell::Cell::new(None),
         depth_compare: std::cell::Cell::new(wgpu::CompareFunction::LessEqual),
+        mod_depth_bias: Default::default(),
         mod_vertex: Default::default(),
     };
     let mut notes = Vec::new();

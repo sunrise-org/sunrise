@@ -398,7 +398,7 @@ fn the_dragons_killing_blow_fires_the_living_death_hooks() {
             game.build_registries();
             fixture_resident_column(&mut game.world, (0, 0));
             let host_uuid = 77u128;
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             game.player.as_mut().unwrap().entity_id = 55;
             game.level.player_uuid = Some(sunrise_sim::lan::playerdata::uuid_ints(host_uuid));
 

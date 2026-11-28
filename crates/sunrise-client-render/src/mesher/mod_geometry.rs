@@ -16,7 +16,7 @@ use std::{
 
 /// One mod renderer, and whether it has panicked (then it is asked no more) or had its quads
 /// refused (logged once).
-pub(super) struct Renderer {
+pub struct Renderer {
     renderer: Arc<dyn SectionGeometry>,
     failed: AtomicBool,
     refused: AtomicBool,

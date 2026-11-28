@@ -341,13 +341,10 @@ fn control_repeated_burning_breaks_the_stand_once() {
 // succeeds.
 
 fn with_player(game: &mut sunrise_gameplay::game::ServerGame<'_>) {
-    game.player = Some(
-        sunrise_sim::motion::PlayerMotion::new(
-            game.motion,
-            sunrise_core::geometry::Vec3::new(14.5, 100.0, 14.5),
-        )
-        .unwrap(),
-    );
+    game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+        game.motion,
+        sunrise_core::geometry::Vec3::new(14.5, 100.0, 14.5),
+    ));
 }
 
 #[test]

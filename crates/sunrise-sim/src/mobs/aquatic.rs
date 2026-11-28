@@ -1335,6 +1335,7 @@ mod pufferfish_sting_tests {
                 let others = [target.seen(None, &crate::items::Items::empty())];
                 let world = MobWorld {
                     side: crate::motion::dry_side(),
+                    variant_tables: None,
                     goal_host: None,
                     others: &others,
                     ..w.clone()
@@ -1475,6 +1476,7 @@ mod pufferfish_sting_tests {
                     let seen = [pig.seen(None, &crate::items::Items::empty())];
                     let world = MobWorld {
                         side: crate::motion::dry_side(),
+                        variant_tables: None,
                         goal_host: None,
                         others: &seen,
                         ..w.clone()
@@ -1504,6 +1506,7 @@ mod pufferfish_sting_tests {
                     let seen_far = [far_pig.seen(None, &crate::items::Items::empty())];
                     let world_far = MobWorld {
                         side: crate::motion::dry_side(),
+                        variant_tables: None,
                         goal_host: None,
                         others: &seen_far,
                         ..w.clone()
@@ -1528,6 +1531,7 @@ mod pufferfish_sting_tests {
                     let seen = [invuln_pig.seen(None, &crate::items::Items::empty())];
                     let world = MobWorld {
                         side: crate::motion::dry_side(),
+                        variant_tables: None,
                         goal_host: None,
                         others: &seen,
                         ..w.clone()
@@ -1562,6 +1566,7 @@ mod pufferfish_sting_tests {
                     let seen = [cooldown_pig.seen(None, &crate::items::Items::empty())];
                     let world = MobWorld {
                         side: crate::motion::dry_side(),
+                        variant_tables: None,
                         goal_host: None,
                         others: &seen,
                         ..w.clone()
@@ -1597,6 +1602,7 @@ mod pufferfish_sting_tests {
                     let seen = [pig.seen(None, &crate::items::Items::empty())];
                     let world = MobWorld {
                         side: crate::motion::dry_side(),
+                        variant_tables: None,
                         goal_host: None,
                         others: &seen,
                         ..w.clone()
@@ -1636,6 +1642,7 @@ mod pufferfish_sting_tests {
                     let fish_seen = [mobs[0].seen(None, &crate::items::Items::empty())];
                     let world_for_pig = MobWorld {
                         side: crate::motion::dry_side(),
+                        variant_tables: None,
                         goal_host: None,
                         others: &fish_seen,
                         ..w.clone()
@@ -1667,6 +1674,7 @@ mod pufferfish_sting_tests {
                     let seen = [noai_pig.seen(None, &crate::items::Items::empty())];
                     let world = MobWorld {
                         side: crate::motion::dry_side(),
+                        variant_tables: None,
                         goal_host: None,
                         others: &seen,
                         ..w.clone()
@@ -1680,6 +1688,7 @@ mod pufferfish_sting_tests {
                     let fish_seen = [mobs[0].seen(None, &crate::items::Items::empty())];
                     let world_for_pig = MobWorld {
                         side: crate::motion::dry_side(),
+                        variant_tables: None,
                         goal_host: None,
                         others: &fish_seen,
                         ..w.clone()
@@ -1707,6 +1716,7 @@ mod pufferfish_sting_tests {
                     ];
                     let world = MobWorld {
                         side: crate::motion::dry_side(),
+                        variant_tables: None,
                         goal_host: None,
                         others: &seen,
                         ..w.clone()

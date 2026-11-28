@@ -64,10 +64,10 @@ pub(crate) mod tests {
             .chunks
             .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
         // Eight blocks south of the breeze: inside the 32 blocks the dust needs.
-        game.player = Some(
-            sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(8.5, 66.0, 16.5))
-                .unwrap(),
-        );
+        game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+            game.motion,
+            Vec3::new(8.5, 66.0, 16.5),
+        ));
         sunrise_client_gameplay::game::client_side::breezes_client::tests::set_test_particle_camera(
             &mut game,
             [8.5, 66.0, 16.5],

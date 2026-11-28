@@ -1,9 +1,10 @@
 //! Owned authoring inputs generated from the private lookup storage graph.
+use crate::index::{Found, Index, ItemId};
+use mod_source::index::Binding;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs,
+    collections::{BTreeMap, BTreeSet, HashSet},
     path::Path,
 };
 use syn::{Item, ItemStruct, ItemType, Type, Visibility, visit::Visit, visit_mut::VisitMut};
@@ -12,6 +13,7 @@ use syn::{Item, ItemStruct, ItemType, Type, Visibility, visit::Visit, visit_mut:
 struct Schema {
     records: BTreeMap<String, (ItemStruct, syn::Path)>,
     aliases: BTreeMap<String, ItemType>,
+    items: BTreeMap<String, ItemId>,
     selected: BTreeSet<String>,
     duplicates: BTreeSet<String>,
 }
@@ -83,98 +85,121 @@ fn is_copy(ty: &Type) -> bool {
     }
 }
 
+fn is_primitive(name: &str) -> bool {
+    crate::PRIMITIVE_SCALARS.contains(&name) || name == "str"
+}
+
+fn is_external_crate(first: &str) -> bool {
+    matches!(
+        first,
+        "std" | "core" | "alloc" | "sunrise_core" | "sunrise_mod_runtime" | "serde_json"
+    )
+}
+
 impl Schema {
-    fn read(&mut self, dir: &Path, module: &str) -> Result<(), String> {
-        let mut files = fs::read_dir(dir)
-            .map_err(|e| e.to_string())?
-            .map(|entry| entry.map_err(|e| e.to_string()))
-            .collect::<Result<Vec<_>, _>>()?;
-        files.sort_by_key(|entry| entry.file_name());
-        for entry in files {
-            let path = entry.path();
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if path.is_dir() {
-                self.read(&path, &format!("{module}::{name}"))?;
-            } else if path.extension().is_some_and(|ext| ext == "rs") {
-                let stem = path.file_stem().unwrap().to_string_lossy();
-                let owner = if matches!(stem.as_ref(), "lib" | "mod") {
-                    module.to_string()
-                } else {
-                    format!("{module}::{stem}")
-                };
-                let source = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-                let parsed =
-                    syn::parse_file(&source).map_err(|e| format!("{}: {e}", path.display()))?;
-                for item in parsed.items {
-                    match item {
-                        Item::Struct(item) => {
-                            let name = item.ident.to_string();
-                            // Installed is the root Parts epoch, not another domain's
-                            // unrelated installation wrapper with the same local name.
-                            if name == "Installed"
-                                && !matches!(
-                                    owner.as_str(),
-                                    "crate::parts::shared"
-                                        | "crate::parts::shared::registration_state"
-                                )
-                            {
-                                continue;
-                            }
-                            // Only private storage, plus these supported opaque lookup owners,
-                            // needs a mirror. Public semantic API values pass through unchanged.
-                            if !matches!(item.vis, Visibility::Public(_))
-                                || matches!(
-                                    name.as_str(),
-                                    "Attached" | "Parts" | "TooltipAppenderPart" | "Payloads"
-                                )
-                            {
-                                let target_name = if name == "Installed" {
-                                    "crate::parts::shared::Installed".to_string()
-                                } else {
-                                    format!("{owner}::{name}")
-                                };
-                                let target =
-                                    syn::parse_str(&target_name).map_err(|e| e.to_string())?;
-                                if self.records.insert(name.clone(), (item, target)).is_some() {
-                                    self.duplicates.insert(name);
-                                }
-                            }
-                        }
-                        Item::Type(item) if !matches!(item.vis, Visibility::Public(_)) => {
-                            self.aliases.insert(item.ident.to_string(), item);
-                        }
-                        _ => {}
-                    }
+    fn select_item(&mut self, index: &mut Index<'_>, id: ItemId) -> Result<(), String> {
+        if index.modules[id.module].krate != "mod_api" {
+            return Ok(());
+        }
+        let owner_path = index.modules[id.module].path.clone();
+        let (name, generic_params, refs) = match index.item(id).clone() {
+            Item::Struct(item) => {
+                let name = item.ident.to_string();
+                // Installed is the root Parts epoch, not another domain's
+                // unrelated installation wrapper with the same local name.
+                if name == "Installed"
+                    && owner_path.as_slice() != ["parts", "shared"]
+                    && owner_path.as_slice() != ["parts", "shared", "registration_state"]
+                {
+                    return Ok(());
                 }
+                // Only private storage, plus these supported opaque lookup owners,
+                // needs a mirror. Public semantic API values pass through unchanged.
+                if matches!(item.vis, Visibility::Public(_))
+                    && !matches!(
+                        name.as_str(),
+                        "Attached" | "Parts" | "TooltipAppenderPart" | "Payloads"
+                    )
+                {
+                    return Ok(());
+                }
+                if let Some(&prev) = self.items.get(&name) {
+                    if prev != id {
+                        self.duplicates.insert(name);
+                    }
+                    return Ok(());
+                }
+                let target_name = if name == "Installed" {
+                    "crate::parts::shared::Installed".to_string()
+                } else if owner_path.is_empty() {
+                    format!("crate::{name}")
+                } else {
+                    format!("crate::{}::{name}", owner_path.join("::"))
+                };
+                let target = syn::parse_str(&target_name).map_err(|e| e.to_string())?;
+                let generic_params: HashSet<String> = item
+                    .generics
+                    .type_params()
+                    .map(|p| p.ident.to_string())
+                    .collect();
+                let mut refs = Vec::new();
+                for field in &item.fields {
+                    if field
+                        .ident
+                        .as_ref()
+                        .is_some_and(|id| derived(&name, &id.to_string()))
+                    {
+                        continue;
+                    }
+                    TypeRefs(&mut refs).visit_type(&field.ty);
+                }
+                self.items.insert(name.clone(), id);
+                self.records.insert(name.clone(), (item, target));
+                (name, generic_params, refs)
+            }
+            Item::Type(item) if !matches!(item.vis, Visibility::Public(_)) => {
+                let name = item.ident.to_string();
+                if let Some(&prev) = self.items.get(&name) {
+                    if prev != id {
+                        self.duplicates.insert(name);
+                    }
+                    return Ok(());
+                }
+                let generic_params: HashSet<String> = item
+                    .generics
+                    .type_params()
+                    .map(|p| p.ident.to_string())
+                    .collect();
+                let mut refs = Vec::new();
+                TypeRefs(&mut refs).visit_type(&item.ty);
+                self.items.insert(name.clone(), id);
+                self.aliases.insert(name.clone(), item);
+                (name, generic_params, refs)
+            }
+            _ => return Ok(()),
+        };
+        self.selected.insert(name);
+        for (rooted, segments) in refs {
+            if !rooted && segments.len() == 1 {
+                let single = segments[0].as_str();
+                if generic_params.contains(single) || is_primitive(single) {
+                    continue;
+                }
+            }
+            if !rooted && segments.len() > 1 && is_external_crate(&segments[0]) {
+                continue;
+            }
+            match index.resolve_type_binding(id.module, &segments, rooted)? {
+                Binding::Found(Found::Item(dep_id))
+                    if index.modules[dep_id.module].krate == "mod_api" =>
+                {
+                    self.select_item(index, dep_id)?;
+                }
+                Binding::Ambiguous(error) => return Err(error),
+                _ => {}
             }
         }
         Ok(())
-    }
-
-    fn select(&mut self, name: &str) {
-        if !self.selected.insert(name.to_string()) {
-            return;
-        }
-        let mut dependencies = BTreeSet::new();
-        if let Some((record, _)) = self.records.get(name) {
-            for field in &record.fields {
-                if field
-                    .ident
-                    .as_ref()
-                    .is_some_and(|id| derived(name, &id.to_string()))
-                {
-                    continue;
-                }
-                Names(&mut dependencies).visit_type(&field.ty);
-            }
-        } else if let Some(alias) = self.aliases.get(name) {
-            Names(&mut dependencies).visit_type(&alias.ty);
-        }
-        for dependency in dependencies {
-            if self.records.contains_key(&dependency) || self.aliases.contains_key(&dependency) {
-                self.select(&dependency);
-            }
-        }
     }
 
     fn input_type(&self, ty: &Type) -> Type {
@@ -391,17 +416,30 @@ impl Schema {
 }
 
 fn local_path(path: &syn::TypePath) -> bool {
-    path.path.segments.len() == 1
-        || matches!(
-            path.path
-                .segments
-                .first()
-                .unwrap()
-                .ident
-                .to_string()
-                .as_str(),
-            "crate" | "self" | "super"
-        )
+    path.qself.is_none()
+        && path.path.leading_colon.is_none()
+        && path
+            .path
+            .segments
+            .first()
+            .is_some_and(|first| !is_external_crate(&first.ident.to_string()))
+}
+
+struct TypeRefs<'a>(&'a mut Vec<(bool, Vec<String>)>);
+impl<'ast> Visit<'ast> for TypeRefs<'_> {
+    fn visit_type_path(&mut self, path: &'ast syn::TypePath) {
+        if path.qself.is_none() && !path.path.segments.is_empty() {
+            self.0.push((
+                path.path.leading_colon.is_some(),
+                path.path
+                    .segments
+                    .iter()
+                    .map(|segment| segment.ident.to_string())
+                    .collect(),
+            ));
+        }
+        syn::visit::visit_type_path(self, path);
+    }
 }
 
 struct Names<'a>(&'a mut BTreeSet<String>);
@@ -443,13 +481,22 @@ impl VisitMut for Substitute<'_> {
     }
 }
 
-pub(super) fn source(root: &Path) -> Result<String, String> {
+pub(super) fn source_with_index(
+    root: &Path,
+    index: &mut Index<'_>,
+    inputs: &mut crate::Inputs,
+) -> Result<String, String> {
+    let shared = index.module("mod_api", &["parts".to_owned(), "shared".to_owned()])?;
+    let installed_id = match index.resolve_type_binding(shared, &["Installed".to_owned()], false)? {
+        Binding::Found(Found::Item(id)) => id,
+        Binding::Ambiguous(error) => return Err(error),
+        _ => return Ok(String::new()),
+    };
     let mut schema = Schema::default();
-    schema.read(&root.join("crates/sunrise-mod-vocab/src"), "crate")?;
+    schema.select_item(index, installed_id)?;
     if !schema.records.contains_key("Installed") {
         return Ok(String::new());
     }
-    schema.select("Installed");
     if let Some(name) = schema.selected.intersection(&schema.duplicates).next() {
         return Err(format!("ambiguous private storage record {name}"));
     }
@@ -457,14 +504,13 @@ pub(super) fn source(root: &Path) -> Result<String, String> {
     let directory = root.join("crates/sunrise-mod-vocab/src/parts/installation_tokens");
     let mut factories = TokenStream::new();
     if directory.exists() {
-        crate::rerun_if_changed(&directory.display());
-        for name in sunrise_game_discovery::module_files(&directory)? {
-            let path = directory
-                .join(format!("{name}.rs"))
-                .to_string_lossy()
-                .into_owned();
+        for name in inputs.module_files(&directory)? {
+            let file_path = directory.join(format!("{name}.rs"));
+            let path = file_path.to_string_lossy().into_owned();
             let module = format_ident!("token_{name}");
-            let source = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+            let source = inputs
+                .read_to_string(&file_path)
+                .map_err(|e| e.to_string())?;
             let parsed = syn::parse_file(&source).map_err(|e| e.to_string())?;
             factories.extend(quote! { #[path = #path] mod #module; });
             for item in parsed.items {
@@ -515,7 +561,78 @@ pub(super) fn source(root: &Path) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::fs;
+    use std::path::Path;
+
+    #[test]
+    fn glob_imported_private_record_is_discovered_and_mirrored() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let src = root.join("crates/sunrise-mod-vocab/src");
+        fs::create_dir_all(src.join("parts")).unwrap();
+        fs::create_dir_all(src.join("world")).unwrap();
+        fs::create_dir_all(src.join("client")).unwrap();
+        fs::write(src.join("lib.rs"), "mod parts;\nmod world;\nmod client;\n").unwrap();
+        fs::write(src.join("world/mod.rs"), "pub(crate) mod hidden_store;\n").unwrap();
+        fs::write(
+            src.join("world/hidden_store.rs"),
+            "pub(crate) struct SecretRecord { pub(crate) tag: Box<str> }\n",
+        )
+        .unwrap();
+        fs::write(src.join("client/mod.rs"), "pub mod camera;\n").unwrap();
+        fs::write(src.join("client/camera.rs"), "pub struct CameraState;\n").unwrap();
+        fs::write(
+            src.join("parts/mod.rs"),
+            "include!(concat!(env!(\"OUT_DIR\"), \"/parts_modules.rs\"));\n",
+        )
+        .unwrap();
+        fs::write(
+            src.join("parts/unions.rs.in"),
+            "pub trait Registrar {} pub trait CapabilityProviders {}\n",
+        )
+        .unwrap();
+        fs::write(
+            src.join("parts/shared.rs"),
+            r#"
+            use crate::world::hidden_store::*;
+            #[derive(Default)]
+            pub(crate) struct Installed {
+                pub(crate) secrets: Vec<SecretRecord>,
+            }
+            "#,
+        )
+        .unwrap();
+
+        let mut inputs = crate::Inputs::default();
+        let generated = crate::parts::source_tracked(root, &mut inputs).unwrap();
+        let tracked = inputs.into_paths();
+
+        assert!(
+            generated.contains("pub struct SecretRecordInput"),
+            "{generated}"
+        );
+        assert!(
+            generated
+                .contains("From<SecretRecordInput> for crate::world::hidden_store::SecretRecord"),
+            "{generated}"
+        );
+        assert!(
+            generated.contains("pub secrets: Vec<SecretRecordInput>"),
+            "{generated}"
+        );
+        assert!(
+            generated.contains("SecretRecordInput as SecretRecord"),
+            "{generated}"
+        );
+        assert!(
+            tracked.contains(&src.join("world/hidden_store.rs")),
+            "glob-imported schema file must be tracked: {tracked:?}"
+        );
+        assert!(
+            !tracked.contains(&src.join("client/camera.rs")),
+            "unrelated file must not be opened: {tracked:?}"
+        );
+    }
 
     #[test]
     #[ignore = "daily"]
@@ -556,17 +673,26 @@ mod tests {
         let metadata = r#"
             pub(crate) struct Info { pub(crate) id: Box<str>, pub(crate) hooks: Vec<u32> }
         "#;
+        fs::write(dir.join("lib.rs"), "mod meta;\nmod parts;\n").unwrap();
+        fs::write(
+            dir.join("parts/mod.rs"),
+            "include!(concat!(env!(\"OUT_DIR\"), \"/parts_modules.rs\"));\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("parts/unions.rs.in"),
+            "pub trait Registrar {} pub trait CapabilityProviders {}\n",
+        )
+        .unwrap();
         fs::write(dir.join("parts/shared.rs"), storage).unwrap();
         fs::write(dir.join("meta.rs"), metadata).unwrap();
-        let generated = source(&root).unwrap();
+        let generated = crate::parts::source(&root).unwrap();
         let native = format!(
             r#"
             pub trait Part: Send + Sync {{}} impl Part for u32 {{}}
             mod meta {{ {metadata} }}
             mod parts {{
                 use std::{{collections::HashMap, sync::Arc}};
-                pub(crate) mod shared {{ {storage} }}
-                use shared::*;
                 mod registration_access {{
                     pub fn parts_installed() -> bool {{ false }}
                     pub fn install_input(input: super::installation::InstalledInput) {{
@@ -576,10 +702,10 @@ mod tests {
                 {generated}
             }}
             pub use parts::installation;
-            pub use parts::shared::{{Attached, Payloads}};
+            pub use parts::{{Attached, Payloads}};
             pub fn inspect(input: installation::InstalledInput) -> (usize, usize, String, Vec<u32>, bool) {{
                 let expected = input.keys.payloads.as_ref().unwrap().phases[0]["sample"].part.clone();
-                let stored: parts::shared::Installed = input.into();
+                let stored: parts::Installed = input.into();
                 let phases = &stored.keys.payloads.as_ref().unwrap().phases;
                 assert_eq!(phases[0]["sample"].owner, "after");
                 assert_eq!(phases[1]["sample"].owner, "owner");

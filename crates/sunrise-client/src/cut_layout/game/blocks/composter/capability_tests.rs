@@ -527,13 +527,10 @@ fn a_composter_click_supplies_its_interacting_player_and_no_this() {
     game.server_items = Some(Arc::new(items));
     game.build_registries();
     // The clicking player, beside the composter.
-    game.player = Some(
-        sunrise_sim::motion::PlayerMotion::new(
-            game.motion,
-            sunrise_core::geometry::Vec3::new(4.5, 64.0, 2.5),
-        )
-        .unwrap(),
-    );
+    game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+        game.motion,
+        sunrise_core::geometry::Vec3::new(4.5, 64.0, 2.5),
+    ));
     for (x, z) in (-1..=1).flat_map(|x| (-1..=1).map(move |z| (x, z))) {
         game.world
             .chunks

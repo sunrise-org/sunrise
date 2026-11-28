@@ -37,13 +37,10 @@ pub(crate) fn game_with_player<'a>(
     )
     .unwrap();
     game.creative = true;
-    game.player = Some(
-        sunrise_sim::motion::PlayerMotion::new(
-            game.motion,
-            sunrise_core::geometry::Vec3::new(10.5, 64.0, -3.25),
-        )
-        .unwrap(),
-    );
+    game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+        game.motion,
+        sunrise_core::geometry::Vec3::new(10.5, 64.0, -3.25),
+    ));
     // A still player: `known_player_movement` is the last tick's step.
     game.previous_position = game.player.as_ref().expect("a player").position;
     game.start_audio_capture();

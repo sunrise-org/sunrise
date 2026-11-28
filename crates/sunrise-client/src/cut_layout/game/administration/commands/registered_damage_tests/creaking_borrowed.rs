@@ -341,14 +341,15 @@ pub(crate) fn run_borrowed_creaking_hurt_finishes_before_the_tick_continues() {
                 None
             };
 
-            game.server.lan_entity_events.clear();
+            game.server.lan_queues.entity_events.clear();
             game.start_audio_capture();
             TEST_POSTED_EVENT_ORDER.with(|order| *order.borrow_mut() = Some(Vec::new()));
             let live_reaction = |game: &sunrise_gameplay::game::ServerGame<'_>| {
                 let flap = (mob as i32, 66);
                 let flashes = game
                     .server
-                    .lan_entity_events
+                    .lan_queues
+                    .entity_events
                     .iter()
                     .filter(|&&entry| entry == flap)
                     .count();

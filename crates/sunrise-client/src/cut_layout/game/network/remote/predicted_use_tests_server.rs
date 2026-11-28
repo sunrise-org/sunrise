@@ -42,9 +42,10 @@ pub(crate) fn matrix(mods: mod_api::Mods) {
                         game.yaw = 0.0;
                         game.pitch = 0.0;
                         let player_z = if path >= 3 { 0.5 } else { 3.5 };
-                        game.player = Some(
-                            PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, player_z)).unwrap(),
-                        );
+                        game.player = Some(PlayerMotion::new(
+                            game.motion,
+                            Vec3::new(0.5, 64.0, player_z),
+                        ));
                         if path >= 3 {
                             game.spawn_entity(42, "minecraft:zombie", [0.5, 64.0, 2.5], [0.0; 3]);
                         }

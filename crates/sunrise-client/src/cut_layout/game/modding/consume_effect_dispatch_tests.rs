@@ -126,8 +126,7 @@ fn consuming_player_is_supplied_outside_a_guest_action() {
         || {
             with_game(|game| {
                 let mut body =
-                    sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(0.0, 65.0, 0.0))
-                        .unwrap();
+                    sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(0.0, 65.0, 0.0));
                 body.entity_id = 7;
                 game.player = Some(body);
                 game.bind_local_player_residency();
@@ -172,8 +171,7 @@ fn replacing_the_consumed_hand_keeps_the_new_item_and_emits_no_remainder() {
     mod_platform::testing::with_mods(mods, || {
         with_game(|game| {
             let mut body =
-                sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(0.0, 65.0, 0.0))
-                    .unwrap();
+                sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(0.0, 65.0, 0.0));
             body.entity_id = 7;
             game.player = Some(body);
             game.bind_local_player_residency();
@@ -240,8 +238,7 @@ fn potion_finishes_with_its_patched_effects_after_potion_contents() {
     mod_platform::testing::with_mods(mods, || {
         with_game(|game| {
             let mut body =
-                sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(0.0, 65.0, 0.0))
-                    .unwrap();
+                sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(0.0, 65.0, 0.0));
             body.entity_id = 7;
             game.player = Some(body);
             game.bind_local_player_residency();
@@ -312,8 +309,7 @@ fn a_consume_callback_panic_leaves_later_effects_and_other_callbacks_running() {
     mod_platform::testing::with_mods(mods.into(), || {
         with_game(|game| {
             let mut body =
-                sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(0.0, 65.0, 0.0))
-                    .unwrap();
+                sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(0.0, 65.0, 0.0));
             body.entity_id = 7;
             game.player = Some(body);
             game.bind_local_player_residency();

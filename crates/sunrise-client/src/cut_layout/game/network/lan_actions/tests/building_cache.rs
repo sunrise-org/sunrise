@@ -63,7 +63,7 @@ pub(crate) fn game<'a>(
             .unwrap();
     }
     assert!(game.run_command("fill 0 99 0 31 99 15 stone"));
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 100.0, 2.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 100.0, 2.5)));
     let net = NetConfig {
         announce: false,
         ..NetConfig::lan(0, "building-cache-test".into(), 3)

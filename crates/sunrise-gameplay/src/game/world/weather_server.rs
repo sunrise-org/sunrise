@@ -2,6 +2,7 @@ use super::Dim;
 
 impl crate::game::ServerGame<'_> {
     pub(in crate::game) fn tick_level_weather(&mut self, dim: Dim) {
+        let _rng = crate::rng_count::guard_consumer(crate::rng_count::Consumer::WeatherCycle);
         let parameters = self.common.world.weather;
         let advance = self
             .common

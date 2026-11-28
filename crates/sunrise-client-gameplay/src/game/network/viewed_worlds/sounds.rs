@@ -114,9 +114,7 @@ impl crate::game::ClientGame<'_> {
     /// left `play_at` None or gave a non-finite position. The sound engine handles gain and pitch
     /// just as it does for a sound in the player's own level.
     pub fn ask_viewed_level_sound(&mut self, level: i32, p: ViewedSound<'_>) -> Option<ViewedPlay> {
-        let name = self
-            .remote_sound_name(p.sound)
-            .filter(|name| !self.pvp_mutes_sound(name))?;
+        let name = self.remote_sound_name(p.sound)?;
         let sound = Identifier::parse(&name).ok()?;
         let handle = self.viewed_level_handle(level)?;
         let mut source = LevelSound::new(&name, p.position, p.volume, p.pitch).source;

@@ -961,13 +961,10 @@ pub(crate) mod nested_vehicle_discard_tests {
                 with_vehicle_tree(cart, false, |game| {
                     game.server.settings.simulation_distance = 4;
                     game.server.settings.render_distance = 12;
-                    game.player = Some(
-                        sunrise_sim::motion::PlayerMotion::new(
-                            game.motion,
-                            Vec3::new(8.5, 200.0, 8.5),
-                        )
-                        .unwrap(),
-                    );
+                    game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                        game.motion,
+                        Vec3::new(8.5, 200.0, 8.5),
+                    ));
                     super::super::native_entity_refs::tests::prepare_entity_ticking_neighborhood(
                         game,
                         sunrise_core::position::ChunkPos::new(0, 0),
@@ -1035,13 +1032,10 @@ pub(crate) mod nested_vehicle_discard_tests {
                 with_vehicle_tree(cart, false, |game| {
                     fixture_resident_column(&mut game.world, (0, 1));
                     game.mobs.clear();
-                    game.player = Some(
-                        sunrise_sim::motion::PlayerMotion::new(
-                            game.motion,
-                            Vec3::new(2.0, 190.0, 3.0),
-                        )
-                        .unwrap(),
-                    );
+                    game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                        game.motion,
+                        Vec3::new(2.0, 190.0, 3.0),
+                    ));
                     super::super::native_entity_refs::tests::bind_local_player(game, 70, 70);
                     game.riding = Some(71);
                     let vehicle = game.entity(71).unwrap();

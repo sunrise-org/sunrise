@@ -60,25 +60,45 @@ impl Facing {
     }
 }
 
+/// Maps an `f32` to a `u32` whose ascending order matches descending `f32::total_cmp`.
+#[inline]
+fn total_order_desc(v: f32) -> u32 {
+    let bits = v.to_bits();
+    let asc = if (bits as i32) < 0 {
+        !bits
+    } else {
+        bits ^ 0x8000_0000
+    };
+    !asc
+}
+
 #[derive(Default)]
 pub struct Sorter {
-    order: Vec<(u32, f32)>,
+    /// `(total_order_desc(dist_sq) << 32) | quad_idx`: sorting ascending produces descending
+    /// `f32::total_cmp` distance order with ascending mesh-order tie-breaking, in place with no
+    /// temporary merge buffer (the scratch vectors can still grow on larger sections).
+    order: Vec<u64>,
     indices: Vec<u32>,
 }
 
 impl Sorter {
     pub fn sort(&mut self, centers: &[[f32; 3]], camera: [f32; 3]) -> &[u32] {
         self.order.clear();
+        self.order.reserve(centers.len());
         self.order.extend(centers.iter().enumerate().map(|(i, c)| {
             let [x, y, z] = std::array::from_fn(|j| camera[j] - c[j]);
-            (i as u32, x * x + y * y + z * z)
+            let dist_sq = x * x + y * y + z * z;
+            (u64::from(total_order_desc(dist_sq)) << 32) | (i as u64)
         }));
         // VertexSorting uses a stable merge sort, preserving mesh order for ties.
-        self.order.sort_by(|a, b| b.1.total_cmp(&a.1));
+        // Packing `quad_idx` in the low 32 bits preserves exact mesh order while sorting in place.
+        self.order.sort_unstable();
         self.indices.clear();
-        for &(quad, _) in &self.order {
-            let v = quad * 4;
-            self.indices.extend([v, v + 1, v + 2, v + 2, v + 3, v]);
+        self.indices.reserve(centers.len() * 6);
+        for &entry in &self.order {
+            let v = (entry as u32) * 4;
+            self.indices
+                .extend_from_slice(&[v, v + 1, v + 2, v + 2, v + 3, v]);
         }
         &self.indices
     }
@@ -101,13 +121,16 @@ impl Sorter {
         let kept = self
             .order
             .iter()
-            .filter(|&&(quad, _)| !hidden(quad))
+            .filter(|&&entry| !hidden(entry as u32))
             .count();
         if kept < self.order.len() {
-            for &(quad, _) in &self.order {
+            self.indices.reserve(kept * 6);
+            for &entry in &self.order {
+                let quad = entry as u32;
                 if !hidden(quad) {
                     let v = quad * 4;
-                    self.indices.extend([v, v + 1, v + 2, v + 2, v + 3, v]);
+                    self.indices
+                        .extend_from_slice(&[v, v + 1, v + 2, v + 2, v + 3, v]);
                 }
             }
         }
@@ -179,26 +202,6 @@ impl SortState {
 
     pub fn is_sorted(&self) -> bool {
         self.last.is_some()
-    }
-
-    /// Large tiles cannot use the section viewpoint shortcut: the camera may
-    /// cross a quad's plane while remaining on the same side of the first 16³.
-    pub fn update_lod<'a>(
-        &mut self,
-        camera: [f64; 3],
-        origin: [i32; 3],
-        sorter: &'a mut Sorter,
-    ) -> Option<&'a [u32]> {
-        let block = camera.map(|v| v.floor() as i32);
-        if self.last.is_some_and(|(last, _)| last == block) {
-            return None;
-        }
-        self.last = Some((block, [0; 3]));
-        self.kept = None;
-        Some(sorter.sort(
-            &self.centers,
-            std::array::from_fn(|i| (camera[i] - f64::from(origin[i])) as f32),
-        ))
     }
 
     /// TranslucencyPointOfView and ResortTransparencyTask: diagonal views keep
@@ -301,31 +304,6 @@ mod tests {
             .is_some()
         );
     }
-    #[test]
-    fn large_tiles_resort_inside_the_same_section_viewpoint() {
-        let mut state = SortState::new(vec![[32.0, 0.0, 0.0], [96.0, 0.0, 0.0]]);
-        let mut sorter = Sorter::default();
-        assert_eq!(
-            state
-                .update_lod([48.0, 20.0, 20.0], [0; 3], &mut sorter)
-                .unwrap()[0],
-            4
-        );
-        assert!(
-            state
-                .update_lod([48.5, 20.0, 20.0], [0; 3], &mut sorter)
-                .is_none()
-        );
-        // Both views have positive x/y/z signs relative to the first section,
-        // so the section-sized shortcut would incorrectly keep the old order.
-        assert_eq!(
-            state
-                .update_lod([80.0, 20.0, 20.0], [0; 3], &mut sorter)
-                .unwrap()[0],
-            0
-        );
-    }
-
     /// A water block's surface: the front quad looking up, the back one looking down.
     fn surface(y: f32, front: bool) -> [[f32; 3]; 4] {
         let corners = [[0.0, y, 0.0], [0.0, y, 1.0], [1.0, y, 1.0], [1.0, y, 0.0]];
@@ -690,5 +668,33 @@ mod tests {
             }
         }
         assert!(left_out > 0);
+    }
+
+    #[test]
+    fn total_order_desc_matches_f32_total_cmp() {
+        let samples = [
+            f32::NEG_INFINITY,
+            -1e10,
+            -1.0,
+            -f32::MIN_POSITIVE,
+            -f32::from_bits(1),
+            -0.0,
+            0.0,
+            f32::from_bits(1),
+            f32::MIN_POSITIVE,
+            1.0,
+            1e10,
+            f32::INFINITY,
+            f32::NAN,
+        ];
+        for &a in &samples {
+            for &b in &samples {
+                assert_eq!(
+                    total_order_desc(a).cmp(&total_order_desc(b)),
+                    b.total_cmp(&a),
+                    "mismatch for {a:?} vs {b:?}"
+                );
+            }
+        }
     }
 }

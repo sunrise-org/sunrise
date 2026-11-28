@@ -11,7 +11,7 @@ pub trait PlayerModesBackend {
     /// creative mode gives.
     fn player_has_infinite_materials(&self, player: PlayerRef) -> Option<bool>;
     /// Side: server.
-    /// `Player.canUseGameMasterBlocks`: creative and a permission level of
+    /// `Player.canUseGameMasterBlocks`: `abilities.instabuild` and a permission level of
     /// at least 2, as command blocks, structure blocks and jigsaws ask.
     fn player_can_use_game_master_blocks(&self, player: PlayerRef) -> Option<bool>;
     /// Side: server.

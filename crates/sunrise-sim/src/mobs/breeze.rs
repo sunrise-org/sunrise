@@ -32,7 +32,8 @@ pub fn register(m: &mut Mob) {
 }
 /// `Breeze.isInvulnerableTo`: another breeze (or itself).
 pub fn accepts_damage(m: &Mob, source: &Damage) -> bool {
-    !(source.attacker == Some(Who::Mob(m.id)) || source.attacker_species == Some(Species::Breeze))
+    !(source.attacker == Some(Who::Mob(m.id))
+        || source.attacker_species == Some(crate::mobs::species::vanilla_id(Species::Breeze)))
 }
 pub fn pose(m: &Mob) -> u8 {
     m.extra.variant3
@@ -517,6 +518,7 @@ mod ground_particle_tests {
 #[cfg(test)]
 mod invulnerability_tests {
     use super::*;
+    use crate::mobs::with_species;
     use crate::mobs::{DamageKind, sensor_scan_tests::kind};
 
     fn test_breeze(id: u32) -> Mob {
@@ -565,7 +567,7 @@ mod invulnerability_tests {
     }
 
     /// Scenario 2: Blocking/rejection of disallowed actions:
-    /// Breeze rejects damage when attacker is another Breeze (`source.attacker_species == Some(Species::Breeze)`),
+    /// Breeze rejects damage when attacker is another Breeze (`source.attacker_species == Some(crate::mobs::species::vanilla_id(Species::Breeze))`),
     /// returning `false` from `m.damage(...)` and taking no damage.
     #[test]
     fn breeze_rejects_damage_from_another_breeze() {
@@ -575,7 +577,7 @@ mod invulnerability_tests {
         let initial_health = b.health;
 
         // Direct mob attack from another breeze
-        let other_breeze_mob = Damage::mob(2, [0.0, 0.0, 0.0]).with_species(Species::Breeze);
+        let other_breeze_mob = with_species(Damage::mob(2, [0.0, 0.0, 0.0]), Species::Breeze);
         assert!(
             !b.damage(&mut level, 5.0, other_breeze_mob),
             "breeze should reject damage from another breeze"
@@ -588,7 +590,7 @@ mod invulnerability_tests {
             attacker: Some(Who::Mob(2)),
             from: Some([1.0, 0.0, 0.0]),
             direct: None,
-            attacker_species: Some(Species::Breeze),
+            attacker_species: Some(crate::mobs::species::vanilla_id(Species::Breeze)),
         };
         assert!(
             !b.damage(&mut level, 3.0, other_breeze_proj),
@@ -611,7 +613,7 @@ mod invulnerability_tests {
         let initial_health = b.health;
 
         // Attack from Zombie
-        let zombie_hit = Damage::mob(5, [0.0, 0.0, 0.0]).with_species(Species::Zombie);
+        let zombie_hit = with_species(Damage::mob(5, [0.0, 0.0, 0.0]), Species::Zombie);
         assert!(
             accepts_damage(&b, &zombie_hit),
             "breeze accepts damage from zombie"
@@ -624,7 +626,7 @@ mod invulnerability_tests {
 
         // Attack from Skeleton
         b.invulnerable = 0;
-        let skeleton_hit = Damage::mob(6, [0.0, 0.0, 0.0]).with_species(Species::Skeleton);
+        let skeleton_hit = with_species(Damage::mob(6, [0.0, 0.0, 0.0]), Species::Skeleton);
         assert!(
             accepts_damage(&b, &skeleton_hit),
             "breeze accepts damage from skeleton"
@@ -660,7 +662,7 @@ mod invulnerability_tests {
 
         // Self-inflicted damage with species tag
         let self_hit_with_species =
-            Damage::mob(b.id, [0.0, 0.0, 0.0]).with_species(Species::Breeze);
+            with_species(Damage::mob(b.id, [0.0, 0.0, 0.0]), Species::Breeze);
         assert!(
             !accepts_damage(&b, &self_hit_with_species),
             "breeze rejects self-hit with species"
@@ -692,7 +694,7 @@ mod invulnerability_tests {
 
         // But another Breeze with GenericKill is still rejected by Breeze.isInvulnerableTo
         b.invulnerable = 0;
-        let breeze_kill = Damage::of(DamageKind::GenericKill).with_species(Species::Breeze);
+        let breeze_kill = with_species(Damage::of(DamageKind::GenericKill), Species::Breeze);
         assert!(
             !accepts_damage(&b, &breeze_kill),
             "Breeze.isInvulnerableTo rejects breeze attacker even for GenericKill"

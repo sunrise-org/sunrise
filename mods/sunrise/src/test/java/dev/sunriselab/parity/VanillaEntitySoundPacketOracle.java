@@ -87,7 +87,7 @@ public final class VanillaEntitySoundPacketOracle {
     public static void main(String[] args) throws Exception {
         net.minecraft.SharedConstants.tryDetectVersion(); net.minecraft.server.Bootstrap.bootStrap();
         if (args[0].equals("decode-recorded")) {
-            // Existing Studio captures: the pinned codec, not a second packet implementation.
+            // Raw play-packet captures: the pinned codec, not a second packet implementation.
             try (var writer = new PrintWriter(Files.newBufferedWriter(Path.of(args[2])));
                  var lines = Files.lines(Path.of(args[1]))) {
                 for (var line : (Iterable<String>) lines::iterator) {

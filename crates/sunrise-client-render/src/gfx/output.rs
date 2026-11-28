@@ -5,6 +5,7 @@
 //! offers or reports.
 use super::hdr::Output;
 use crate::graphics::{Graphics, HdrMode, Reported};
+use sunrise_render_shaderpack::pack_uniforms::Display;
 
 /// What a renderer's destination and device can draw and present.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -210,6 +211,26 @@ impl EffectiveOutput {
     /// an offer and a frame that can take it.
     pub fn requests_hdr(&self, mode: HdrMode) -> bool {
         !self.held && requests_hdr(mode, self.offered.is_some(), self.system_hdr)
+    }
+    /// The display a shader pack served Sunrise's HDR extension reads (#5827 step 3,
+    /// `pack_uniforms::DISPLAY`): HDR only where HDR output is on and the frame is the layered
+    /// one, with `nits` clamped as `Hdr::params` takes them (paper white at least 1, the headroom
+    /// at least 1, the black level within 0 and paper white); SDR's 80-nit paper white and peak
+    /// elsewhere.
+    pub(crate) fn display(&self) -> Display {
+        if self.encoding.is_none() || !self.frame.hud_layer {
+            return Display::SDR;
+        }
+        let [paper_white, peak, black] = self.nits;
+        let paper_white = paper_white.max(1.0);
+        let headroom = (peak / paper_white).max(1.0);
+        Display {
+            hdr: true,
+            headroom,
+            paper_white,
+            peak: paper_white * headroom,
+            black_level: black.clamp(0.0, paper_white),
+        }
     }
     /// What a scaled screenshot's frame is drawn for (`Renderer::draw_scaled_frame`): the
     /// layered frame keeps HDR, whose world light and HUD layer make the screenshot; any other
@@ -704,6 +725,91 @@ pub(crate) mod tests {
         let stopped = window_output(window_reading);
         assert_eq!((stopped.system_hdr, stopped.encoding), (None, None));
         assert_eq!(stopped.reported, window_reading.luminance);
+    }
+
+    /// The display uniforms (#5827 step 3): SDR's 0/1/80/80/0 unless HDR output is on and the
+    /// frame is the layered one; there the nits HDR output takes, with `Hdr::params`' clamps.
+    #[test]
+    fn the_display_uniforms_follow_the_output() {
+        let hdr = |paper_white, peak, black_level| Graphics {
+            hdr: HdrMode::On,
+            hdr_paper_white: paper_white,
+            hdr_peak: peak,
+            hdr_black_level: black_level,
+            ..Graphics::default()
+        };
+        let sdr = Display {
+            hdr: false,
+            headroom: 1.0,
+            paper_white: 80.0,
+            peak: 80.0,
+            black_level: 0.0,
+        };
+        let no_pack = FrameRequest::new().with_hdr_float(true);
+        let (caps, reading) = window(Some(Output::Pq), Some(true));
+        let display =
+            |settings: &Graphics, caps| snapshot(settings, no_pack, caps, reading).display();
+        // 203/1000 nits and a black level of 0.05 nits (5 hundredths).
+        assert_eq!(
+            display(&hdr(203, 1000, 5), caps),
+            Display {
+                hdr: true,
+                headroom: 1000.0 / 203.0,
+                paper_white: 203.0,
+                peak: 1000.0,
+                black_level: 0.05,
+            }
+        );
+        // Auto: the display's report, 400/1000.
+        assert_eq!(
+            display(&hdr(0, 0, 0), caps),
+            Display {
+                hdr: true,
+                headroom: 2.5,
+                paper_white: 400.0,
+                peak: 1000.0,
+                black_level: 0.0,
+            }
+        );
+        // The peak sent is paper white times the headroom sent, as f32 holds them: at 90/1000
+        // nits, 90 × (1000/90) is 999.99994, not the 1000 set.
+        assert_eq!(
+            display(&hdr(90, 1000, 0), caps),
+            Display {
+                hdr: true,
+                headroom: 1000.0 / 90.0,
+                paper_white: 90.0,
+                peak: 999.99994,
+                black_level: 0.0,
+            }
+        );
+        // A peak under paper white: no headroom, the peak at paper white.
+        assert_eq!(
+            display(&hdr(400, 200, 0), caps),
+            Display {
+                hdr: true,
+                headroom: 1.0,
+                paper_white: 400.0,
+                peak: 400.0,
+                black_level: 0.0,
+            }
+        );
+        // A black level above paper white (500 nits) is held at it.
+        assert_eq!(display(&hdr(400, 1000, 50_000), caps).black_level, 400.0);
+        // HDR output off, or on without the HUD's layer (a frame not layered): SDR.
+        assert_eq!(display(&Graphics::default(), caps), sdr);
+        let unlayered = OutputCapabilities {
+            hud_layer: false,
+            ..caps
+        };
+        let out = snapshot(&hdr(203, 1000, 5), no_pack, unlayered, reading);
+        assert!(out.hdr_on() && !out.frame.hud_layer, "HDR on, not layered");
+        assert_eq!(out.display(), sdr);
+        assert_eq!(out.scaled_screenshot().display(), sdr);
+        // A scaled screenshot of the layered frame keeps HDR's values.
+        let layered = snapshot(&hdr(203, 1000, 5), no_pack, caps, reading);
+        assert_eq!(layered.scaled_screenshot().display(), layered.display());
+        assert!(layered.display().hdr);
     }
 
     /// A scaled screenshot of the layered frame keeps HDR; the 16-bit and the 8-bit frames shoot

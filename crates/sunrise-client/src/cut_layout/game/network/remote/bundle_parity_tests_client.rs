@@ -48,7 +48,7 @@ pub(crate) fn dependent_entity_bundle_body() {
             sea_level: 63,
         };
         game.enter_remote_dimension(&spawn, RemoteDimensionEntry::Login, Reason::Other);
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
         let (session, mut peer) = Session::play_loop_probe();
         let remote = game.client.remote.as_mut().unwrap();
         remote.session = session;

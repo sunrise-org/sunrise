@@ -57,16 +57,7 @@ fn layer_table(
     tags: &HashMap<String, HashSet<String>>,
     solid_render: impl Fn(u32) -> bool,
 ) -> (Arc<[Option<RenderLayer>]>, Vec<String>) {
-    let mut by_block: HashMap<&str, Vec<usize>> = HashMap::new();
-    for (i, subject, tag) in rules.subjects() {
-        if !tag {
-            by_block.entry(subject).or_default().push(i);
-        } else if let Some(members) = tags.get(subject) {
-            for member in members {
-                by_block.entry(member.as_str()).or_default().push(i);
-            }
-        }
-    }
+    let by_block = rules.by_name(tags);
     // Each refusing rule, by line and word, with the first states it named (in id order) and
     // how many it named.
     let mut kept: Vec<((u32, &str), Vec<String>, usize)> = Vec::new();

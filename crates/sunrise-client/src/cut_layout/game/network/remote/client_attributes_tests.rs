@@ -26,7 +26,7 @@ fn update_attributes_answers_the_local_players_living_reads() {
             .get("minecraft:zombie")
             .unwrap()
             .clone();
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
         game.player.as_mut().unwrap().entity_id = 42;
         game.mobs.push(Mob::new(60, zombie, Vec3::ZERO, 0.0));
         let remote = game.client.remote.as_mut().unwrap();
@@ -64,7 +64,7 @@ fn update_attributes_answers_the_local_players_living_reads() {
             Ok(ControlFlow::Continue(()))
         );
 
-        let registry_id = game.motion.attributes.id(health).unwrap().registry_id();
+        let registry_id = game.motion.attributes().id(health).unwrap().registry_id();
         let packet = C::UpdateAttributes(play::UpdateAttributes {
             id: 42,
             values: vec![play::AttributeSnapshot {

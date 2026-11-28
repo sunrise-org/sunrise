@@ -316,13 +316,10 @@ mod owner {
             game.level.player_uuid = Some(playerdata::uuid_ints(12));
             assert_ne!(game.dim.id(), "minecraft:the_nether");
             // The `Game`'s own player, living and with room: not the owner's, who is a guest.
-            game.player = Some(
-                sunrise_sim::motion::PlayerMotion::new(
-                    game.motion,
-                    sunrise_core::geometry::Vec3::new(8.5, 64.0, 8.5),
-                )
-                .unwrap(),
-            );
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                sunrise_core::geometry::Vec3::new(8.5, 64.0, 8.5),
+            ));
             game.inventory.fill(None);
             game.server
                 .lan

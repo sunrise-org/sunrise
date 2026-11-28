@@ -1,0 +1,8 @@
+# PlayerRef::touch_item and touch_orb run the game's own pickup for a player (#6126).
+# pickup_xp fires on the host's own orb pass too (#6126).
+sunrise-gameplay game::lan_actions::pickup_xp_tests::pickup_xp_hears_and_can_veto_the_host_players_own_pickup lib daily resources
+sunrise-gameplay game::server_side::native_item_entity_refs_server::tests::a_dead_player_or_an_open_transaction_refuses_a_touch lib daily resources
+sunrise-gameplay game::server_side::native_item_entity_refs_server::tests::a_guest_touches_an_item_and_an_orb_through_the_game_pickup lib daily resources
+sunrise-gameplay game::server_side::native_item_entity_refs_server::tests::a_pickup_xp_veto_refuses_a_touched_orb_for_the_host_and_for_a_guest lib daily resources
+sunrise-gameplay game::server_side::native_item_entity_refs_server::tests::a_post_listener_hears_a_partial_touch_and_the_rest_stays_on_the_ground lib daily resources
+sunrise-gameplay game::server_side::native_item_entity_refs_server::tests::the_host_player_touches_an_item_and_an_orb_through_the_game_pickup lib daily resources

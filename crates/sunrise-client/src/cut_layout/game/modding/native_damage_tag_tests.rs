@@ -86,7 +86,7 @@ fn a_hit_listener_reads_its_damage_type_tags_as_bound() {
             let mut tags: Vec<String> = catalog.tags().map(str::to_owned).collect();
             tags.sort();
             reads.lock().unwrap().tags = tags.clone();
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             bind_local_player(game, 7, 7);
             game.set_game_mode(GameMode::Survival);
             for damage_type in TYPES {

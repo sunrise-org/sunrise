@@ -87,7 +87,7 @@ pub(crate) fn run_a_stand_breaks_on_low_health_only_through_damage_and_a_dead_on
     let witness = load_witness_26_3();
     let rows = parse_witness_26_3(&witness);
     with_game(|game| {
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
         game.update_chunk_tickets();
         let mut i = 0;
         while i < rows.len() {

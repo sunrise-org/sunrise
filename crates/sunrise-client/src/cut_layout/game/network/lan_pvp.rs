@@ -145,7 +145,7 @@ pub(crate) mod arrow_hit_sound_tests {
                     .unwrap();
                 receivers.push(rx);
             }
-            let mut body = PlayerMotion::new(game.motion, Vec3::new(3.0, 64.0, 5.0)).unwrap();
+            let mut body = PlayerMotion::new(game.motion, Vec3::new(3.0, 64.0, 5.0));
             body.entity_id = victim as i32;
             game.server
                 .lan
@@ -297,7 +297,7 @@ mod tests {
     /// A fresh survival body for guest `conn` (entity `conn`), where `with_guests` stands it.
     fn fresh_body(game: &mut sunrise_gameplay::game::ServerGame<'_>, conn: u32) {
         let mut body =
-            sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(3.0, 64.0, 5.0)).unwrap();
+            sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(3.0, 64.0, 5.0));
         body.entity_id = conn as i32;
         game.server
             .lan
@@ -375,7 +375,7 @@ mod tests {
                 fixture_resident_column(&mut game.world, (0, 0));
                 ready_victim(game, false);
                 let start = Vec3::new(1.0, 65.0, 5.0);
-                game.player = Some(PlayerMotion::new(game.motion, start).unwrap());
+                game.player = Some(PlayerMotion::new(game.motion, start));
                 bind_local_player(game, 77, 77);
                 game.set_mode(GameMode::Survival);
                 let before = game.player.as_ref().unwrap().health.health();

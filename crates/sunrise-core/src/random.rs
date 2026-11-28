@@ -1,4 +1,6 @@
 //! Vanilla's two seeded random streams. No platform/default Rust RNG is used.
+#[cfg(feature = "rng-count")]
+pub mod draw_count;
 mod hash;
 mod owner;
 mod positional;
@@ -123,6 +125,8 @@ pub trait RandomSource: Sized {
 pub struct LegacyRandom {
     state: u64,
     gaussian: Option<f64>,
+    #[cfg(feature = "rng-count")]
+    level_owned: bool,
 }
 
 /// The whole generator: its 48-bit state and the cached second gaussian, so a copy draws on
@@ -138,6 +142,8 @@ impl From<(u64, Option<f64>)> for LegacyRandom {
         Self {
             state: state & Self::MASK,
             gaussian,
+            #[cfg(feature = "rng-count")]
+            level_owned: false,
         }
     }
 }
@@ -150,6 +156,8 @@ impl LegacyRandom {
         Self {
             state: (seed as u64 ^ Self::MULTIPLIER) & Self::MASK,
             gaussian: None,
+            #[cfg(feature = "rng-count")]
+            level_owned: false,
         }
     }
 
@@ -158,7 +166,15 @@ impl LegacyRandom {
         Self {
             state,
             gaussian: None,
+            #[cfg(feature = "rng-count")]
+            level_owned: false,
         }
+    }
+
+    #[cfg(feature = "rng-count")]
+    pub(super) const fn with_level_owned(mut self, owned: bool) -> Self {
+        self.level_owned = owned;
+        self
     }
 
     /// The 48-bit generator state (differential tests compare it).
@@ -176,6 +192,10 @@ impl LegacyRandom {
         let value = (self.state >> (48 - count)) as i32;
         #[cfg(feature = "rng-trace")]
         trace::record(count, value);
+        #[cfg(feature = "rng-count")]
+        if self.level_owned {
+            draw_count::record();
+        }
         value
     }
 }

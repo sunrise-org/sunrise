@@ -92,7 +92,7 @@ fn every_accepted_hurt_counts_for_its_own_attacker() {
         }
         game.persist.uuids.insert(92, [0, 0, 0, 4]);
         game.admit_new_mobs(0);
-        game.player = Some(sunrise_sim::motion::PlayerMotion::new(game.motion, at).unwrap());
+        game.player = Some(sunrise_sim::motion::PlayerMotion::new(game.motion, at));
         let player_hit = |game: &mut sunrise_gameplay::game::ServerGame<'_>, uuid, amount| {
             bind_local_player(game, 300, uuid);
             game.mob_hits_mob(91, amount, Damage::player([at.x, at.y, at.z]))
@@ -204,7 +204,7 @@ fn hurt_gossip_belongs_to_the_hits_own_player() {
         let at = Vec3::new(1.0, 100.0, 1.0);
         game.mobs.push(Mob::new(91, kind, at, 0.0));
         game.admit_new_mobs(0);
-        game.player = Some(sunrise_sim::motion::PlayerMotion::new(game.motion, at).unwrap());
+        game.player = Some(sunrise_sim::motion::PlayerMotion::new(game.motion, at));
         bind_local_player(game, 301, 9);
         game.server.lan_acting = Some(7);
         game.server.lan_acting_name = Some("Cloud owner".into());

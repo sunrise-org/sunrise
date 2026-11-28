@@ -47,7 +47,7 @@ fn mining_uses_admitted_stack_tools_and_actual_eye_immersion() {
     ));
     std::fs::create_dir_all(&scratch).unwrap();
     game.server.world_root = scratch.clone();
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 62.0, 4.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 62.0, 4.5)));
     game.player.as_mut().unwrap().ground.on_ground = true;
     game.creative = false;
     game.build_registries();
@@ -174,7 +174,7 @@ fn with_survival_game(f: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>
         crate::game::profile_resolver,
     )
     .unwrap();
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 62.0, 4.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 62.0, 4.5)));
     game.player.as_mut().unwrap().ground.on_ground = true;
     game.creative = false;
     game.build_registries();

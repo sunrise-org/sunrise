@@ -145,8 +145,7 @@ fn with_probe(
     mod_platform::testing::with_mods(mods, || {
         with_game(|game| {
             let mark = mark.lock().unwrap().clone().expect("probe:mark registered");
-            game.player =
-                Some(PlayerMotion::new(game.motion, Vec3::new(40.0, 70.0, 40.0)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(40.0, 70.0, 40.0)));
             bind_local_player(game, 7, 7);
             game.set_game_mode(GameMode::Survival);
             test(game, &seen, &mark);

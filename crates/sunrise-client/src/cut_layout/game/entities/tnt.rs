@@ -184,7 +184,7 @@ pub(crate) mod tests {
             // Fuse 1: explodes on this tick.
             cube.extra.sulfur_fuse = sunrise_sim::mobs::sulfur_cube::Fuse::set(1);
             game.mobs.push(cube);
-            game.server.portals.entities.insert(
+            game.server.portals.level.entities.insert(
                 9123,
                 PortalState {
                     cooldown,

@@ -187,8 +187,7 @@ mod tests {
                 game.connect_local(client, "CartCameraTest").unwrap();
                 game.client.remote.as_mut().unwrap().features =
                     Arc::from(["minecraft:minecart_improvements".to_owned()]);
-                game.common.player =
-                    Some(PlayerMotion::new(game.common.motion, Vec3::ZERO).unwrap());
+                game.common.player = Some(PlayerMotion::new(game.common.motion, Vec3::ZERO));
                 game.client.title.0 = None;
                 game.client.screen = Screen::Playing;
                 game.client.camera_type = sunrise_level::camera_math::CameraType::FirstPerson;

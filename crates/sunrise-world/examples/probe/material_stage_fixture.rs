@@ -733,7 +733,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (name, raw) in read("biome_tags")? {
         biome_tags.apply_json(&name, "vanilla", &raw)?;
     }
-    let biome_tags = biome_tags.build(|id, _| biomes.contains_key(id).then(|| id.to_owned()))?;
+    let biome_tags = biome_tags.bind(|id, _| biomes.contains_key(id).then(|| id.to_owned()));
     assert!(biome_tags.missing.is_empty());
     let conditions = MaterialConditionRegistry::from_json_with_biome_tags(
         &read("conditions")?,
@@ -744,7 +744,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (name, raw) in read("block_tags")? {
         block_tags.apply_json(&name, "vanilla", &raw)?;
     }
-    let block_tags = block_tags.build(|id, _| facts["defaults"].get(id).map(|_| id.to_owned()))?;
+    let block_tags = block_tags.bind(|id, _| facts["defaults"].get(id).map(|_| id.to_owned()));
     assert!(block_tags.missing.is_empty());
     let motion: BTreeSet<_> = block_tags.tags["minecraft:blocks_motion_in_heightmap"]
         .iter()

@@ -22,8 +22,8 @@ impl crate::game::ServerGame<'_> {
         // ServerChunkCache.tick: the tickets that time out.
         let world = &self.common.world;
         self.server
+            .chunk_ticking
             .tickets
-            .0
             .tick_portal(|ticket| portal_ticket_can_expire(world, ticket));
         self.sync_tick_chunks();
         self.start_ticking_chunks();
@@ -250,6 +250,8 @@ impl crate::game::ServerGame<'_> {
                 });
             }
             sunrise_level::spans::time("random_ticks", || {
+                let _rng =
+                    crate::rng_count::guard_consumer(crate::rng_count::Consumer::RandomBlockTicks);
                 for (x, z) in scratch.ticking.drain(..).filter(|_| !debug) {
                     // The last answer, asked from Y `from` at a world revision:
                     // the next ticking section. It stands for a later Y up to
@@ -311,7 +313,7 @@ impl crate::game::ServerGame<'_> {
     /// order is the same every run; vanilla's exact order is its fastutil
     /// table's slot order, which follows that table's whole history.
     pub fn random_tick_chunks(&self, out: &mut Vec<(i32, i32)>) {
-        let levels = self.server.tickets.0.levels();
+        let levels = self.server.chunk_ticking.tickets.levels();
         let bounds = levels.random_tick_bounds();
         out.clear();
         out.extend(self.common.world.chunks.keys().copied().filter(|&(x, z)| {
@@ -339,7 +341,7 @@ impl crate::game::ServerGame<'_> {
             self.register_chunk_ticks(key);
         }
         for &key in self.server.tick_chunks.removed() {
-            self.server.random_tick_sections.0.remove(&key);
+            self.server.chunk_ticking.random_tick_sections.remove(&key);
             self.common.portal_sections.remove(&key);
             self.common
                 .block_ticks
@@ -375,6 +377,11 @@ impl crate::game::ServerGame<'_> {
     /// events) happen before the next tick runs, as they do inline in vanilla.
     pub fn tick_scheduled(&mut self) -> Result<()> {
         for fluids in [false, true] {
+            let _rng = crate::rng_count::guard_consumer(if fluids {
+                crate::rng_count::Consumer::ScheduledFluids
+            } else {
+                crate::rng_count::Consumer::ScheduledBlocks
+            });
             let mut laps = sunrise_level::spans::laps();
             let name = if fluids { "tb_fluids" } else { "tb_scheduled" };
             if !self.with_level(|b, level, ticks| b.scheduled_begin(level, ticks, fluids)) {

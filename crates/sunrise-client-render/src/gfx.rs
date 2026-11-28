@@ -52,9 +52,7 @@ mod section_gpu;
 mod static_entity;
 
 pub(crate) use section_gpu::collect_animated_layers;
-use section_gpu::{
-    Part, SectionGpu, begin_shrink, decide_fade, forget_records, hold_fading, mark_fades,
-};
+use section_gpu::{Part, SectionGpu, begin_shrink, decide_fade, forget_records, mark_fades};
 use static_entity::{GpuStaticEntitySection, StaticEntityUniform};
 pub mod outline;
 mod overlay;
@@ -94,6 +92,7 @@ mod renderer_construction;
 mod section_fade;
 mod section_upload;
 mod shader_pack;
+pub use shader_pack::PackPoll;
 mod surface_lifecycle;
 use entity_draw::*;
 #[cfg(test)]
@@ -231,7 +230,6 @@ mod in_flight;
 mod material_animation;
 #[cfg(test)]
 mod material_animation_renderer_tests;
-mod sourced_geometry;
 mod terrain_normals;
 use display_watch::DisplayWatch;
 #[cfg(test)]
@@ -245,8 +243,7 @@ pub mod lightning;
 mod linear_blend;
 #[cfg(test)]
 use frame_policy::frame_format;
-use frame_policy::{frame_configuration, overlay_format, sunrise_tone_curve};
-mod lod;
+use frame_policy::{frame_configuration, overlay_format, pack_owns_tone_curve, sunrise_tone_curve};
 pub mod mod_compute;
 pub mod mod_frame_graph;
 pub mod mod_gpu;
@@ -295,6 +292,8 @@ mod off_page;
 use off_page::move_off_page;
 pub mod submit;
 mod sunrise_fan;
+#[cfg(feature = "test-support")]
+pub mod test_hooks;
 mod timing;
 pub mod translucency;
 pub(crate) mod upload;
@@ -648,6 +647,25 @@ impl Renderer {
     pub fn custom_sky_draws(&mut self) -> &mut Vec<crate::custom_sky::Draw> {
         &mut self.custom_sky_draws
     }
+    /// The pack's custom lightmaps (`crate::custom_lightmap::load`): a world with one takes its
+    /// light texture from them in place of the default one. A pack without any costs a frame
+    /// nothing.
+    pub fn set_custom_lightmap(
+        &mut self,
+        pack: std::sync::Arc<dyn crate::custom_lightmap::Lightmaps>,
+    ) {
+        self.custom_lightmap = (!pack.is_empty()).then_some(pack);
+        self.lightmap_uploaded = false;
+    }
+    /// Whether the pack has custom lightmaps: only then does the game hand over the weather.
+    pub fn has_custom_lightmap(&self) -> bool {
+        self.custom_lightmap.is_some()
+    }
+    /// The world and weather of the next frame's light texture (custom lightmaps read them). Only
+    /// that frame reads them: a frame the game sets none for has no custom lightmap.
+    pub fn set_lightmap_weather(&mut self, weather: crate::custom_lightmap::Weather) {
+        self.lightmap_weather = Some(weather);
+    }
     fn quad_indices(device: &wgpu::Device, quads: u32) -> wgpu::Buffer {
         surface_setup::ray_query::quad_indices(device, quads)
     }
@@ -916,6 +934,13 @@ impl Renderer {
     pub fn device_lost(&self) -> bool {
         self.device_lost.load(std::sync::atomic::Ordering::Relaxed)
     }
+
+    /// The device this renderer draws on: equal for two renderers exactly when the later one was
+    /// made on the earlier one's device (`RendererDevice::Reuse`). A recovery after a device loss
+    /// or any other newly opened device gets a new one.
+    pub fn device_id(&self) -> u64 {
+        self.device_id
+    }
 }
 /// Encodes the copy of `texture`'s `size` pixels into a mappable buffer.
 pub(crate) fn copy_frame(
@@ -1040,30 +1065,61 @@ mod sprite_upload_tests;
 #[cfg(test)]
 mod shadow_tests;
 
+#[cfg(test)]
+mod pack_build_retire_tests;
+
+mod pack_builds;
+#[cfg(feature = "test-support")]
+pub use pack_builds::PackBuildWatch;
+pub use pack_builds::PackBuilds;
+pub(crate) use pack_builds::{BuildOrigin, PackBuild, Retired, RetiredPackBuilds};
+
+/// What a pack's thread builds (`Renderer::load_shader_pack`): the pack or why it is refused,
+/// its block ids, and the mod pipelines' state for its targets.
+type PackBuilt = (
+    std::result::Result<pack_post::PackPost, pack_post::Refused>,
+    Vec<i32>,
+    Option<mod_pipelines::BuiltPackState>,
+);
+
 /// A `shaders/` pack building on its own thread (`Renderer::load_shader_pack`): the dimension it
 /// is for, the thread (a panic in it contained), and what the game named it with and when.
 /// Dropping it (another pack, none, or another dimension) cancels the build: the thread stops at
-/// the next program instead of compiling the rest for nothing.
+/// the next program instead of compiling the rest for nothing, and goes to the renderer's
+/// [`RetiredPackBuilds`], which joins it once it ends, and before the renderer drops.
 pub(crate) struct PackLoading {
     dimension: i32,
-    /// Held to be dropped with it: that cancels the build.
-    _cancel: CancelOnDrop,
-    #[allow(clippy::type_complexity)]
-    thread: std::thread::JoinHandle<
-        std::result::Result<
-            (
-                std::result::Result<pack_post::PackPost, pack_post::Refused>,
-                Vec<i32>,
-            ),
-            String,
-        >,
-    >,
+    /// Set when it drops: `PackPost::new` checks it per program.
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+    /// `None` once `poll_shader_pack` joined it.
+    thread: Option<PackBuild>,
+    /// Where the thread goes when this drops before it was joined, and where it runs.
+    retired: RetiredPackBuilds,
+    origin: BuildOrigin,
     label: String,
     started: std::time::Instant,
     /// What its terrain and shadow programs will draw from the game's sections, as the built
     /// pack's `has_terrain` and `has_shadow` will say (`PackLoading::draws_of`), for the layouts
     /// the frames drawn meanwhile keep (`Renderer::pack_pending`).
     draws: PackDraws,
+    /// Sunrise's HDR as served to it (`Post::hdr`).
+    served: Option<sunrise_shaders::Tonemap>,
+    /// Block ids given while it builds (`Renderer::set_pack_block_ids`), which it runs with in
+    /// place of those it was built with.
+    block_ids: Option<Vec<i32>>,
+}
+
+impl Drop for PackLoading {
+    fn drop(&mut self) {
+        self.cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            self.retired.retire(Retired {
+                thread,
+                origin: self.origin.clone(),
+            });
+        }
+    }
 }
 
 /// A running `shaders/` pack's block ids (`Renderer::pack_block_ids`).
@@ -1098,14 +1154,5 @@ impl PackLoading {
             shadow,
             sections: atlas && (programs || post.water.is_some()) || shadow,
         }
-    }
-}
-
-/// Sets its flag when dropped: `PackLoading`'s cancel, which `PackPost::new` checks per program.
-struct CancelOnDrop(std::sync::Arc<std::sync::atomic::AtomicBool>);
-
-impl Drop for CancelOnDrop {
-    fn drop(&mut self) {
-        self.0.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }

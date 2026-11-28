@@ -56,7 +56,7 @@ fn actual_player_save_tracks_mutable_body_and_keeps_guest_context() {
         game.block_ticks
             .add_empty_chunk(ChunkPos::new(0, 0))
             .unwrap();
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 200.0, 8.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 200.0, 8.5)));
         game.build_registries();
         game.set_allow_commands(true);
         game.set_mode_id(1);
@@ -115,7 +115,7 @@ fn actual_player_save_tracks_mutable_body_and_keeps_guest_context() {
             "no body raw retention",
             &mut failures,
         );
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 200.0, 8.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 200.0, 8.5)));
         assert_eq!(game.player.as_ref().unwrap().impulse.reset_grace_time, 0);
         assert!(!game.player.as_ref().unwrap().spawn_extra_particles_on_fall);
         check(
@@ -183,7 +183,7 @@ fn actual_player_save_tracks_mutable_body_and_keeps_guest_context() {
         guest.placed = true;
         guest.loaded = true;
         guest.saved = Some(raw("guest", 88, true));
-        let mut body = PlayerMotion::new(game.motion, Vec3::new(12.5, 200.0, 8.5)).unwrap();
+        let mut body = PlayerMotion::new(game.motion, Vec3::new(12.5, 200.0, 8.5));
         body.impulse.apply_grace_time(7);
         assert_eq!(body.impulse.reset_grace_time, 7);
         assert!(!body.spawn_extra_particles_on_fall);

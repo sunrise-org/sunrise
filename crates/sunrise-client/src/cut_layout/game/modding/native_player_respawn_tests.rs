@@ -130,7 +130,7 @@ fn each_respawn_refusal_has_its_own_name_and_changes_nothing() {
                 game, false,
             );
             game.level.player_uuid = Some([0, 0, 0, 99]);
-            let mut body = PlayerMotion::new(game.motion, Vec3::new(0.0, 64.0, 0.0)).unwrap();
+            let mut body = PlayerMotion::new(game.motion, Vec3::new(0.0, 64.0, 0.0));
             body.entity_id = 99;
             game.player = Some(body);
             let owner = NativeServerGameExt1::player(game, 99).unwrap();

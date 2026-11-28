@@ -191,13 +191,34 @@ impl GameLevel<'_> {
         block: BlockKey,
         delay: i32,
     ) -> bool {
-        let Some(block) = crate::game::api_values::behavior_block(block, self.behaviours) else {
-            return false;
-        };
-        let at = BlockPos::new(pos[0], pos[1], pos[2]);
-        let time = self.game_time();
-        ticks.schedule_block(time, at, block, delay, TickPriority::Normal)
-            != ScheduleResult::MissingChunk
+        self.native_schedule_block_tick_with_priority(
+            ticks,
+            pos,
+            block,
+            delay,
+            mod_api::TickPriority::Normal,
+        )
+    }
+    /// `native_schedule_block_tick` at `priority`
+    /// (`ScheduledTickAccess.scheduleTick(pos, block, delay, priority)`), through
+    /// `api_values::schedule_block_tick`, which `LevelRef::schedule_block_tick` uses too.
+    pub(in crate::game) fn native_schedule_block_tick_with_priority(
+        &self,
+        ticks: &mut Ticks,
+        pos: [i32; 3],
+        block: BlockKey,
+        delay: i32,
+        priority: mod_api::TickPriority,
+    ) -> bool {
+        crate::game::api_values::schedule_block_tick(
+            ticks,
+            self.behaviours,
+            self.game_time(),
+            pos,
+            block,
+            delay,
+            priority,
+        )
     }
     /// Schedules a tick of `fluid` (`minecraft:water`, `minecraft:lava`,
     /// `minecraft:flowing_water`...) at `pos` in `delay` game ticks, as a
@@ -213,12 +234,36 @@ impl GameLevel<'_> {
         fluid: &str,
         delay: i32,
     ) -> bool {
+        self.native_schedule_fluid_tick_with_priority(
+            ticks,
+            pos,
+            fluid,
+            delay,
+            mod_api::TickPriority::Normal,
+        )
+    }
+    /// `native_schedule_fluid_tick` at `priority`
+    /// (`ScheduledTickAccess.scheduleTick(pos, fluid, delay, priority)`), through
+    /// `api_values::schedule_fluid_tick`, which `LevelRef::schedule_fluid_tick` uses too.
+    pub(in crate::game) fn native_schedule_fluid_tick_with_priority(
+        &self,
+        ticks: &mut Ticks,
+        pos: [i32; 3],
+        fluid: &str,
+        delay: i32,
+        priority: mod_api::TickPriority,
+    ) -> bool {
         let Some(kind) = FluidKind::from_name(fluid) else {
             return false;
         };
-        let at = BlockPos::new(pos[0], pos[1], pos[2]);
-        let time = self.game_time();
-        ticks.schedule_fluid(time, at, kind, delay) != ScheduleResult::MissingChunk
+        crate::game::api_values::schedule_fluid_tick(
+            ticks,
+            self.game_time(),
+            pos,
+            kind,
+            delay,
+            priority,
+        )
     }
     /// The state `state` with its property `key` set to `value`, as a mod block
     /// builds the state it is placed in: `native_state_with_property(cable,

@@ -41,6 +41,18 @@ pub const STURDY_TOP: u16 = 256;
 /// BlockState.isSolid
 pub const SOLID: u16 = 512;
 pub const SOLID_RENDER: u16 = 1024;
+/// `minecraft:sweet_berry_bush` (adjacent `DamagingInNeighbor`).
+pub(super) const ADJACENT_BERRY_BUSH: u16 = 2048;
+/// State-immutable vanilla burning blocks (`lava`, `magma_block`, `lava_cauldron`, lit campfires).
+pub(super) const ADJACENT_BURNING: u16 = 4096;
+/// Custom mod fluid (`Fluid::Modded`, adjacent `WaterBorder`).
+pub(super) const ADJACENT_MODDED_FLUID: u16 = 8192;
+/// Set when the `ADJACENT_*` bits above have been populated from `BlockFacts`.
+pub(super) const ADJACENT_KNOWN: u16 = 16384;
+/// Runtime-owned bits in [`StateData::flags`]; stripped on disk load and
+/// overwritten by [`MobData::populate_adjacent_flags`].
+const ADJACENT_FLAGS_MASK: u16 =
+    ADJACENT_BERRY_BUSH | ADJACENT_BURNING | ADJACENT_MODDED_FLUID | ADJACENT_KNOWN;
 
 /// The path flag bit of `kind`.
 fn path_bit(kind: PathComputationType) -> u16 {
@@ -60,6 +72,23 @@ pub(super) fn vanilla_burning_block(block: &str, emits_light: bool, in_fire_tag:
             "minecraft:lava" | "minecraft:magma_block" | "minecraft:lava_cauldron"
         )
         || matches!(block, "minecraft:campfire" | "minecraft:soul_campfire") && emits_light
+}
+
+/// Compute the runtime-owned neighbour pathfinding flag bits for one block state.
+/// Shared by [`MobData::populate_adjacent_flags`] and the unpopulated fallback in
+/// [`super::path::MobWorld::check_neighbours`] so precedence cannot drift.
+pub(super) fn adjacent_bits_for_fact(fact: &crate::blocks::StateFacts) -> u16 {
+    let mut bits = ADJACENT_KNOWN;
+    let name = &*fact.name;
+    if name == "minecraft:sweet_berry_bush" {
+        bits |= ADJACENT_BERRY_BUSH;
+    } else if vanilla_burning_block(name, fact.emission > 0, false) {
+        bits |= ADJACENT_BURNING;
+    }
+    if fact.fluid == Fluid::Modded {
+        bits |= ADJACENT_MODDED_FLUID;
+    }
+    bits
 }
 
 /// `WalkNodeEvaluator.checkNeighbourBlocks`: the type a neighbour of type `t` gives a node.
@@ -235,7 +264,7 @@ impl MobData {
                 .into_iter()
                 .map(|(path, flags, top)| StateData {
                     path: PathType::from_name(&path),
-                    flags,
+                    flags: flags & !ADJACENT_FLAGS_MASK,
                     top,
                 })
                 .collect(),
@@ -324,9 +353,16 @@ impl MobData {
     pub fn biome_has(&self, tag: &str, biome: &str) -> bool {
         self.biome_tags.get(tag).is_some_and(|s| s.contains(biome))
     }
+    /// Populate the state-immutable neighbour pathfinding flags from `facts` once at load so
+    /// `MobWorld::check_neighbours` avoids per-neighbour block-name comparisons.
+    pub fn populate_adjacent_flags(&mut self, facts: &BlockFacts) {
+        for (state, fact) in self.states.iter_mut().zip(&facts.states) {
+            state.flags = (state.flags & !ADJACENT_FLAGS_MASK) | adjacent_bits_for_fact(fact);
+        }
+    }
     /// Without the export, approximate path types from the gameplay facts.
     pub fn fallback(facts: &BlockFacts) -> Self {
-        let states = facts
+        let states: Vec<StateData> = facts
             .states
             .iter()
             .map(|f| {
@@ -369,10 +405,12 @@ impl MobData {
                 }
             })
             .collect();
-        Self {
+        let mut data = Self {
             states,
             ..Self::default()
-        }
+        };
+        data.populate_adjacent_flags(facts);
+        data
     }
     pub fn state(&self, id: BlockStateId) -> StateData {
         self.states
@@ -595,6 +633,106 @@ mod tests {
         assert_eq!(
             load_membership(&json!({"states": [], "placements": {}})),
             Some(HashSet::new())
+        );
+    }
+
+    #[test]
+    fn load_clears_reserved_adjacent_bits_and_populate_replaces_them() {
+        use crate::blocks::{RenderShape, StateFacts};
+
+        let make_fact = |name: &str, emission: u8, fluid: Fluid| -> StateFacts {
+            let sound = mod_api::SoundEventKey::parse("").unwrap();
+            StateFacts {
+                name: Arc::from(name),
+                emission,
+                dynamic_light: false,
+                dampening: 0,
+                skylight_down: true,
+                shape_occlusion: false,
+                can_occlude: false,
+                solid_render: false,
+                hardness: 1.0,
+                requires_tool: false,
+                replaceable: false,
+                random_ticks: false,
+                block_entity: false,
+                render_shape: RenderShape::Model,
+                spawn_terrain_particles: true,
+                destroy_overlay: true,
+                full_collision: false,
+                friction: 0.6,
+                explosion_resistance: 1.0,
+                item: Arc::from(name),
+                pick_item: Arc::from(name),
+                sounds: mod_api::BlockSoundType {
+                    identity: mod_api::BlockSoundTypeIdentity::Other,
+                    volume: 1.0,
+                    pitch: 1.0,
+                    break_sound: sound.clone(),
+                    step: sound.clone(),
+                    place: sound.clone(),
+                    hit: sound.clone(),
+                    fall: sound,
+                },
+                fluid,
+                fluid_level: 0,
+                fluid_falling: false,
+                waterlogged: false,
+                random_offset: false,
+                offset_limits: None,
+                outline_offset: false,
+                legacy_solid: false,
+                sturdy_full: 0,
+                classes: Arc::from([]),
+                outline: Arc::from([]),
+                outline_edges: Arc::from([]),
+                map_color: 0,
+            }
+        };
+
+        let folder = tempfile::tempdir().unwrap();
+        let root = ResourceRoot::directory(folder.path().to_path_buf());
+        let poisoned = WATER | ADJACENT_FLAGS_MASK;
+        std::fs::write(
+            folder.path().join("mob-data.json"),
+            format!(
+                r#"{{"states": [["OPEN", {poisoned}, 0.0], ["OPEN", {poisoned}, 0.0], ["OPEN", {poisoned}, 0.0], ["OPEN", {poisoned}, 0.0]], "placements": {{}}}}"#
+            ),
+        )
+        .unwrap();
+
+        let mut mobs = MobData::load(&root, 4).unwrap();
+        for id in 0..4 {
+            assert_eq!(mobs.state(BlockStateId(id)).flags, WATER);
+        }
+
+        let facts = BlockFacts {
+            states: vec![
+                make_fact("minecraft:stone", 0, Fluid::None),
+                make_fact("minecraft:sweet_berry_bush", 0, Fluid::None),
+                make_fact("minecraft:campfire", 15, Fluid::None),
+                make_fact("example:oil", 0, Fluid::Modded),
+            ],
+            air: BlockStateId(0),
+            woods: Default::default(),
+            sign_texts: Default::default(),
+        };
+        // Even if stale reserved bits exist in memory, populate_adjacent_flags replaces them.
+        mobs.states[0].flags |= ADJACENT_BERRY_BUSH | ADJACENT_BURNING | ADJACENT_MODDED_FLUID;
+        mobs.populate_adjacent_flags(&facts);
+
+        assert_eq!(mobs.state(BlockStateId(0)).flags, WATER | ADJACENT_KNOWN);
+        assert_eq!(
+            mobs.state(BlockStateId(1)).flags,
+            WATER | ADJACENT_KNOWN | ADJACENT_BERRY_BUSH
+        );
+        assert_eq!(
+            mobs.state(BlockStateId(2)).flags,
+            WATER | ADJACENT_KNOWN | ADJACENT_BURNING
+        );
+        assert_eq!(
+            mobs.state(BlockStateId(3)).flags,
+            WATER | ADJACENT_KNOWN | ADJACENT_MODDED_FLUID
         );
     }
 }

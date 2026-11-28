@@ -369,7 +369,7 @@ pub(crate) fn terminal_egg(action: Action, abort: bool) {
         }
         assert_eq!(observed.lands.load(Ordering::Relaxed), 0);
         assert_eq!(observed.deaths.load(Ordering::Relaxed), 0);
-        assert!(game.server.lan_entity_events.is_empty());
+        assert!(game.server.lan_queues.entity_events.is_empty());
         assert!(game.server.pending_sounds.is_empty());
         game.stop_audio_capture();
         assert_eq!(game.world.random.state(), random);
@@ -704,10 +704,10 @@ fn a_subscriber_enabled_by_a_section_callback_hears_the_flights_after_it() {
             game.set_allow_commands(true);
             assert!(game.run_command("forceload add 0 0"));
             assert!(game.run_command("forceload add 16 0"));
-            game.player = Some(
-                sunrise_client::motion::PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 8.5))
-                    .unwrap(),
-            );
+            game.player = Some(sunrise_client::motion::PlayerMotion::new(
+                game.motion,
+                Vec3::new(0.5, 64.0, 8.5),
+            ));
             crate::game::native_entity_refs::tests::bind_local_player(game, 7, 7);
             game.server.next_entity = 100;
             assert!(mod_api::__private::set_mod_enabled(

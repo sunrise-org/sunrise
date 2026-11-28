@@ -60,13 +60,10 @@ pub(crate) mod tests {
             // Aimed over a vanilla cart (y 70.7) but into the answered box: the crosshair
             // picks the cart.
             game.side.title.0 = None;
-            game.player = Some(
-                sunrise_sim::motion::PlayerMotion::new(
-                    game.motion,
-                    sunrise_core::geometry::Vec3::new(5.5, 69.5, 8.5),
-                )
-                .unwrap(),
-            );
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                sunrise_core::geometry::Vec3::new(5.5, 69.5, 8.5),
+            ));
             (game.yaw, game.pitch, game.entity_reach) = (-90.0, 0.0, 3.0);
             game.refresh_client_pick(1.0);
             assert!(matches!(

@@ -28,7 +28,7 @@ fn a_loaded_client_falls_where_no_chunk_has_come() {
         with_client_game(|game| {
             let _server = logged_client(game);
             game.client.remote.as_mut().unwrap().loaded_sent = true;
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(1.5, 64.0, 1.5)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(1.5, 64.0, 1.5)));
             game.tick_remote().unwrap();
             let player = game.player.as_ref().unwrap();
             assert_eq!(player.position.y, 64.0);

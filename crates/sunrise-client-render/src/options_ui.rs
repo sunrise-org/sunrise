@@ -151,6 +151,9 @@ pub(crate) const ACCESSIBILITY_OPTIONS: &[Opt] = &[
     Opt::HighContrastBlockOutlines,
 ];
 
+#[cfg(test)]
+pub(crate) use pages::TEST_PAGES;
+
 /// The pages crates registered (`sunrise_hooks::pages`), as `Page::Added` indexes them.
 pub(crate) fn registered_pages() -> &'static [&'static dyn sunrise_hooks::pages::Page] {
     pages::registered()
@@ -1558,15 +1561,11 @@ pub enum Page {
     ControllerRadialPick,
     /// Sunrise Settings at its Gameplay page (the extras, `extras_ui`).
     Extras,
-    /// PvP & HUD (`pvp`): the extras a PvP player sets, on their own page.
-    Pvp,
     /// CreditsAndAttributionScreen.
     Credits,
     /// Sunrise Settings (`sunrise_ui`): one screen of every page Sunrise adds, as a mod's
     /// settings screen hangs off vanilla's Options.
     Sunrise,
-    /// Replay Studio: saved recordings browser and 3D video editor launcher.
-    Studio,
     /// AI Agent: agent control on or off, whether an agent is connected, the connection details.
     Agent,
     /// SkinCustomizationScreen: the skin layers and Main Hand.
@@ -1587,10 +1586,6 @@ pub(crate) enum Act {
     Key(&'static str),
     ResetKey(&'static str),
     ResetKeys,
-    /// PvP & HUD's PvP preset (`pvp::apply_preset`).
-    PvpPreset,
-    /// PvP & HUD's Edit HUD button.
-    HudEditor,
     /// A native mod's key (mod, key) waits for a key; a button of its page.
     /// A key a native mod registered (mod, mapping) waits for a key, or is reset.
     ModKey(usize, usize),
@@ -1702,9 +1697,6 @@ pub enum Event {
     },
     /// An accepted button press or the release of a slider.
     ButtonClick,
-    /// Sunrise's own: download the Modrinth hit at this index of the pack
-    /// screen's browser. The game owns the packs folder, not this screen.
-    DownloadPack(usize),
     /// Close the options screens (back to the pause menu or title).
     Close,
     /// Settings changed: apply and save them.
@@ -1755,8 +1747,6 @@ pub enum Event {
     NativeSetting(usize, usize),
     /// Roll the credits (`CreditsAndAttributionScreen.openCreditsScreen`).
     Credits,
-    /// PvP & HUD's Edit HUD: open the HUD editor over the game.
-    HudEditor,
     /// Copy how an agent connects (the AI Agent page).
     CopyAgentDetails,
     /// The AI Agent page's recording button: start or stop.
@@ -1771,10 +1761,6 @@ pub enum Event {
     ListMusicTracks,
     /// A Music page row: play this track of this event now.
     PlayMusicTrack(String, String),
-    /// Open the recordings folder in the system file browser.
-    OpenStudioFolder,
-    /// Start playback from the selected Studio recording.
-    OpenStudioReplay(std::path::PathBuf),
 }
 /// A row of the Music page: the track, and the pool it is played from.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -1830,8 +1816,6 @@ pub struct OptionsUi {
     pub(crate) settings_search: ui::EditBox,
     /// The Mods screen (`Page::Mods`), made when the page opens.
     pub mods_screen: Option<crate::mods_screen::ModsScreen>,
-    /// Sunrise's `packBrowser` extra: the pack screen's Add button.
-    pub pack_browser: bool,
     /// Packs: the packs found and the selection the screen opens with.
     pub pack_infos: Vec<crate::pack_screen::PackInfo>,
     pub pack_selection: Vec<String>,
@@ -1880,7 +1864,6 @@ pub struct OptionsUi {
     pub calibration: Option<crate::hdr_calibration::Calibration>,
     /// The window as calibration found it before making it fullscreen (the game keeps it).
     pub calibration_window: Option<crate::hdr_calibration::WindowState>,
-    pub studio: crate::studio_ui::StudioUi,
     /// The AI Agent page's status lines (set by the game while it shows).
     pub agent_status: Vec<String>,
     /// A repro recording is running: the AI Agent page's button says stop.
@@ -1904,9 +1887,6 @@ pub struct OptionsUi {
     /// The list's rows as last laid out: each row's top and bottom (GUI
     /// pixels), for the narration's row under the mouse.
     row_bands: Vec<[f32; 2]>,
-    /// The PvP & HUD items that take a whole row (`wide_extras`), measured
-    /// when the page is drawn.
-    wide_extras: Vec<crate::extras::Item>,
     /// The page layout's revision: every change to an input the layout reads
     /// (the page, the scroll, the search text, a setting's shown value) bumps
     /// it, so the layout is made again once and not on every draw or click.
@@ -1947,7 +1927,6 @@ impl Default for OptionsUi {
             language_search: search,
             settings_search,
             mods_screen: None,
-            pack_browser: false,
             pack_infos: Vec::new(),
             pack_selection: Vec::new(),
             pack_screen: None,
@@ -1971,7 +1950,6 @@ impl Default for OptionsUi {
             pack_configs: Default::default(),
             calibration: None,
             calibration_window: None,
-            studio: Default::default(),
             agent_status: Vec::new(),
             agent_recording: false,
             music_groups: Vec::new(),
@@ -1982,7 +1960,6 @@ impl Default for OptionsUi {
             size: (427.0, 240.0),
             framebuffer: [1280, 720],
             row_bands: Vec::new(),
-            wide_extras: Vec::new(),
             rev: 0,
             layout_cache: None,
             #[cfg(test)]
@@ -2019,37 +1996,6 @@ fn option_widget(s: &Settings, opt: Opt, x: f32, y: f32, w: f32) -> Widget {
 }
 /// The least GUI size a shell screen lays its keys out for, before it has been drawn at its own.
 const MIN_KEY_GUI: (f32, f32) = (480.0, 240.0);
-/// The PvP & HUD page's rows: its items under their headers.
-fn pvp_rows() -> Vec<Result<crate::extras::Item, &'static str>> {
-    crate::pvp::rows()
-        .into_iter()
-        .map(|r| r.map(crate::extras::Item::Pvp))
-        .collect()
-}
-/// The items of PvP & HUD's rows whose label, with any of their first values, is wider than a
-/// half-width button holds (`width` measures text with the screen's font): those take the
-/// whole row, so no label slides past its edges, in any language.
-fn wide_extras(s: &Settings, width: impl Fn(&str) -> f32) -> Vec<crate::extras::Item> {
-    // A button's label keeps 2 px off each edge (`AbstractButton.renderString`'s margin),
-    // past which it slides back and forth.
-    let room = 150.0 - 4.0;
-    pvp_rows()
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|&item| {
-            let mut e = s.extras.clone();
-            (0..4).any(|_| {
-                let label = Text::option_name_value(
-                    Text::literal(item.caption_text()),
-                    Text::literal(item.value(&e)),
-                )
-                .plain();
-                item.cycle(&mut e, false);
-                width(&label) > room
-            })
-        })
-        .collect()
-}
 /// Rows of an OptionsList: (big?, options) or a header.
 enum Row {
     Big(Opt),
@@ -2087,8 +2033,6 @@ fn tooltip_text(s: &Settings, wd: &Widget) -> Option<Text> {
         Act::Cycle(opt) => Some(opt.tooltip_key(s)),
         Act::Push(Page::Language) => Some("options.language.tooltip".into()),
         Act::Push(Page::Accessibility) => Some("options.accessibility.tooltip".into()),
-        Act::PvpPreset => Some("sunrise.pvp.preset.tooltip".into()),
-        Act::HudEditor => Some("sunrise.pvp.editor.tooltip".into()),
         // A toggle, choice or colour shows its tooltip as a range's slider does.
         Act::NativeSetting(i, j) => s
             .mods
@@ -2292,7 +2236,7 @@ impl OptionsUi {
             shell.blur_search();
         }
     }
-    /// A switch of `sunrise-extras.txt` as the Gameplay page draws it: "Caption: On".
+    /// A switch from `sunrise-extras.txt` on the AI Agent page: "Caption: On".
     fn extra_button(&self, s: &Settings, item: crate::extras::Item) -> Widget {
         let label = Text::option_name_value(
             Text::literal(item.caption_text()),
@@ -2466,9 +2410,6 @@ impl OptionsUi {
         if let Some(at) = Self::controller_page(page) {
             self.controller.show(at);
         }
-        if page == Page::Studio {
-            self.studio.refresh();
-        }
     }
     /// A controller's or the keyboard's focus landed on `rect`: a row of a shell screen's list
     /// that is partly hidden scrolls all into view. How far it moved down, when it moved.
@@ -2551,7 +2492,6 @@ impl OptionsUi {
             Page::ControllerRadial => "sunrise.pages.controller_radial",
             Page::ControllerRadialName => "sunrise.radial.name_title",
             Page::ControllerRadialPick => "sunrise.radial.pick_title",
-            Page::Pvp => "sunrise.pages.pvp",
             Page::Credits => "credits_and_attribution.screen.title",
             // `sunrise-ctl options` names some of its pages by what they were before.
             Page::Sunrise
@@ -2560,7 +2500,6 @@ impl OptionsUi {
             | Page::GraphicsHdr
             | Page::Extras
             | Page::ShaderPacks => "sunrise.pages.settings",
-            Page::Studio => "sunrise.pages.studio",
             Page::Agent => "sunrise.pages.agent",
             Page::Music => "sunrise.pages.music",
         }
@@ -2660,67 +2599,6 @@ impl OptionsUi {
 
     fn list_rows(&self, s: &Settings) -> Vec<Row> {
         match self.page() {
-            Page::Pvp => {
-                // Each section's switches two to a row, as vanilla's
-                // OptionsList.addSmall lays out an options screen; one whose label would run
-                // past half a row in this language (`wide_extras`) gets the whole row.
-                let extra = |item: crate::extras::Item, width: f32| {
-                    let value = Text::option_name_value(
-                        Text::literal(item.caption_text()),
-                        Text::literal(item.value(&s.extras)),
-                    )
-                    .plain();
-                    let label = if item.key_name().is_some() && self.selected_key == item.key_name()
-                    {
-                        Text::literal(format!("> {value} <")).with_color(text::YELLOW)
-                    } else {
-                        Text::literal(value)
-                    };
-                    let widget = button(0.0, 0.0, width, label, Act::Extra(item));
-                    // A setting of a switch that is off does nothing: inactive,
-                    // as vanilla greys out an option that can't apply.
-                    if item
-                        .parent()
-                        .is_some_and(|parent| parent.switch(&s.extras) == Some(false))
-                    {
-                        inactive(widget)
-                    } else {
-                        widget
-                    }
-                };
-                // PvP & HUD opens with its preset (Sunrise Settings has the way there).
-                let preset = button(0.0, 0.0, 150.0, tr("sunrise.pvp.preset"), Act::PvpPreset);
-                // The editor moves what the game shows: only from a world.
-                let edit = button(0.0, 0.0, 150.0, tr("sunrise.pvp.editor"), Act::HudEditor);
-                let edit = if self.in_world { edit } else { inactive(edit) };
-                let mut rows = vec![Row::Buttons(preset, Some(edit))];
-                let mut section = Vec::new();
-                let flush = |rows: &mut Vec<Row>, section: &mut Vec<crate::extras::Item>| {
-                    let mut half = None;
-                    for item in section.drain(..) {
-                        if self.wide_extras.contains(&item) {
-                            rows.extend(half.take().map(|h| Row::Buttons(extra(h, 150.0), None)));
-                            rows.push(Row::Buttons(extra(item, 310.0), None));
-                        } else if let Some(h) = half.take() {
-                            rows.push(Row::Buttons(extra(h, 150.0), Some(extra(item, 150.0))));
-                        } else {
-                            half = Some(item);
-                        }
-                    }
-                    rows.extend(half.map(|h| Row::Buttons(extra(h, 150.0), None)));
-                };
-                for row in pvp_rows() {
-                    match row {
-                        Err(header) => {
-                            flush(&mut rows, &mut section);
-                            rows.push(Row::Header(header));
-                        }
-                        Ok(item) => section.push(item),
-                    }
-                }
-                flush(&mut rows, &mut section);
-                rows
-            }
             Page::Agent => {
                 // No AI first: it hides every AI feature, so with it on it is all the page has,
                 // and turns them back on from here.
@@ -3108,9 +2986,8 @@ impl OptionsUi {
         if self.resource_error.is_some() {
             return (false, Vec::new());
         }
-        match self.page() {
-            Page::Studio | Page::ControllerRadialName => return (false, Vec::new()),
-            _ => {}
+        if self.page() == Page::ControllerRadialName {
+            return (false, Vec::new());
         }
         if self.page() == Page::HdrCalibration
             && let Some(calibration) = &mut self.calibration
@@ -3190,27 +3067,6 @@ impl OptionsUi {
                 return (vec![Event::ButtonClick], true);
             }
             return (Vec::new(), false);
-        }
-        if self.page() == Page::Studio {
-            if right {
-                return (Vec::new(), false);
-            }
-            use crate::studio_ui::StudioAction;
-            let events = match self.studio.click((x, y), size) {
-                StudioAction::None => Vec::new(),
-                StudioAction::Refresh => vec![Event::ButtonClick],
-                StudioAction::OpenReplay(path) => {
-                    vec![Event::ButtonClick, Event::OpenStudioReplay(path)]
-                }
-                StudioAction::OpenFolder => vec![Event::ButtonClick, Event::OpenStudioFolder],
-                StudioAction::Back => {
-                    let mut events = vec![Event::ButtonClick];
-                    events.extend(self.back(s));
-                    events
-                }
-            };
-            let handled = !events.is_empty();
-            return (events, handled);
         }
         if self.page() == Page::HdrCalibration
             && let Some(c) = &mut self.calibration
@@ -3310,9 +3166,6 @@ impl OptionsUi {
                     None => Event::OpenPackFolder,
                 }),
                 crate::pack_screen::Action::Done => events.extend(self.back(s)),
-                crate::pack_screen::Action::BrowsePick(i) => {
-                    events.push(Event::DownloadPack(i));
-                }
                 crate::pack_screen::Action::Options(id) => self.open_pack_options(&id),
                 crate::pack_screen::Action::None => {}
             }
@@ -3412,7 +3265,7 @@ impl OptionsUi {
                             if let Some(name) = item.key_name() {
                                 self.selected_key = Some(name);
                             } else {
-                                item.cycle(&mut s.extras, self.shift);
+                                item.cycle(&mut s.extras);
                                 events.push(Event::Changed);
                             }
                         }
@@ -3467,11 +3320,6 @@ impl OptionsUi {
                                 events.push(Event::NativeSetting(*i, *j));
                             }
                         }
-                        Act::PvpPreset => {
-                            crate::pvp::apply_preset(s);
-                            events.push(Event::Changed);
-                        }
-                        Act::HudEditor => events.push(Event::HudEditor),
                         Act::AccessibilityHelp => events.push(Event::AccessibilityHelp),
                         Act::Credits => events.push(Event::Credits),
                         Act::CopyAgentDetails => events.push(Event::CopyAgentDetails),
@@ -3650,10 +3498,6 @@ impl OptionsUi {
             let (handled, outputs) = shell.wheel(s, size, cursor, amount);
             return (handled, self.shell_events(s, outputs));
         }
-        if self.page() == Page::Studio {
-            self.studio.wheel(amount);
-            return (true, Vec::new());
-        }
         let plain = self.resource_error.is_none()
             && !(self.pack_screen.is_some() && self.stack.last() == Some(&Page::Packs))
             && self.stack.last() != Some(&Page::Mods);
@@ -3727,7 +3571,7 @@ impl OptionsUi {
                 (true, self.cycle_option(s, opt, amount > 0.0, framebuffer))
             }
             Some(HoveredControl::Extra(item)) if amount != 0.0 => {
-                item.cycle(&mut s.extras, amount > 0.0);
+                item.cycle(&mut s.extras);
                 (true, vec![Event::Changed])
             }
             Some(_) => (false, Vec::new()),
@@ -3748,10 +3592,6 @@ impl OptionsUi {
         }
         if let Some(shell) = self.shell_mut() {
             shell.scroll(s, size, amount);
-            return;
-        }
-        if self.page() == Page::Studio {
-            self.studio.wheel(amount);
             return;
         }
         if self.page() == Page::Mods {
@@ -3833,7 +3673,6 @@ impl OptionsUi {
                     self.pack_infos.clone(),
                     &self.pack_selection,
                 );
-                screen.browsing_allowed = self.pack_browser;
                 screen.changed = std::mem::take(&mut self.pack_reselected);
                 self.pack_screen = Some(screen);
             }
@@ -4512,7 +4351,7 @@ impl OptionsUi {
                             if let Some(name) = item.key_name() {
                                 self.selected_key = Some(name);
                             } else {
-                                item.cycle(&mut s.extras, shift);
+                                item.cycle(&mut s.extras);
                                 events.push(Event::Changed);
                             }
                         }
@@ -4567,11 +4406,6 @@ impl OptionsUi {
                                 events.push(Event::NativeSetting(i, j));
                             }
                         }
-                        Act::PvpPreset => {
-                            crate::pvp::apply_preset(s);
-                            events.push(Event::Changed);
-                        }
-                        Act::HudEditor => events.push(Event::HudEditor),
                         Act::AccessibilityHelp => events.push(Event::AccessibilityHelp),
                         Act::Credits => events.push(Event::Credits),
                         Act::CopyAgentDetails => events.push(Event::CopyAgentDetails),
@@ -5335,7 +5169,7 @@ mod tests {
         );
     }
 
-    /// The Gameplay page joins caption and value with the language's `options.generic_value`
+    /// The AI Agent page joins caption and value with the language's `options.generic_value`
     /// (26.3's templates), not an English ": " (#6072).
     #[test]
     fn extras_captions_use_the_languages_separator() {
@@ -5429,13 +5263,7 @@ mod tests {
         // Every page's name and the rows that open Sunrise's other pages are there, in the
         // table's words, not as their keys.
         let (opens, _) = lang::scoped(de(), || {
-            let keys = [
-                "sunrise.settings.tab.tools",
-                "sunrise.settings.tab.extras",
-                "sunrise.pages.open.studio",
-                "sunrise.pages.open.agent",
-                "sunrise.pages.open.pvp",
-            ];
+            let keys = ["sunrise.settings.tab.tools", "sunrise.pages.open.agent"];
             keys.map(lang::get)
         });
         for text in &opens {
@@ -5991,7 +5819,6 @@ mod tests {
             Page::PackOptions,
             Page::Mods,
             Page::Packs,
-            Page::Studio,
         ] {
             let mut ui = OptionsUi::default();
             ui.show(page);
@@ -6365,7 +6192,7 @@ mod tests {
         let atlas = atlas();
         let mut s = Settings::default();
         let mut ui = OptionsUi::default();
-        ui.show(Page::Pvp);
+        ui.show(Page::Agent);
         let (widgets, _, _, _) = ui.layout(&s, 480.0, 480.0);
         let extra = widgets
             .iter()
@@ -7015,8 +6842,7 @@ mod tests {
         assert_eq!(ui.page(), Page::PadBinds);
     }
 
-    /// Every way a pad or a wheel scrolls a page on the shell moves the same list: Replay Studio's
-    /// took the wheel and missed `scroll_at`, so a stick couldn't scroll it.
+    /// The wheel and stick scroll the same settings list.
     #[test]
     fn the_wheel_and_the_stick_scroll_a_page_on_the_shell_alike() {
         let mut s = Settings::default();
@@ -7553,12 +7379,10 @@ mod tests {
         );
         assert_eq!(s.extras.shader_pack_key, "key.keyboard.k");
         // Reset All puts every Sunrise key back too.
-        s.extras.pvp.editor_key = "key.keyboard.h".into();
         s.extras.sort_key = "key.keyboard.y".into();
         for (name, _) in crate::extras::KEYS {
             assert!(s.extras.reset_key(name));
         }
-        assert_eq!(s.extras.pvp.editor_key, "key.keyboard.unknown");
         assert_eq!(s.extras.sort_key, "key.keyboard.unknown");
         assert!(!s.extras.reset_key("key.attack"));
     }
@@ -7905,47 +7729,6 @@ mod tests {
         assert_eq!(s.language, "de_de");
     }
 
-    /// An Extras or PvP & HUD label wider than half a row takes the whole row, so every label
-    /// fits its button: "Keep channels for UI sounds: Off" did not.
-    #[test]
-    fn pvp_labels_fit_their_buttons() {
-        // Vanilla's font: 6 px a glyph, a few narrower ones.
-        let width = |t: &str| {
-            t.chars()
-                .map(|c| match c {
-                    'i' | '\'' | ':' | '.' | ',' | '!' => 2.0,
-                    'l' => 3.0,
-                    ' ' | 't' | 'I' => 4.0,
-                    'f' | 'k' => 5.0,
-                    _ => 6.0,
-                })
-                .sum::<f32>()
-        };
-        let s = Settings::default();
-        let mut ui = OptionsUi::default();
-        {
-            ui.stack = vec![Page::Main, Page::Pvp];
-            ui.wide_extras = wide_extras(&s, width);
-            let rows = ui.list_rows(&s);
-            let buttons: Vec<&Widget> = rows
-                .iter()
-                .flat_map(|r| match r {
-                    Row::Buttons(a, b) => std::iter::once(a).chain(b.as_ref()).collect(),
-                    _ => Vec::new(),
-                })
-                .collect();
-            for b in &buttons {
-                let WKind::Button { label, .. } = &b.kind else {
-                    continue;
-                };
-                let label = label.plain();
-                assert!(width(&label) <= b.w - 4.0, "{label} on {}", b.w);
-            }
-            // Short ones keep vanilla's two to a row.
-            assert!(buttons.iter().any(|b| b.w == 150.0));
-        }
-    }
-
     /// Every setting a player reaches, from the Options screen through every button that opens
     /// a page, is in one place, and every page has one way in. Vanilla's own repeats stay as
     /// vanilla has them; Video Settings is vanilla's own screen, and Sunrise Settings' graphics
@@ -8050,7 +7833,6 @@ mod tests {
                         Act::Cycle(Opt::GraphicsBackend) => "graphics-api".to_owned(),
                         Act::Cycle(opt) => format!("{opt:?}"),
                         Act::Extra(e) => format!("extra:{e:?}"),
-                        Act::PvpPreset => "pvp-preset".to_owned(),
                         Act::Push(to) => {
                             ways_in
                                 .entry(format!("{to:?}"))
@@ -8166,7 +7948,7 @@ mod tests {
         // Video Settings... is vanilla's VideoSettingsScreen; the graphics settings are Sunrise
         // Settings'.
         assert!(main.contains(&Page::Video) && !main.contains(&Page::Graphics));
-        // Sunrise Settings' rows that open Sunrise's other pages: Tools', then Extras'.
+        // Without registered pages, only Tools opens another Sunrise page.
         let opens = |s: &Settings| -> Vec<(Tab, Page)> {
             use crate::settings_shell::Screen;
             let sheets = crate::sunrise_ui::SunriseScreen::default().sheets(s);
@@ -8181,14 +7963,7 @@ mod tests {
             });
             rows.collect()
         };
-        assert_eq!(
-            opens(&s),
-            [
-                (Tab::Tools, Page::Studio),
-                (Tab::Tools, Page::Agent),
-                (Tab::Extras, Page::Pvp)
-            ]
-        );
+        assert_eq!(opens(&s), [(Tab::Tools, Page::Agent)]);
         // No AI keeps the way to the AI Agent page, where it is turned off again.
         let mut no_ai = Settings::default();
         no_ai.extras.no_ai = true;

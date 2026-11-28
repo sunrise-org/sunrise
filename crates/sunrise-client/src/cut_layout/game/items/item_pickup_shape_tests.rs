@@ -91,8 +91,7 @@ fn indexed_pickup_keeps_bound_survivors_and_processes_shifted_tail() {
                 game.server.world_root = scratch.clone();
                 game.enter_level(dimension).unwrap();
                 loaded += 1;
-                game.player =
-                    Some(PlayerMotion::new(game.motion, Vec3::new(1.5, 64.0, 1.5)).unwrap());
+                game.player = Some(PlayerMotion::new(game.motion, Vec3::new(1.5, 64.0, 1.5)));
                 game.inventory
                     .fill(Some(ItemStack::new("minecraft:stone", 64)));
                 game.offhand = Some(ItemStack::new("minecraft:stone", 64));
@@ -249,7 +248,7 @@ fn indexed_pickup_keeps_bound_survivors_and_processes_shifted_tail() {
                 for mode in 0..3 {
                     game.player = match mode {
                         0 => None,
-                        _ => Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap()),
+                        _ => Some(PlayerMotion::new(game.motion, Vec3::ZERO)),
                     };
                     if mode == 1 {
                         game.player

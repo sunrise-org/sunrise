@@ -207,8 +207,7 @@ fn scoped_host_resolves_other_real_players_from_the_game() {
                 let mut body = sunrise_sim::motion::PlayerMotion::new(
                     game.motion,
                     Vec3::new(f64::from(id), 64.0, 5.0),
-                )
-                .unwrap();
+                );
                 body.entity_id = id as i32;
                 body.set_modifier(
                     "minecraft:max_health",
@@ -527,7 +526,7 @@ fn a_players_last_hurt_mob_resolves_the_mob_lent_to_its_tick() {
         game.world
             .chunks
             .insert((0, 0), std::sync::Arc::new(Chunk::empty(0, 0)));
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 80.0, 0.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 80.0, 0.5)));
         bind_local_player(game, 20, 123);
         let kind = game
             .res

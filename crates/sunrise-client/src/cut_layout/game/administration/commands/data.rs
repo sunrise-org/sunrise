@@ -507,10 +507,12 @@ pub(crate) mod arrow_reload_tests;
 #[cfg(test)]
 pub(crate) mod arrow_owner_tests {
     use sunrise_core::nbt::Tag;
+    use sunrise_core::prepared_test_support::SERVER_INPUTS;
     use sunrise_gameplay_common::game::chat_common::ChatCommonGameExt1;
     use sunrise_gameplay_common::game::commands_common::Target;
+    use sunrise_gameplay_common::game::test_fixtures::run_fresh_cases;
     use {
-        crate::game::load_resources, crate::settings::Settings,
+        crate::game::load_resources, crate::prepared_test_root, crate::settings::Settings,
         sunrise_gameplay_common::game::Options, sunrise_gameplay_common::game::Progress,
     };
 
@@ -616,6 +618,105 @@ pub(crate) mod arrow_owner_tests {
             }
         }
     }
+
+    /// `Projectile.addAdditionalSaveData` retains the EntityReference for every
+    /// subclass, not only an arrow: a fireball whose owner is not the reader and
+    /// whose raw compound no longer carries `Owner` still reads one back (#6768).
+    /// The loader installs process-wide tables, so the case runs in its own process.
+    #[test]
+    #[ignore = "daily"]
+    fn a_loaded_fireballs_getter_keeps_a_non_player_owner_without_raw() {
+        if run_fresh_cases(
+            concat!(
+                module_path!(),
+                "::a_loaded_fireballs_getter_keeps_a_non_player_owner_without_raw"
+            )
+            .split_once("::")
+            .unwrap()
+            .1,
+            "SUNRISE_ARROW_OWNER_FIREBALL_CHILD",
+            &["owner"],
+        ) {
+            return;
+        }
+        let root = prepared_test_root::prepared_root(&[SERVER_INPUTS]);
+        let settings = Settings::default();
+        let loaded = load_resources(
+            sunrise_assets::resource_source::ResourceRoot::directory(root.clone()),
+            Vec::new(),
+            None,
+            &root,
+            &settings,
+            std::time::Instant::now(),
+            false,
+            sunrise_gameplay_common::game::execution_role::ExecutionRole::IntegratedServer,
+            &Progress::new(),
+            &mut |_, _| unreachable!(),
+        )
+        .unwrap();
+        let mut options = Options::parse(std::iter::empty()).unwrap().unwrap();
+        options.resources = root.clone();
+        options.execution_role =
+            sunrise_gameplay_common::game::execution_role::ExecutionRole::IntegratedServer;
+        let mut game = sunrise_gameplay::game::ServerGame::new(
+            &loaded.resources,
+            loaded.pack,
+            options,
+            settings.sim_settings(),
+            None,
+            crate::game::profile_resolver,
+        )
+        .unwrap();
+        game.build_registries();
+        game.set_allow_commands(true);
+
+        let position = Tag::List(vec![
+            Tag::Double(8.5_f64.to_bits()),
+            Tag::Double(202.0_f64.to_bits()),
+            Tag::Double(4.5_f64.to_bits()),
+        ]);
+        let owner = [213, 91, 92, 93];
+        let uuid = [213, 20, 0, 1];
+        let tag = Tag::compound([
+            ("id", Tag::String("minecraft:fireball".into())),
+            ("UUID", Tag::IntArray(uuid.to_vec())),
+            ("Pos", position),
+            ("Owner", Tag::IntArray(owner.to_vec())),
+            ("ExplosionPower", Tag::Byte(3)),
+        ]);
+        game.load_fireball(tag, Some(uuid), None);
+        let p = game.creatures.projectiles.last().unwrap();
+        // Prove the loader retained the non-player reference.
+        assert_eq!(p.owner_uuid, Some(owner));
+        let id = p.id;
+        assert_eq!(game.persist.uuids.get(&id), Some(&uuid));
+        // Without the raw compound, only the retained reference can supply Owner.
+        game.persist.raw.remove(&id);
+
+        // Vanilla 26.3 prints a `data get` field with `NbtUtils.toPrettyComponent`:
+        // `<name> has the following entity data: [I; 213, 91, 92, 93]`. Before the
+        // fix the getter dropped the retained reference and the command failed.
+        game.server.chat_capture = Some(Vec::new());
+        assert!(game.run_command(&format!(
+            "data get entity {} Owner",
+            sunrise_core::uuid::uuid_text(uuid)
+        )));
+        let said = game.server.chat_capture.take().unwrap_or_default();
+        let feedback = said
+            .iter()
+            .map(sunrise_game_data::text::Text::plain)
+            .find(|text| text.contains(" has the following entity data: "))
+            .expect("the data get query reports the field");
+        let (_, data) = feedback
+            .split_once(" has the following entity data: ")
+            .unwrap();
+        assert_eq!(data, "[I; 213, 91, 92, 93]");
+
+        // The same getter the command read, without the query's text formatting.
+        let saved = game.command_target_nbt(Target::Projectile(id)).unwrap();
+        assert_eq!(saved.get("Owner"), Some(&Tag::IntArray(owner.to_vec())));
+        assert_eq!(saved.get("UUID"), Some(&Tag::IntArray(uuid.to_vec())));
+    }
 }
 
 #[cfg(test)]
@@ -638,7 +739,7 @@ pub(crate) mod bell_command_identity_tests {
             game.block_ticks
                 .add_empty_chunk(ChunkPos::new(0, 0))
                 .unwrap();
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)));
             game.creative = true;
             assert!(game.run_command("forceload add 0 0"));
             assert!(game.run_command("tick freeze"));

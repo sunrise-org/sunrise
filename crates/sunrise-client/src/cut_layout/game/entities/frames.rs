@@ -163,8 +163,7 @@ pub(crate) mod game_event_tests {
         // A player looking straight at the frame's centre from two blocks away
         // (eye height 1.62 above the feet).
         let feet = Vec3::new(0.5, 64.5 - 1.62, -1.0);
-        game.player =
-            Some(sunrise_sim::motion::PlayerMotion::new(game.motion, feet).expect("a player"));
+        game.player = Some(sunrise_sim::motion::PlayerMotion::new(game.motion, feet));
         game.yaw = 0.0;
         game.pitch = 0.0;
 

@@ -62,7 +62,7 @@ fn block_items_notify_after_setup_and_before_consumption() {
                 game.world.set(x, 63, z, stone).unwrap();
             }
         }
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(12.5, 64.0, 12.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(12.5, 64.0, 12.5)));
         bind_local_player(game, 20, 123);
         game.server.lan_acting_name = Some("Placer".into());
         game.server.lan_acting_permission = Some(0);

@@ -8,8 +8,7 @@ pub trait Hooks {
     /// are not heard, whether standalone or bundled: keep-alives, chunk batch
     /// starts and finishes, bundle delimiters, resource pack pushes and pops,
     /// cookies, server links, transfers, disconnects, the configuration switch,
-    /// `minecraft:brand` and far terrain tiles; neither is the configuration
-    /// phase.
+    /// `minecraft:brand` or configuration packets.
     /// Read-only: the game handles the packet as it would without the mod.
     /// Client-side, on any server, single player's own included. With no
     /// listener, the receive path checks one flag and builds no view.
@@ -53,7 +52,7 @@ Returning `Flow::Cancel` drops the packet unless a later `#[listener(receive_can
 listener sets `event.cancelled = false` and returns `Flow::Continue`. Play-phase pongs pass
 through this hook. Control replies (keep-alives, chunk batch acknowledgements, configuration
 pongs and cookies), configuration packets, the phase-dependent answers (resource pack status
-and a dialog's custom click action), and far terrain requests do not fire it. With no listener
+and a dialog's custom click action) do not fire it. With no listener
 the send path checks one flag and builds nothing.
 
 Both hooks give later listeners the original borrowed view. A panic logs and shows an error

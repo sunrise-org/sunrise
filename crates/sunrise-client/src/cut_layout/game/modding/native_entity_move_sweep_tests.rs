@@ -321,7 +321,7 @@ fn every_walk_family_of_the_entity_lists_fires_its_case() {
             let _ = game.tick_armor_stands();
             let _ = game.tick_projectiles();
             game.tick_tridents();
-            game.server.tickets.0.update(None);
+            game.server.chunk_ticking.tickets.update(None);
             // Existing residents whose spawn packets were already announced
             // (as the ordered tick's own test sets it): the round's TNT and
             // falling blocks go in the first pass.
@@ -439,13 +439,10 @@ fn the_off_walk_movers_fire_too() {
                 .as_ref()
                 .is_none_or(|p| p.position.y < 20.0 || p.position.y > 45.0)
             {
-                game.player = Some(
-                    PlayerMotion::new(
-                        game.motion,
-                        sunrise_core::geometry::Vec3::new(5.5, 30.0, 5.5),
-                    )
-                    .unwrap(),
-                );
+                game.player = Some(PlayerMotion::new(
+                    game.motion,
+                    sunrise_core::geometry::Vec3::new(5.5, 30.0, 5.5),
+                ));
             }
             game.player.as_mut().unwrap().velocity =
                 sunrise_core::geometry::Vec3::new(0.5, 0.0, 0.0);

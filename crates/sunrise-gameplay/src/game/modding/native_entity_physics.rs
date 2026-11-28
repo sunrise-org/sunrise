@@ -267,7 +267,7 @@ mod tests {
 
         with_resident_game(|game| {
             game.options.dedicated = Some(Vec::new());
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             crate::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
             let player = game.entity(20).unwrap();
             game.player.as_mut().unwrap().spectator = false;
@@ -375,7 +375,7 @@ mod tests {
                 chunk.lit = true;
                 game.world.chunks.insert((x, z), std::sync::Arc::new(chunk));
             }
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             crate::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
             game.server.others.0.push(OtherEntity {
                 size_answer: None,

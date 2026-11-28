@@ -2094,7 +2094,7 @@ pub(in crate::game) mod forced_respawn_tests {
         use sunrise_sim::motion::PlayerMotion;
 
         with_game(|game| {
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(5.5, 64.0, 5.5)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(5.5, 64.0, 5.5)));
             game.build_registries();
             game.set_allow_commands(true);
             game.world
@@ -2135,13 +2135,10 @@ mod persistent_component_tests {
     fn native_persistent_components_are_available_to_give() {
         sunrise_protocol::item::custom::install(1000, vec!["example:marker".into()]).unwrap();
         crate::game::native_entity_refs::tests::with_game(|game| {
-            game.player = Some(
-                sunrise_sim::motion::PlayerMotion::new(
-                    game.motion,
-                    sunrise_core::geometry::Vec3::ZERO,
-                )
-                .unwrap(),
-            );
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                sunrise_core::geometry::Vec3::ZERO,
+            ));
             game.build_registries();
             game.build_registries();
             game.ui.registries.permission = 4;

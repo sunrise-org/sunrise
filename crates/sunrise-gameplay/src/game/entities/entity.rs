@@ -1673,7 +1673,7 @@ macro_rules! hit_reads_of {
             .map(|epoch| sunrise_sim::health::HitReads {
                 epoch,
                 living_types: $game.common.res.living_type_keys(),
-                attributes: &$game.common.motion.attributes,
+                attributes: $game.common.motion.attributes(),
                 player_effects: Some(&$game.common.potions.effects),
                 player_equipment: acting_equipment!($game.common),
                 player_uuid: $game.server.lan_acting_uuid,
@@ -1773,7 +1773,7 @@ macro_rules! player_victim_causer {
                 .mobs
                 .get_mut(index)
                 .filter(|m| m.id as i32 == causing)
-                .and_then(sunrise_sim::health::HitLend::mob),
+                .and_then(|mob| sunrise_sim::health::HitLend::mob(mob)),
             None => parked.and_then(|conn| {
                 sunrise_sim::health::HitLend::parked_guest(
                     $game.server.lan.as_ref().map(|lan| &lan.hub),

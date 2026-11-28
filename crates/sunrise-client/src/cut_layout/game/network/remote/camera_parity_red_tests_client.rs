@@ -846,7 +846,7 @@ pub(in crate::game) fn run_camera_player_fov_modifier_and_death_isolation_26_3()
     };
     let speed_attr_id = |game: &sunrise_client_gameplay::game::ClientGame<'_>| {
         game.motion
-            .attributes
+            .attributes()
             .id("minecraft:movement_speed")
             .unwrap()
             .registry_id()
@@ -1956,7 +1956,7 @@ pub(in crate::game) fn run_review_followup_camera_parity_26_3() {
         // Finding 14: Max-health updates clamp at living tick, not on receipt.
         let max_health_attr = game
             .motion
-            .attributes
+            .attributes()
             .id("minecraft:max_health")
             .unwrap()
             .registry_id();
@@ -2206,13 +2206,10 @@ pub(in crate::game) fn setup_remote_overworld(
     remote.entity_id = player_id;
     remote.view_distance = 8;
     remote.level_load.finish();
-    game.player = Some(
-        PlayerMotion::new(
-            game.motion,
-            Vec3::new(player_pos[0], player_pos[1], player_pos[2]),
-        )
-        .unwrap(),
-    );
+    game.player = Some(PlayerMotion::new(
+        game.motion,
+        Vec3::new(player_pos[0], player_pos[1], player_pos[2]),
+    ));
     game.client.camera_type = CameraType::FirstPerson;
     game.client.settings.fov = 70.0;
     game.client.settings.render_distance = 8;

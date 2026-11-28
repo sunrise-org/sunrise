@@ -15,7 +15,7 @@ fn game<'a>(
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
 ) -> sunrise_gameplay::game::ServerGame<'a> {
     let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 200.0, 4.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 200.0, 4.5)));
     game.build_registries();
     game.set_allow_commands(true);
     for x in -1..=1 {
@@ -96,7 +96,8 @@ fn a_heart_spawn_posts_entity_place_and_the_poof() {
     );
     let poofs: Vec<_> = game
         .server
-        .lan_entity_events
+        .lan_queues
+        .entity_events
         .iter()
         .filter(|(mob, event)| *mob == id as i32 && *event == 60)
         // The packet carries only the entity id and event; clients resolve
@@ -114,7 +115,7 @@ fn a_heart_spawn_posts_entity_place_and_the_poof() {
         poofs,
         vec![(id as i32, 60, at)],
         "{:?}",
-        game.server.lan_entity_events
+        game.server.lan_queues.entity_events
     );
 }
 

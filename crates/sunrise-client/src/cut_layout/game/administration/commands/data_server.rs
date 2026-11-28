@@ -6,7 +6,9 @@ pub(crate) mod tests {
     use sunrise_core::geometry::Vec3;
     use sunrise_core::nbt::Compound;
     use sunrise_gameplay::game::commands::data::DataRef;
-    use sunrise_gameplay::game::native_entity_refs::tests::{fixture_resident_column, with_game};
+    use sunrise_gameplay::game::native_entity_refs::tests::{
+        bind_local_player, fixture_resident_column, run_fresh_cases, with_game,
+    };
     use sunrise_gameplay_common::game::commands_common::Target;
     use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _;
 
@@ -93,6 +95,232 @@ pub(crate) mod tests {
                 assert_eq!(game.persist.forced_meta.get(&12), Some(&[1 << 8, 0, 0, 0]));
                 game.spend_forced_meta();
             }
+        });
+    }
+
+    const DISPLAY: u32 = 12;
+    const PIG_UUID: [i32; 4] = [7, 8, 9, 10];
+    const AT: [f64; 3] = [0.5, 64.0, 0.5];
+
+    /// Each case boots `with_game` and installs process-wide hook tables, so it
+    /// runs in its own fresh child (dailies below run the parent, which spawns it).
+    fn at_tag() -> Tag {
+        Tag::List(AT.map(|v| Tag::Double(v.to_bits())).to_vec())
+    }
+
+    fn push_display(game: &mut sunrise_gameplay::game::ServerGame<'_>, id: u32) {
+        game.persist
+            .raw
+            .insert(id, Tag::compound([("Pos", at_tag())]));
+        game.persist.uuids.insert(id, [1, 2, 3, 4]);
+        game.server.others.0.push(
+            sunrise_gameplay_common::game::commands_common::OtherEntity {
+                size_answer: None,
+                attachment_lifetime: Default::default(),
+                display: None,
+                interaction: None,
+                knot_check: None,
+                eye: None,
+                join: Default::default(),
+                id,
+                kind: "minecraft:block_display".into(),
+                position: Vec3::new(AT[0], AT[1], AT[2]),
+                yaw: 0.0,
+                pitch: 0.0,
+            },
+        );
+    }
+
+    /// A resident pig seated on `vehicle`, as a mod's `ride_player` leaves one.
+    fn load_pig_on(game: &mut sunrise_gameplay::game::ServerGame<'_>, vehicle: u32) -> u32 {
+        game.load_mob(
+            Tag::compound([
+                ("id", Tag::String("minecraft:pig".into())),
+                ("UUID", Tag::IntArray(PIG_UUID.to_vec())),
+                ("Pos", at_tag()),
+                ("Health", Tag::Float(10.0_f32.to_bits())),
+                ("NoAI", Tag::Byte(1)),
+            ]),
+            None,
+        )
+        .unwrap();
+        let id = game.mobs.last().unwrap().id;
+        let pig = game.mobs.iter_mut().find(|m| m.id == id).unwrap();
+        pig.extra.mount = Some(vehicle);
+        pig.extra.vehicle_order = 0;
+        id
+    }
+
+    fn passengers(tag: &Tag) -> &[Tag] {
+        match tag.get("Passengers") {
+            Some(Tag::List(list)) => list,
+            _ => panic!("a vehicle must write its passengers: {tag:?}"),
+        }
+    }
+
+    /// `Entity.saveWithoutId` writes `Passengers` for any vehicle, not only a mob,
+    /// a boat or a cart: a display carrying a pig reads it back (#6772).
+    #[test]
+    #[ignore = "daily"]
+    fn a_display_vehicle_reads_its_mob_passenger() {
+        if run_fresh_cases(
+            "cut_layout::game::server_side::commands_server::data::tests::a_display_vehicle_reads_its_mob_passenger",
+            "SUNRISE_VEHICLE_PASSENGERS_DISPLAY_READ",
+            &["display"],
+        ) {
+            return;
+        }
+        with_game(|game| {
+            fixture_resident_column(&mut game.world, (0, 0));
+            push_display(game, DISPLAY);
+            load_pig_on(game, DISPLAY);
+            let tag = game.command_target_nbt(Target::Other(DISPLAY)).unwrap();
+            let passengers = passengers(&tag);
+            assert_eq!(passengers.len(), 1);
+            assert_eq!(
+                passengers[0].get("id"),
+                Some(&Tag::String("minecraft:pig".into()))
+            );
+            assert_eq!(
+                passengers[0].get("UUID"),
+                Some(&Tag::IntArray(PIG_UUID.to_vec()))
+            );
+        });
+    }
+
+    /// A `/data merge` reads the live tree first. `Entity.load` reads no
+    /// `Passengers`, so the merge must keep the saved key (here absent) instead
+    /// of storing a copy of the live rider that the next read would append to.
+    #[test]
+    #[ignore = "daily"]
+    fn merging_display_nbt_keeps_the_live_rider_unsaved() {
+        if run_fresh_cases(
+            "cut_layout::game::server_side::commands_server::data::tests::merging_display_nbt_keeps_the_live_rider_unsaved",
+            "SUNRISE_VEHICLE_PASSENGERS_DISPLAY_MERGE",
+            &["display_merge"],
+        ) {
+            return;
+        }
+        with_game(|game| {
+            fixture_resident_column(&mut game.world, (0, 0));
+            push_display(game, DISPLAY);
+            load_pig_on(game, DISPLAY);
+            let ctx = sunrise_command::Context {
+                root: 0,
+                nodes: vec![],
+                args: vec![sunrise_command::ParsedArg {
+                    name: "nbt".into(),
+                    value: sunrise_command::Arg::Str(r#"{CustomName:'{"text":"Renamed"}'}"#.into()),
+                    range: (0, 32),
+                }],
+                command: None,
+                executor: None,
+                range: (0, 32),
+                child: None,
+                literals: vec![],
+            };
+            assert_eq!(
+                game.cmd_data_in("data.merge", &ctx, DataRef::Entity(Target::Other(DISPLAY)))
+                    .unwrap(),
+                1
+            );
+            assert!(
+                game.persist.raw[&DISPLAY].get("Passengers").is_none(),
+                "a merge must not save the live riders: {:?}",
+                game.persist.raw[&DISPLAY]
+            );
+            let tag = game.command_target_nbt(Target::Other(DISPLAY)).unwrap();
+            let passengers = passengers(&tag);
+            assert_eq!(
+                passengers.len(),
+                1,
+                "the next read appended the rider again: {tag:?}"
+            );
+            assert_eq!(
+                passengers[0].get("UUID"),
+                Some(&Tag::IntArray(PIG_UUID.to_vec()))
+            );
+        });
+    }
+
+    /// A mob a mod seated on the player rides the player: the entity read writes
+    /// it, while the player file keeps no passenger list.
+    #[test]
+    #[ignore = "daily"]
+    fn a_player_nbt_read_contains_the_seated_mob() {
+        if run_fresh_cases(
+            "cut_layout::game::server_side::commands_server::data::tests::a_player_nbt_read_contains_the_seated_mob",
+            "SUNRISE_VEHICLE_PASSENGERS_PLAYER_READ",
+            &["player"],
+        ) {
+            return;
+        }
+        with_game(|game| {
+            fixture_resident_column(&mut game.world, (0, 0));
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                Vec3::new(AT[0], AT[1], AT[2]),
+            ));
+            bind_local_player(game, 77, 0x6772);
+            load_pig_on(game, 77);
+            let tag = game.command_target_nbt(Target::Player).unwrap();
+            let passengers = passengers(&tag);
+            assert_eq!(passengers.len(), 1);
+            assert_eq!(
+                passengers[0].get("UUID"),
+                Some(&Tag::IntArray(PIG_UUID.to_vec()))
+            );
+            assert!(
+                game.player_nbt().unwrap().get("Passengers").is_none(),
+                "the player file must keep no passenger list"
+            );
+        });
+    }
+
+    /// A lone traveller moves only its body: its riders stay behind as
+    /// `removeAfterChangingDimensions` leaves them, so the snapshot must not
+    /// carry a rider the destination would recreate.
+    #[test]
+    #[ignore = "daily"]
+    fn a_portal_lone_traveller_carries_no_rider() {
+        if run_fresh_cases(
+            "cut_layout::game::server_side::commands_server::data::tests::a_portal_lone_traveller_carries_no_rider",
+            "SUNRISE_VEHICLE_PASSENGERS_PORTAL",
+            &["portal"],
+        ) {
+            return;
+        }
+        with_game(|game| {
+            game.build_registries();
+            game.set_allow_commands(true);
+            game.options.dedicated = Some(Vec::new());
+            game.native_lifecycle.world_open_ready().unwrap();
+            game.world.chunks.insert(
+                (0, 0),
+                std::sync::Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)),
+            );
+            push_display(game, DISPLAY);
+            let pig = load_pig_on(game, DISPLAY);
+            let entry = sunrise_core::position::BlockPos::new(8, 70, 8);
+            let portal = game
+                .pack
+                .assets
+                .registry
+                .default_state("minecraft:nether_portal")
+                .unwrap();
+            game.world.set(entry.x, entry.y, entry.z, portal).unwrap();
+            game.send_through_portal(DISPLAY, entry);
+            assert_eq!(game.server.portals.arrivals.len(), 1);
+            let tag = &game.server.portals.arrivals[0].tag;
+            assert!(
+                tag.get("Passengers").is_none(),
+                "a lone traveller must not carry a copied rider: {tag:?}"
+            );
+            assert!(game.server.others.0.iter().all(|o| o.id != DISPLAY));
+            assert!(
+                game.mobs.iter().any(|m| m.id == pig),
+                "the rider stays in the level"
+            );
         });
     }
 }

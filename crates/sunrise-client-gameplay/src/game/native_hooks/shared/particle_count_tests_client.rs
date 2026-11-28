@@ -228,8 +228,7 @@ pub fn frame_scene(game: &mut crate::game::ClientGame<'_>) -> winit::event_loop:
         .world
         .chunks
         .insert((0, 0), std::sync::Arc::new(chunk));
-    let mut player =
-        sunrise_sim::motion::PlayerMotion::new(game.common.motion, Vec3::ZERO).unwrap();
+    let mut player = sunrise_sim::motion::PlayerMotion::new(game.common.motion, Vec3::ZERO);
     player.position = Vec3::new(0.5, 64.0, 0.5);
     game.common.previous_position = player.position;
     game.common.player = Some(player);

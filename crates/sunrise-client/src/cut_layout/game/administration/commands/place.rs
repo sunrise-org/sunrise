@@ -68,7 +68,7 @@ pub(crate) mod live_dungeon_spawner_tests {
                     .unwrap();
             }
         }
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)));
         game.creative = true;
         assert!(game.run_command("forceload add -16 -16 31 31"));
         assert!(game.run_command("tick freeze"));

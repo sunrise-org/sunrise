@@ -34,7 +34,6 @@ fn serve(game: &mut sunrise_gameplay::game::ServerGame<'_>) {
     let net = NetConfig {
         listen: false,
         announce: false,
-        lod_distance: 0,
         ..NetConfig::lan(0, String::new(), 2)
     };
     let config = HubConfig {

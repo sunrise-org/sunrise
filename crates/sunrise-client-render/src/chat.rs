@@ -213,9 +213,9 @@ impl ChatOptions {
 #[derive(Clone, Debug)]
 struct Message {
     added: u64,
-    /// Local hour and minute it came in (PvP & HUD's chat timestamps).
+    /// Local hour and minute it came in (chat timestamps).
     time: (u8, u8),
-    /// How many times in a row it came (PvP & HUD's compact chat), 1 for once.
+    /// How many times in a row it came (compact chat), 1 for once.
     repeats: u32,
     /// The lines it wrapped to the last time it was laid out (0 while hidden).
     wrapped: usize,
@@ -233,11 +233,11 @@ struct Line {
     added: u64,
     content: Text,
     tag: Option<std::sync::Arc<Tag>>,
-    /// The whole message's text, for PvP & HUD's copy on click.
+    /// The whole message's text, for copy on click.
     message: std::sync::Arc<str>,
 }
 
-/// PvP & HUD's chat options (`pvp::ChatQol`): each changes the lines, so a change rewraps them.
+/// chat options (`ChatQol`): each changes the lines, so a change rewraps them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ChatQol {
     /// Each message starts with the local time it came in.
@@ -358,9 +358,9 @@ pub struct Chat {
     /// too new to replace, with the tick from which they may be.
     deletions: Vec<(Box<Signature>, u64)>,
     qol: ChatQol,
-    /// PvP & HUD's chat search is on: the screen shows its prompt.
+    /// chat search is on: the screen shows its prompt.
     pub search_prompt: bool,
-    /// PvP & HUD's chat search: only messages holding this (lower case) show.
+    /// chat search: only messages holding this (lower case) show.
     search: Option<String>,
     /// A mod's chat history cap in place of `MAX_CHAT_HISTORY` ([`Chat::history_limit`]).
     history_limit: Option<usize>,
@@ -601,7 +601,7 @@ impl Chat {
             content.strip_legacy()
         }
     }
-    /// A message's lines before wrapping: [`Chat::displayed`], with PvP & HUD's time before it
+    /// A message's lines before wrapping: [`Chat::displayed`], with time before it
     /// and count after it, in grey.
     fn message_text(&self, message: &Message) -> Text {
         let content = message
@@ -666,7 +666,7 @@ impl Chat {
         }
     }
 
-    /// PvP & HUD's chat options; a change lays the lines out again.
+    /// chat options; a change lays the lines out again.
     pub fn set_qol(&mut self, atlas: &HudAtlas, qol: ChatQol) {
         if self.qol != qol {
             self.qol = qol;
@@ -675,7 +675,7 @@ impl Chat {
             self.rewrap(&atlas.font);
         }
     }
-    /// PvP & HUD's chat search: only the messages holding `query` (any case) show; `None` or
+    /// chat search: only the messages holding `query` (any case) show; `None` or
     /// an empty query shows them all again.
     pub fn set_search(&mut self, atlas: &HudAtlas, query: Option<&str>) {
         self.set_search_with(&atlas.font, query);
@@ -1092,7 +1092,7 @@ impl Chat {
         });
         self.prompt_above(font, height, prompt, 1)
     }
-    /// PvP & HUD's chat search: a yellow "Search chat:" line above the lines while the box holds
+    /// chat search: a yellow "Search chat:" line above the lines while the box holds
     /// the query.
     fn search_prompt(&self, font: &crate::font::Font, height: i32, row: i32) -> Vec<GuiDraw> {
         let label = Text::translate_with_fallback("sunrise.chat.search", "Search chat:", &[]);
@@ -1164,8 +1164,7 @@ impl Chat {
     ) -> Option<ClickEvent> {
         self.style_at(font, height, x, y)?.click
     }
-    /// The whole text of the message under a GUI-space cursor while chat is focused (PvP &
-    /// HUD's copy on click), without its time or count.
+    /// The whole text of the message under a GUI-space cursor while chat is focused (copy on click), without its time or count.
     pub fn message_at(&self, height: i32, x: f64, y: f64) -> Option<&str> {
         let (line, x) = self.line_at(height, x, y)?;
         (x >= 0.0).then_some(&*line.message)

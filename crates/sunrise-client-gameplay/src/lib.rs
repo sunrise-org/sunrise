@@ -2,8 +2,8 @@
 #![forbid(unsafe_code)]
 
 #[cfg(test)]
-#[used]
-static KEEP_TEST_PLATFORM: fn() = mod_platform::__private::test_platform::keep;
+mod_platform::__install_engine_test_platform!();
+
 #[macro_use]
 extern crate sunrise_gameplay_common;
 extern crate sunrise_client_lib as sunrise_client;
@@ -36,6 +36,11 @@ pub mod upload_pace;
 
 extern crate self as sunrise_client_gameplay;
 pub mod game;
+#[cfg(all(test, feature = "client"))]
+#[path = "../../sunrise-core/src/prepared_test_root.rs"]
+pub(crate) mod prepared_test_root;
+#[cfg(test)]
+mod test_game_dir;
 
 #[cfg(test)]
 #[path = "game/mobs/creatures/pearl_tests.rs"]

@@ -5,7 +5,6 @@ use std::cell::OnceCell;
 use std::collections::BTreeSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 use sunrise_mod_package::Manifest;
 use sunrise_mod_package::mod_surface::{
     self,
@@ -104,13 +103,13 @@ pub struct Builds<'a> {
 }
 
 /// How the native mod `manifest` stands against `builds.build`, by `table`, the list of what it uses (or why it has none this tool reads). `surface` gives the build's surface, and `game` where the game code the mod declares is in it ([`game_uses::entries`]). `made_for_surface`, when at hand, gives the `surface.json` of the build the mod was made for, whose hook versions complete a list an older tool wrote, into the table. Each is asked for only when the verdict needs it; `Err` is what `surface` or `game` returned, and then the verdict is not known. A made-for surface that cannot be had or read leaves the hooks unversioned, and says why in [`Judged::unpinned`].
-pub fn judge<'t, E: From<String>>(
+pub fn judge<'t, 's, 'm, E: From<String>>(
     manifest: &Manifest,
     builds: Builds<'_>,
     table: impl FnOnce() -> Result<&'t mut UsesTable, Unlisted>,
-    surface: &mut dyn FnMut() -> Result<Rc<mod_surface::Surface>, E>,
+    surface: &mut dyn FnMut() -> Result<&'s mod_surface::Surface, E>,
     game: &mut dyn FnMut() -> Result<Vec<(String, game_uses::Now)>, E>,
-    made_for_surface: Option<&mut dyn FnMut() -> Result<Vec<u8>, E>>,
+    made_for_surface: Option<&mut dyn FnMut() -> Result<&'m [u8], E>>,
 ) -> Result<Judged<E>, E> {
     let Builds {
         made_for,
@@ -148,7 +147,7 @@ pub fn judge<'t, E: From<String>>(
         let entries = table.entries.iter();
         table.fits(
             entries.filter(|entry| !entry.id.starts_with(game_uses::PREFIX)),
-            &surface,
+            surface,
         )
     };
     let mut report = api(table);
@@ -160,7 +159,7 @@ pub fn judge<'t, E: From<String>>(
     {
         let pinned = made_for_surface().and_then(|bytes| {
             table
-                .pin_hook_versions(&bytes)
+                .pin_hook_versions(bytes)
                 .map_err(|e| E::from(e.to_string()))
         });
         match pinned {
@@ -268,19 +267,44 @@ impl From<String> for Lack {
     }
 }
 
-/// Checks `plan`'s mods against its build.
+/// Checks `plan`'s mods against its build, opening the supplied surface only if needed.
 pub fn check(plan: &Plan) -> Result<Reply, String> {
-    let found = scan_bundles(&plan.mods)?;
-    let mut surface: Option<Rc<mod_surface::Surface>> = None;
-    // One set of published inputs for this check, opened only if a verdict needs it.
+    let parsed = OnceCell::new();
+    check_mods(&plan.mods, &plan.build, plan.build_data.as_deref(), || {
+        let path = plan.surface.as_ref().ok_or(Lack::Needs("surface"))?;
+        parsed
+            .get_or_init(|| {
+                let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+                mod_surface::Surface::read(&bytes).map_err(|e| format!("{}: {e}", path.display()))
+            })
+            .as_ref()
+            .map_err(|why| Lack::Unread(why.clone()))
+    })
+}
+
+/// Checks mods against the caller's surface. The provider is called only when a verdict needs
+/// it; omitted build data is reported in [`Checked::needs`].
+pub fn check_with_surface<'s>(
+    mods: &Path,
+    build: &str,
+    mut surface: impl FnMut() -> Result<&'s mod_surface::Surface, String>,
+    build_data: Option<&Path>,
+) -> Result<Reply, String> {
+    check_mods(mods, build, build_data, || surface().map_err(Lack::Unread))
+}
+
+fn check_mods<'s>(
+    mods: &Path,
+    build: &str,
+    build_data_dir: Option<&Path>,
+    mut surface: impl FnMut() -> Result<&'s mod_surface::Surface, Lack>,
+) -> Result<Reply, String> {
+    let found = scan_bundles(mods)?;
     let build_data = OnceCell::new();
     let data = || {
-        let dir = plan
-            .build_data
-            .as_deref()
-            .ok_or(Lack::Needs("build-data"))?;
+        let dir = build_data_dir.ok_or(Lack::Needs("build-data"))?;
         build_data
-            .get_or_init(|| game_uses::Data::read(dir, &plan.build))
+            .get_or_init(|| game_uses::Data::read(dir, build))
             .as_ref()
             .map_err(|error| Lack::Unread(error.to_string()))
     };
@@ -310,61 +334,47 @@ pub fn check(plan: &Plan) -> Result<Reply, String> {
             continue;
         }
         let native = bundle.native();
-        let judged = if native.sunrise == plan.build
-            && (!native.mixin.is_empty() || !native.r#loop.is_empty())
-        {
-            data().and_then(|data| {
-                for row in &native.mixin {
-                    if let Some(refused) = data.mixin_refusal(&row.target) {
-                        return Err(Lack::Refused(format!(
-                            "{}: {id}:{}: {}: {}",
-                            refused.code.name(),
-                            row.id,
-                            row.target,
-                            refused.why,
-                        )));
+        let judged =
+            if native.sunrise == build && (!native.mixin.is_empty() || !native.r#loop.is_empty()) {
+                data().and_then(|data| {
+                    for row in &native.mixin {
+                        if let Some(refused) = data.mixin_refusal(&row.target) {
+                            return Err(Lack::Refused(format!(
+                                "{}: {id}:{}: {}: {}",
+                                refused.code.name(),
+                                row.id,
+                                row.target,
+                                refused.why,
+                            )));
+                        }
                     }
-                }
-                for row in &native.r#loop {
-                    data.loops.require(&id, row).map_err(Lack::Refused)?;
-                }
-                Ok(Verdict::MadeFor)
-            })
-        } else {
-            // Read only when the verdict needs it.
-            let mut read = None;
-            let read = &mut read;
-            judge(
-                &bundle.manifest,
-                Builds {
-                    made_for: &native.sunrise,
-                    build: &plan.build,
-                    mixins_rev: crate::MIXINS_REV,
-                },
-                move || read.insert(table(&bundle.dir)).as_mut().map_err(|why| *why),
-                &mut || {
-                    if let Some(read) = &surface {
-                        return Ok(read.clone());
+                    for row in &native.r#loop {
+                        data.loops.require(&id, row).map_err(Lack::Refused)?;
                     }
-                    let path = plan.surface.as_ref().ok_or(Lack::Needs("surface"))?;
-                    let bytes = std::fs::read(path)
-                        .map_err(|e| Lack::Unread(format!("{}: {e}", path.display())))?;
-                    let read = Rc::new(
-                        mod_surface::Surface::read(&bytes)
-                            .map_err(|e| Lack::Unread(format!("{}: {e}", path.display())))?,
-                    );
-                    surface = Some(read.clone());
-                    Ok(read)
-                },
-                &mut || Ok(data()?.entries(&bundle.manifest)),
-                // The plan gives no surface of the build the mod was made for.
-                None,
-            )
-            .and_then(|judged| match judged.uncompared {
-                Some(Lack::Unread(why)) => Err(Lack::Unread(why)),
-                _ => Ok(judged.verdict),
-            })
-        };
+                    Ok(Verdict::MadeFor)
+                })
+            } else {
+                // Read only when the verdict needs it.
+                let mut read = None;
+                let read = &mut read;
+                judge(
+                    &bundle.manifest,
+                    Builds {
+                        made_for: &native.sunrise,
+                        build,
+                        mixins_rev: crate::MIXINS_REV,
+                    },
+                    move || read.insert(table(&bundle.dir)).as_mut().map_err(|why| *why),
+                    &mut surface,
+                    &mut || Ok(data()?.entries(&bundle.manifest)),
+                    // The plan gives no surface of the build the mod was made for.
+                    None,
+                )
+                .and_then(|judged| match judged.uncompared {
+                    Some(Lack::Unread(why)) => Err(Lack::Unread(why)),
+                    _ => Ok(judged.verdict),
+                })
+            };
         match judged {
             Ok(mut verdict) => {
                 if let Verdict::DoesNotFit { misfits, .. } = &mut verdict {

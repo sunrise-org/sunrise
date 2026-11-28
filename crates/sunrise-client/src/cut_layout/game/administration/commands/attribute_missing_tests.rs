@@ -17,7 +17,7 @@ pub(crate) fn game<'a>(
     game.world
         .chunks
         .insert((0, 0), Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)));
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 100.0, 0.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 100.0, 0.5)));
     game.reset_entity_residency();
     sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(&mut game, 1, 1);
     game

@@ -49,7 +49,7 @@ pub(in crate::game) fn run_set_camera_follows_the_real_26_3_clients_camera_for_e
         let remote = game.client.remote.as_mut().unwrap();
         remote.logged_in = true;
         remote.entity_id = 7;
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
         let local = camera(game).unwrap();
         let mut mismatches = Vec::new();
         for (n, row) in witness.lines().filter(|l| !l.starts_with('#')).enumerate() {

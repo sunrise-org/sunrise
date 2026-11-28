@@ -45,6 +45,21 @@ fn pin_in_a_content_mod_is_refused_before_any_build_is_resolved() {
 
 #[test]
 #[ignore = "daily"]
+fn build_diagnostics_are_refused_for_a_content_mod() {
+    let root = tempfile::tempdir().unwrap();
+    assert!(tool(root.path(), &["new", "ruby"]).status.success());
+    let content = root.path().join("ruby");
+    for option in ["--timings", "--verbose", "-v"] {
+        let output = tool(&content, &["build", option]);
+        refused_before_any_work(&content, &output, option);
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains("only for native mods"), "{error}");
+        assert!(output.stdout.is_empty());
+    }
+}
+
+#[test]
+#[ignore = "daily"]
 fn check_fit_refuses_project_options_before_fetching_an_sdk() {
     let root = tempfile::tempdir().unwrap();
     for args in [&["--uses"][..], &["--with", "library"][..]] {

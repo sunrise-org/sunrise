@@ -91,7 +91,7 @@ pub(crate) mod tests {
             let (mut peer, _writer) = crate::game::remote::tests::connect_menu_test(game);
             peer.set_read_timeout(Some(std::time::Duration::from_millis(50)))
                 .unwrap();
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)));
             let types = MobTypes::load(&root).unwrap();
             let pig = std::sync::Arc::new(types.types["minecraft:pig"].clone());
             let mut m = Mob::new(7, pig, Vec3::new(3.5, 64.0, 2.5), 0.0);
@@ -197,7 +197,7 @@ pub(crate) mod tests {
         let (client, _server) = Pipe::pair();
         game.connect_local(client, "SteeringTest").unwrap();
         game.client.remote.as_mut().unwrap().joined = true;
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 300.0, 0.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 300.0, 0.5)));
         let types = MobTypes::load(&root).unwrap();
         for row in &rows {
             let kind = row["kind"].as_str().unwrap();
@@ -279,7 +279,7 @@ pub(crate) mod tests {
             crate::game::profile_resolver,
         )
         .unwrap();
-        server.player = Some(PlayerMotion::new(server.motion, Vec3::new(0.5, 300.0, 0.5)).unwrap());
+        server.player = Some(PlayerMotion::new(server.motion, Vec3::new(0.5, 300.0, 0.5)));
         for row in &rows {
             let kind = row["kind"].as_str().unwrap();
             let t = std::sync::Arc::new(types.types[&format!("minecraft:{kind}")].clone());
@@ -444,7 +444,7 @@ pub(crate) mod tests {
         game.connect_local(client, "RiderTest").unwrap();
         game.client.remote.as_mut().unwrap().joined = true;
         game.client.remote.as_mut().unwrap().first_passenger = true;
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 300.0, 0.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 300.0, 0.5)));
         let types = MobTypes::load(&root).unwrap();
         let t = std::sync::Arc::new(types.types["minecraft:horse"].clone());
         let mut horse = Mob::new(7, t, Vec3::new(0.5, 300.0, 0.5), 0.0);
@@ -486,7 +486,7 @@ pub(crate) mod tests {
                         remote.entity_id = 42;
                         game.world.game_time = 1_000;
                         let at = Vec3::new(4.5, 80.0, 4.5);
-                        let mut player = PlayerMotion::new(game.motion, at).unwrap();
+                        let mut player = PlayerMotion::new(game.motion, at);
                         player.entity_id = 42;
                         player.applied_input = [0.0, 0.98];
                         player.set_sprinting(true).unwrap();
@@ -624,7 +624,7 @@ mod plugin_seat_tests {
             crate::game::profile_resolver,
         )
         .unwrap();
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
         let mut stand = sunrise_sim::entities::ArmorStand::new(42, Vec3::new(2.0, 64.0, 3.0), 0.0);
         stand.marker = true;
         game.armor_stands.push(stand);

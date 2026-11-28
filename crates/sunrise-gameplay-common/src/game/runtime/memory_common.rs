@@ -190,14 +190,6 @@ pub struct Allocator {
 }
 
 #[derive(Serialize)]
-pub struct FarTiles {
-    pub active: usize,
-    pub cached: usize,
-    pub kept: usize,
-    pub kept_mb: f64,
-}
-
-#[derive(Serialize)]
 pub struct Gpu {
     pub allocated_mb: f64,
     pub reserved_mb: f64,
@@ -257,11 +249,10 @@ pub struct MemoryReport {
     pub(in crate::game) chunk_send: Option<ChunkSend>,
     pub(in crate::game) light_queue: Option<Queue>,
     pub(in crate::game) generation_queue: Option<Queue>,
-    pub(in crate::game) far_tiles: Option<FarTiles>,
     pub(in crate::game) renderer: Option<Renderer>,
     /// Live heap by startup step, span, pool job, or thread when `alloc-census` is enabled.
     pub(in crate::game) heap_by_tag_mb: Option<Vec<(String, f64)>>,
-    /// Columns, generation, entities, players, chunk send caches, queues, renderer CPU, far tiles.
+    /// Columns, generation, entities, players, chunk send caches, queues, renderer CPU.
     pub(in crate::game) named_mb: f64,
     /// Resident memory minus `named_mb` (may be negative where parts overlap).
     pub(in crate::game) unattributed_mb: Option<f64>,
@@ -271,7 +262,6 @@ pub struct MemoryReport {
 pub struct MemoryInputs {
     pub render_distance: i32,
     pub client: Option<Vec<Arc<Chunk>>>,
-    pub far: Option<(FarTiles, usize)>,
 }
 
 impl MemoryInputs {
@@ -312,8 +302,7 @@ impl MemoryInputs {
         let named = window.as_ref().map_or(0, |c| c.bytes)
             + server_columns.as_ref().map_or(0, |c| c.bytes)
             + server.as_ref().map_or(0, ServerSide::bytes)
-            + renderer.as_ref().map_or(0, |r| r.1)
-            + self.far.as_ref().map_or(0, |f| f.1);
+            + renderer.as_ref().map_or(0, |r| r.1);
         let named = named.saturating_sub(shared_with_server.as_ref().map_or(0, |s| s.bytes));
         let (columns, server_columns) = if window.is_some() {
             (None, server_columns)
@@ -343,7 +332,6 @@ impl MemoryInputs {
             chunk_send: None,
             light_queue: None,
             generation_queue: None,
-            far_tiles: self.far.map(|f| f.0),
             renderer: renderer.map(|r| r.0),
             heap_by_tag_mb: sunrise_threads::HEAP_CENSUS.then(|| {
                 sunrise_threads::heap_census::census()

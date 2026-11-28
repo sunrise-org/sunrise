@@ -281,7 +281,8 @@ fn fixture(window: Arc<Window>) -> Result<(), Box<dyn std::error::Error>> {
         return bench(&mut renderer, out);
     }
     renderer.resize(320, 180);
-    renderer.fullbright = true;
+    // White ambient light keeps the colours we count equal to the vertices' own.
+    let ambient_light = [1.0; 3];
     // (keys count sections from the bottom of the world, y -64: 10 is y 96 to 112)
     // white at z 12, which the player's camera at z 0.5 faces; green at z 28 behind it
     let both = [[0, 1, 2, 3], [3, 2, 1, 0]];
@@ -350,7 +351,7 @@ fn fixture(window: Arc<Window>) -> Result<(), Box<dyn std::error::Error>> {
     };
     let shot = |renderer: &mut Renderer, name: &str, views: Vec<WorldView>| {
         *VIEWS.lock().unwrap() = views;
-        let mut frame = fixture_frame(&hud);
+        let mut frame = fixture_frame(&hud, ambient_light);
         frame.entities = &entity;
         let path = out.join(format!("{name}.png"));
         renderer.screenshot = Some(ScreenshotRequest {
@@ -477,7 +478,7 @@ fn fixture(window: Arc<Window>) -> Result<(), Box<dyn std::error::Error>> {
         grandchild.with_parent(51),
         WorldView::new(53, camera, 0.0, 0.0, 70.0, [8, 8]).with_parent(99),
     ];
-    let mut frame = fixture_frame(&hud);
+    let mut frame = fixture_frame(&hud, ambient_light);
     frame.entities = &entity;
     entity_frusta(&mut renderer);
     renderer.render(&frame, None).unwrap();
@@ -789,7 +790,7 @@ fn bench(renderer: &mut Renderer, out: &Path) -> Result<(), Box<dyn std::error::
     let hud = HudBatch::new([1920, 1080], GUI);
     let mut time = |views: Vec<WorldView>| {
         *VIEWS.lock().unwrap() = views;
-        let mut frame = fixture_frame(&hud);
+        let mut frame = fixture_frame(&hud, [0.0; 3]);
         frame.camera = DVec3::new(8.0, 90.0, 8.0);
         frame.eye = frame.camera;
         frame.pitch = 15.0;
@@ -895,7 +896,7 @@ fn main() {
     EventLoop::new().unwrap().run_app(&mut App).unwrap();
 }
 
-fn fixture_frame(hud: &HudBatch) -> Frame<'_> {
+fn fixture_frame(hud: &HudBatch, ambient_light_color: [f32; 3]) -> Frame<'_> {
     Frame {
         weather: &[],
         weather_time: client::weather::Time::new(0, 0.0),
@@ -911,7 +912,10 @@ fn fixture_frame(hud: &HudBatch) -> Frame<'_> {
         bob: glam::Mat4::IDENTITY,
         view_transform: glam::Mat4::IDENTITY,
         spin: glam::Mat4::IDENTITY,
-        sky: client::environment::Sky::default(),
+        sky: client::environment::Sky {
+            ambient_light_color,
+            ..Default::default()
+        },
         shadow_scene_revision: (0, 0),
         shadow_cache: false,
         distance: 128.0,
@@ -934,7 +938,6 @@ fn fixture_frame(hud: &HudBatch) -> Frame<'_> {
         outline: Vec::new(),
         outline_after_terrain: false,
         outline_high_contrast: false,
-        pvp: Default::default(),
         debug_lines: &[],
         debug_lines_on_top: &[],
         debug_crosshair: &[],

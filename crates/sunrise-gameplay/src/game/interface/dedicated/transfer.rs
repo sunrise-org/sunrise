@@ -209,7 +209,7 @@ impl crate::game::ServerGame<'_> {
         }
         let result = sunrise_sim::lan::import::import_player(
             &mut host.hub,
-            &self.common.motion.attributes,
+            self.common.motion.attributes(),
             uuid,
             &request,
         );

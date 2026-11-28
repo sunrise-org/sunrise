@@ -7,8 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tests import git_history
-from tests.git_fixture import isolated_git_env
+from tests.git_fixture import isolated_git_env, merge_pull_request
 from tools.ci import check_port_map_paths as guard
 
 
@@ -199,10 +198,8 @@ class PortMapPathTests(unittest.TestCase):
         # the two merge without a conflict.
         (self.root / guard.LIST).write_text("# Known stale rows.\n" + "".join(f"# note {n}\n" for n in range(5)),
                                             encoding="utf-8")
-        git_history.git(self.root, "init", "-q")
-        git_history.git(self.root, "add", "-A")
-        git_history.git(self.root, "commit", "-qm", "base")
-        return git_history.git(self.root, "rev-parse", "HEAD").stdout.strip()
+        self.git("init", "-q", "--template=")
+        return self.commit("base")
 
     def add_stale_row(self, name, map_name="game-1.tsv", top=False):
         """A stale row in `map_name`, listed in the known-stale list: at its end, or above `start_history`'s notes."""
@@ -213,7 +210,7 @@ class PortMapPathTests(unittest.TestCase):
         (self.root / guard.LIST).write_text(line + listed if top else listed + line, encoding="utf-8")
 
     def merge(self, base, main_change, pr_change):
-        return git_history.merge_pull_request(self.root, base, ("crates", "tools"), main_change, pr_change)
+        return merge_pull_request(self.root, base, ("crates", "tools"), main_change, pr_change)
 
     def test_a_stale_base_does_not_blame_the_pull_request_for_a_row_main_listed(self):
         base = self.start_history()

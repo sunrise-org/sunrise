@@ -234,7 +234,7 @@ fn empty_mod_never_defers_breeding_xp() {
                 action: 0,
                 slot: &mut slot,
                 resources: game.common.res.clone(),
-                attributes: game.common.motion.attributes.clone(),
+                attributes: game.common.motion.attributes().clone(),
                 dimension: game.common.dim,
                 constraint: ChildConstraint::BreedingAgeable,
             };

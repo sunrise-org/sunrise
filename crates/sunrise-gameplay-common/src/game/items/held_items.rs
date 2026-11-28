@@ -164,7 +164,7 @@ impl crate::game::CommonGame<'_> {
     /// `Attributes.ATTACK_SPEED` sanitizer from the attribute catalog.
     pub fn sanitize_attack_speed(&self, value: f64) -> f64 {
         self.motion
-            .attributes
+            .attributes()
             .definition("minecraft:attack_speed")
             .map_or(value, |definition| definition.sanitize(value))
     }

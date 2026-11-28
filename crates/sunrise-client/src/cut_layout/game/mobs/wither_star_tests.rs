@@ -46,7 +46,7 @@ fn a_withers_nether_star_lives_12000_ticks() {
                 game.world.set(x, 199, z, stone).unwrap();
             }
         }
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 200.0, 8.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 200.0, 8.5)));
         sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 1, 1);
         game.update_chunk_tickets();
         assert!(game.entity_ticking_area()(4, 4), "the drops tick");

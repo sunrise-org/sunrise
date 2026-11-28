@@ -254,7 +254,7 @@ fn prepare_breaker(game: &mut sunrise_gameplay::game::ServerGame<'_>) {
     game.world
         .chunks
         .insert((0, 0), Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)));
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 64.0, 4.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 64.0, 4.5)));
     game.set_mode(GameMode::Survival);
     game.common.inventory[game.common.selected] =
         Some(ItemStack::new("minecraft:diamond_pickaxe", 1));

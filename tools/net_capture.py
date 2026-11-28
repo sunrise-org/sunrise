@@ -63,7 +63,7 @@ def read_varint(data, pos):
 class Session:
     """The state both directions of one connection share."""
 
-    def __init__(self, conn_id, out, names, lock, full):
+    def __init__(self, conn_id, out, names, lock, full, swallow=None, after_forward=None, sockets=()):
         self.id = conn_id
         self.state = {"clientbound": "handshake", "serverbound": "handshake"}
         self.threshold = -1
@@ -71,8 +71,44 @@ class Session:
         self.names = names
         self.lock = lock
         self.full = full
+        self.swallow = swallow
+        self.after_forward = after_forward
         self.start = time.time()
         self.closed = threading.Event()
+        self._open_pipes = 2
+        self._sockets = tuple(sockets)
+        self._sock_lock = threading.Lock()
+        self._sockets_closed = False
+
+    def shutdown(self):
+        """Shut down both sides of the connection so blocked pipes wake and exit."""
+        with self._sock_lock:
+            if self._sockets_closed:
+                return
+            for sock in self._sockets:
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+    def pipe_done(self, src, dst):
+        sockets = self._sockets or (src, dst)
+        with self._sock_lock:
+            if not self._sockets_closed:
+                for sock in sockets:
+                    try:
+                        sock.shutdown(socket.SHUT_RDWR)
+                    except OSError:
+                        pass
+            self._open_pipes -= 1
+            if self._open_pipes == 0 and not self._sockets_closed:
+                self._sockets_closed = True
+                for sock in sockets:
+                    try:
+                        sock.close()
+                    except OSError:
+                        pass
+        self.closed.set()
 
     def name(self, direction, packet_id):
         table = self.names.get((self.state[direction], direction), [])
@@ -132,7 +168,6 @@ class Pipe(threading.Thread):
                 if not chunk:
                     break
                 buffer += chunk
-                frames = []
                 while True:
                     try:
                         length, pos = read_varint(buffer, 0)
@@ -140,14 +175,18 @@ class Pipe(threading.Thread):
                         break
                     if len(buffer) < pos + length:
                         break
-                    frames.append(buffer[:pos + length])
+                    raw_frame = buffer[:pos + length]
                     body, buffer = buffer[pos:pos + length], buffer[pos + length:]
                     threshold = s.threshold
                     if threshold >= 0:
                         size, p = read_varint(body, 0)
                         body = zlib.decompress(body[p:]) if size else body[p:]
                     packet_id, p = read_varint(body, 0)
-                    s.record(self.direction, packet_id, body[p:])
+                    state = s.state[self.direction]
+                    name = s.name(self.direction, packet_id)
+                    payload = body[p:]
+                    drop = s.swallow is not None and s.swallow(s, self.direction, state, name, payload)
+                    s.record(self.direction, packet_id, payload)
                     # The compression threshold applies after its packet, in
                     # both directions; the client answers only after reading it.
                     pending = getattr(s, "pending_threshold", None)
@@ -156,63 +195,99 @@ class Pipe(threading.Thread):
                         s.pending_threshold = None
                     # State switches must be in effect before the peer can
                     # answer, so forward each frame after recording it.
-                    self.dst.sendall(frames.pop())
+                    if not drop:
+                        self.dst.sendall(raw_frame)
+                        if s.after_forward is not None:
+                            s.after_forward(s, self.direction, state, name, self.dst)
         except (OSError, ValueError, zlib.error) as e:
             with s.lock:
                 s.out.write(json.dumps({"conn": s.id, "event": "error", "dir": self.direction,
                                         "error": str(e)}) + "\n")
                 s.out.flush()
         finally:
-            for sock in (self.src, self.dst):
-                try:
-                    sock.shutdown(socket.SHUT_RDWR)
-                except OSError:
-                    pass
-            s.closed.set()
+            s.pipe_done(self.src, self.dst)
 
 
-def serve(listen, target, out_path, full=False, ready=None, stop=None):
-    names = load_names()
+class ProxyStop:
+    """Stop handle returned by start_background.
+
+    Supports .set() to request stop and .close() to request stop and wait until
+    every active pipe has exited and the capture file is closed.
+    """
+
+    def __init__(self, event, thread):
+        self._event = event
+        self._thread = thread
+
+    def set(self):
+        self._event.set()
+
+    def close(self):
+        self._event.set()
+        self._thread.join()
+
+
+def serve(listen, target, out_path, full=False, ready=None, stop=None,
+          swallow=None, after_forward=None, names=None):
+    names = load_names() if names is None else names
     host, port = target.rsplit(":", 1)
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind(("127.0.0.1", listen))
-    server.listen()
-    server.settimeout(0.5)
-    lock = threading.Lock()
-    conn_id = 0
-    with open(out_path, "a") as out:
-        if ready:
-            ready.set()
-        while not (stop and stop.is_set()):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind(("127.0.0.1", listen))
+        server.listen()
+        server.settimeout(0.5)
+        lock = threading.Lock()
+        conn_id = 0
+        sessions = []
+        pipes = []
+        with open(out_path, "a") as out:
+            if ready:
+                ready.set()
             try:
-                client, _ = server.accept()
-            except socket.timeout:
-                continue
-            conn_id += 1
-            try:
-                upstream = socket.create_connection((host, int(port)))
-            except OSError as e:
-                client.close()
-                with lock:
-                    out.write(json.dumps({"conn": conn_id, "event": "error",
-                                          "error": f"upstream: {e}"}) + "\n")
-                continue
-            for sock in (client, upstream):
-                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            session = Session(conn_id, out, names, lock, full)
-            Pipe(session, "serverbound", client, upstream).start()
-            Pipe(session, "clientbound", upstream, client).start()
-    server.close()
+                while not (stop and stop.is_set()):
+                    try:
+                        client, _ = server.accept()
+                    except socket.timeout:
+                        continue
+                    conn_id += 1
+                    try:
+                        upstream = socket.create_connection((host, int(port)))
+                    except OSError as e:
+                        client.close()
+                        with lock:
+                            out.write(json.dumps({"conn": conn_id, "event": "error",
+                                                  "error": f"upstream: {e}"}) + "\n")
+                            out.flush()
+                        continue
+                    for sock in (client, upstream):
+                        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                    session = Session(conn_id, out, names, lock, full, swallow=swallow,
+                                      after_forward=after_forward, sockets=(client, upstream))
+                    pair = (Pipe(session, "serverbound", client, upstream),
+                            Pipe(session, "clientbound", upstream, client))
+                    sessions.append(session)
+                    for pipe in pair:
+                        pipe.start()
+                        pipes.append(pipe)
+            finally:
+                for session in sessions:
+                    session.shutdown()
+                for pipe in pipes:
+                    pipe.join()
 
 
-def start_background(listen, target, out_path, full=False):
-    """Run the proxy on a thread; returns the stop event."""
+def start_background(listen, target, out_path, full=False,
+                     swallow=None, after_forward=None, names=None):
+    """Run the proxy on a thread; returns a handle whose .set() stops it and .close() waits for shutdown."""
     ready, stop = threading.Event(), threading.Event()
-    threading.Thread(target=serve, args=(listen, target, out_path, full, ready, stop),
-                     daemon=True).start()
+    thread = threading.Thread(
+        target=serve,
+        args=(listen, target, out_path, full, ready, stop, swallow, after_forward, names),
+        daemon=True,
+    )
+    thread.start()
     ready.wait(5)
-    return stop
+    return ProxyStop(stop, thread)
 
 
 def load(path):

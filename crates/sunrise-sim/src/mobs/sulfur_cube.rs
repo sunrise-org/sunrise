@@ -20,8 +20,7 @@ use sunrise_world::worldgen::value_provider::FloatProvider;
 // Sulfur cube state (on top of `cube`'s `size`, `counter` jump delay,
 // `flag` aggressive, `flag2` was on ground, `vector[0]` direction):
 // `head` the swallowed block, `sulfur_fuse` the fuse and its synced `MAX_FUSE`,
-// `ints[3]` the pickup timer, `scratch[1]` the sounds pending (1 a fuse just
-// lit),
+// `ints[3]` the pickup timer,
 // `scratch[2]` the push sound cooldown, `scratch[3]` from a bucket,
 // `point` the item it is after.
 pub const PICKUP_TIMER: i32 = 100;
@@ -870,6 +869,33 @@ mod burning_arrow_tests {
         assert_eq!(fuse(&m), fuse_ticks - 5);
     }
 
+    /// `primeTime` plays `entity.tnt.primed` and posts `PRIME_FUSE` as it lights the fuse,
+    /// once, not at the next AI step (#6471).
+    #[test]
+    fn lighting_the_fuse_sounds_and_posts_prime_fuse_at_once() {
+        let mut m = cube(Some("minecraft:tnt"));
+        m.position = Vec3::new(1.0, 2.0, 3.0);
+        assert!(burning_arrow_hit(&mut m));
+        let queued: Vec<_> = std::mem::take(&mut m.outbox)
+            .into_iter()
+            .map(|e| match e {
+                MobEvent::Sound(id, at, ..) => (id, at),
+                MobEvent::GameEvent { event, at, .. } => (event, at),
+                other => panic!("unexpected {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            queued,
+            [
+                ("entity.tnt.primed", [1.0, 2.0, 3.0]),
+                ("minecraft:prime_fuse", [1.0, 2.0, 3.0]),
+            ]
+        );
+        // Already lit: nothing again.
+        assert!(!burning_arrow_hit(&mut m));
+        assert!(m.outbox.is_empty());
+    }
+
     #[test]
     fn a_burning_arrow_lights_only_an_explosive_block() {
         for head in [None, Some("minecraft:dirt")] {
@@ -879,8 +905,9 @@ mod burning_arrow_tests {
         }
     }
 
-    /// the arrow's knock, then the fuse lit: the next tick plays
-    /// `entity.tnt.primed`, then the archetype's hit sound.
+    /// the arrow's knock and the fuse it lights: `entity.tnt.primed`, then the archetype's hit
+    /// sound, as `SulfurCube.hurtServer` primes before it knocks (#6475). Both are queued where
+    /// they happen (#6471).
     #[test]
     #[ignore = "daily"]
     fn a_knock_and_a_lit_fuse_both_sound() {
@@ -892,6 +919,7 @@ mod burning_arrow_tests {
             m.damage(level, 5.0, Damage::player([2.0, 0.0, 0.0]));
             assert!(burning_arrow_hit(&mut m));
             ai_step(&mut m, w, &mut events);
+            events.splice(0..0, std::mem::take(&mut m.outbox));
         });
         if !ran {
             return; // needs the prepared 26.3 data
@@ -1148,7 +1176,17 @@ pub fn prime_with_fuse(m: &mut Mob, imminent: bool, fuse: i32) -> bool {
     };
     m.invulnerable_flag = true;
     m.extra.sulfur_fuse = Fuse::set(t);
-    m.extra.scratch[1] |= 1;
+    // `makeSound(TNT_PRIMED)` and `gameEvent(PRIME_FUSE)`, there and then: inside the damage or
+    // the use that primed it, not at the next AI step (#6471).
+    let mut events = std::mem::take(&mut m.outbox);
+    m.voice("entity.tnt.primed", &mut events);
+    events.push(MobEvent::GameEvent {
+        event: "minecraft:prime_fuse",
+        at: [m.position.x, m.position.y, m.position.z],
+        source: m.id,
+        state: sunrise_world::registry::BlockStateId(0),
+    });
+    m.outbox = events;
     true
 }
 /// `#sulfur_cube_with_block_immune_to`: the damage a cube with a block shrugs off and is only
@@ -1444,12 +1482,6 @@ pub fn tick_fuse(m: &mut Mob, events: &mut Vec<MobEvent>) {
 /// the timers, a swallowed block's stillness, buoyancy and
 /// facing, growing up, and players pushing it.
 pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
-    // primeTime's sound.
-    let pending = m.extra.scratch[1];
-    if pending & 1 != 0 {
-        events.push(MobEvent::Sound("entity.tnt.primed", m.center(), 1.0, 1.0));
-    }
-    m.extra.scratch[1] = 0;
     if m.extra.ints[3] > 0 {
         m.extra.ints[3] -= 1;
     }

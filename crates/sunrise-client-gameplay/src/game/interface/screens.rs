@@ -63,8 +63,7 @@ impl ScreenClientExt for Screen {
             | Self::DialogWarning
             | Self::CommandBlock
             | Self::BlockEditor
-            | Self::DebugOptions
-            | Self::HudEditor => true,
+            | Self::DebugOptions => true,
         }
     }
     /// `Screen.isAllowedInPortal`: `LocalPlayer.handlePortalTransitionEffect`
@@ -98,9 +97,7 @@ impl ScreenClientExt for Screen {
             | Self::Dead
             | Self::CommandBlock
             | Self::BlockEditor
-            | Self::Mod
-            // The HUD editor shows the HUD it moves.
-            | Self::HudEditor => false,
+            | Self::Mod => false,
             // WinScreen.extractBackground: the poem fills the screen with the End portal, the
             // credits alone blur. Game::menu_blur knows which one rolls.
             Self::Win => false,
@@ -1170,7 +1167,6 @@ mod tests {
             Screen::CommandBlock,
             Screen::BlockEditor,
             Screen::DebugOptions,
-            Screen::HudEditor,
         ] {
             assert!(screen.is_pause_screen(), "{}", screen.id());
         }

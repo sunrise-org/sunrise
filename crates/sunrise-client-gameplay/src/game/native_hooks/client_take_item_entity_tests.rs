@@ -80,13 +80,10 @@ fn a_client_hears_pickups_of_entities_it_tracks() {
         with_client_game(|game| {
             let _server = logged_client(game);
             // The local player's body, which a logged-in client has by its first tick.
-            game.common.player = Some(
-                sunrise_sim::motion::PlayerMotion::new(
-                    game.common.motion,
-                    sunrise_core::geometry::Vec3::ZERO,
-                )
-                .unwrap(),
-            );
+            game.common.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.common.motion,
+                sunrise_core::geometry::Vec3::ZERO,
+            ));
             let local = game.client.remote.as_ref().unwrap().entity_id;
             add(game, 50, "minecraft:experience_orb");
             add(game, 51, "minecraft:arrow");

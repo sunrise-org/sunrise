@@ -13,7 +13,7 @@ pub trait Hooks {
     /// (`Camera.setPosition`).
     ///
     /// Starts from the frame's placed world position in blocks: after vanilla entity alignment
-    /// (including an interpolating minecart rider) or from the studio's selected position.
+    /// (including an interpolating minecart rider).
     /// Read the previous listener's accepted position with `position.coordinates()`.
     /// Pin individual axes with `position.set([Some(x), None, None])`; a non-finite edit
     /// returns `false` and leaves the last accepted position intact.

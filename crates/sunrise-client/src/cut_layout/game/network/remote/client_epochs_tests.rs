@@ -71,7 +71,7 @@ fn client_epochs_follow_level_replacement_and_logout() {
         let current = EntityRef::new(replaced, 12);
         game.client.remote.as_mut().unwrap().logged_in = true;
         game.spawn_entity(12, "minecraft:pig", [0.0, 1.0, 2.0], [0.0; 3]);
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
         game.yaw = 0.0;
         game.pitch = 0.0;
         game.refresh_client_pick(1.0);

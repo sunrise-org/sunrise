@@ -161,14 +161,6 @@ struct Mouse { ignore_first: bool }
 impl Mouse { fn set_ignore_first_move(&mut self) { self.ignore_first = true; } }
 struct Remote;
 #[derive(Default)]
-struct StudioFreecam { active: bool }
-#[derive(Default)]
-struct Studio { freecam: StudioFreecam, rmb_down: bool }
-impl Studio { fn flying(&self) -> bool { self.freecam.active } }
-#[derive(Default)]
-struct Replay { driver: Option<()> }
-impl Replay { fn playing(&self) -> bool { self.driver.is_some() } }
-#[derive(Default)]
 struct Options { offscreen: bool }
 #[derive(Default)]
 struct ServerPacks { prompt: Option<()> }
@@ -181,7 +173,7 @@ struct ClientState {
     settings: Settings, lan_acting: Option<u32>,
     focused: bool, agent_pointer: bool, mouse: Mouse,
     captured: bool, capture_mode: Option<CursorGrabMode>, regrab_on_refocus: bool, screen: Screen,
-    studio: Studio, cursor: (f32, f32),
+    cursor: (f32, f32),
     window_cursor: Option<window::PointerSample>,
     window_pointer_space: std::cell::OnceCell<window::PointerSpace>,
     unclaimed_window: bool, focus_after_run: Option<bool>, screen_grab: bool,
@@ -195,7 +187,7 @@ impl Default for ClientState {
             settings: Settings, lan_acting: None,
             focused: true, agent_pointer: false, mouse: Mouse::default(),
             captured: false, capture_mode: None, regrab_on_refocus: false,
-            screen: Screen::Playing, studio: Studio::default(),
+            screen: Screen::Playing,
             cursor: (0.0, 0.0), window_cursor: None,
             window_pointer_space: std::cell::OnceCell::new(),
             unclaimed_window: false,
@@ -208,20 +200,19 @@ impl Default for CommonGame {
 }
 struct ClientGame {
     common: CommonGame,
-    remote: Option<Remote>, replay: Replay, mining: bool,
+    remote: Option<Remote>, mining: bool,
     scripted: bool, applied_focus: Vec<bool>, applied_modifiers: Vec<u8>,
     client: ClientState,
 }
 impl Default for ClientGame {
     fn default() -> Self {
-        Self { common: CommonGame::default(), remote: None, replay: Replay::default(), mining: false,
+        Self { common: CommonGame::default(), remote: None, mining: false,
             scripted: false, applied_focus: Vec::new(), applied_modifiers: Vec::new(),
             client: ClientState::default() }
     }
 }
 impl ClientGame {
     fn stop_mining(&mut self) { self.mining = false; }
-    fn studio_up(&self) -> bool { self.replay.playing() || self.client.studio.flying() }
     fn reset_inventory_clicks(&mut self) {}
     fn restore_held_keys(&mut self) {} // This fixture exercises pointer state, not key mappings.
     fn dialog_open(&self) -> bool { false }
@@ -348,22 +339,6 @@ fn main() {
         game.client.server_packs.0.prompt = Some(());
         game.regrab_on_refocus();
         assert!(!game.client.captured);
-    }
-    // Studio replays keep the pointer released after focus returns; camera look
-    // only captures it while the right mouse button is held.
-    {
-        let mut game = ClientGame::default();
-        game.replay.driver = Some(());
-        game.client.studio.rmb_down = true;
-        game.capture(true);
-        assert!(game.client.captured);
-        game.client.regrab_on_refocus = true;
-        game.client.focused = false;
-        game.capture(false);
-        game.client.focused = true;
-        game.regrab_on_refocus();
-        assert!(!game.client.captured);
-        assert!(!game.client.studio.rmb_down);
     }
     // The native pointer and the GUI cursor are centred in their own units.
     {

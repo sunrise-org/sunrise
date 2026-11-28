@@ -108,13 +108,10 @@ pub(crate) mod tests {
         // source (here with no entity) is only `this`.
         game.set_allow_commands(true);
         assert!(game.run_command("scoreboard objectives add points dummy"));
-        game.player = Some(
-            sunrise_sim::motion::PlayerMotion::new(
-                game.motion,
-                sunrise_core::geometry::Vec3::new(0.5, 64.0, 0.5),
-            )
-            .unwrap(),
-        );
+        game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+            game.motion,
+            sunrise_core::geometry::Vec3::new(0.5, 64.0, 0.5),
+        ));
         assert!(game.run_command("scoreboard players set @s points 5"));
         let mut source = game.player_source();
         source.entity = None;

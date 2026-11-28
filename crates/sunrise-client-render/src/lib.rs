@@ -19,13 +19,13 @@ pub mod block_entity_render;
 pub use sunrise_level::block_entity_ticks;
 pub mod block_sprites;
 pub mod block_states;
-pub mod bluemap;
 pub mod border_render;
 pub mod breaking;
 pub use sunrise_level::brewing;
 pub mod camera;
 pub use sunrise_level::carrier_fences;
 pub mod chat;
+pub mod chat_options;
 pub use sunrise_level::chunk;
 pub use sunrise_level::chunk_map;
 pub mod cit;
@@ -42,6 +42,7 @@ pub use sunrise_level::containers;
 pub mod controller_ui;
 pub mod core_shader;
 pub use sunrise_level::crash;
+pub mod custom_lightmap;
 pub mod custom_sky;
 pub mod datapack;
 pub mod dynamic_light;
@@ -80,7 +81,6 @@ pub use sunrise_level::light;
 pub use sunrise_level::light_border;
 #[cfg(test)]
 mod light_storage_tests;
-pub mod lod;
 pub use sunrise_level::logging;
 pub mod mark_sprite;
 pub mod menu_blur;
@@ -105,7 +105,6 @@ pub use sunrise_level::options_file;
 pub use sunrise_level::options_fixes;
 pub mod options_ui;
 pub mod overlay;
-pub mod pack_browser;
 pub mod pack_formats;
 pub mod pack_hooks;
 pub use sunrise_level::pack_image;
@@ -131,8 +130,6 @@ pub mod potent_sulfur;
 pub mod preedit;
 pub use sunrise_level::profile_lookup;
 pub use sunrise_level::providers;
-pub mod pvp;
-pub mod pvp_hud;
 pub mod spectator_shaders;
 pub use sunrise_assets::resource_source;
 pub use sunrise_level::api_context;
@@ -143,7 +140,6 @@ pub mod screen_draw;
 pub mod screen_effects;
 pub use sunrise_level::sculk;
 pub use sunrise_level::section_mask;
-pub mod server_terrain;
 pub mod settings;
 pub(crate) mod settings_shell;
 pub mod shader_options;
@@ -162,7 +158,6 @@ mod sprite_cache;
 pub mod sprites;
 pub mod streaming;
 pub use sunrise_level::structure_block;
-pub(crate) mod studio_ui;
 pub(crate) mod sunrise_ui;
 pub mod tab_list;
 pub use sunrise_level::test_block;
@@ -214,6 +209,9 @@ pub mod render_views;
 
 #[cfg(test)]
 mod glsl_spirv_dump_tests;
+#[cfg(test)]
+#[path = "../../sunrise-core/src/prepared_test_root.rs"]
+pub(crate) mod prepared_test_root;
 #[cfg(test)]
 use sunrise_level::test_log;
 #[cfg(test)]

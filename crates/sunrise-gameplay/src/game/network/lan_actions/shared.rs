@@ -569,7 +569,7 @@ pub mod tests {
                 );
             };
             let take_signals = |game: &mut crate::game::ServerGame<'_>| {
-                let lids = std::mem::take(&mut game.server.lan_block_events)
+                let lids = std::mem::take(&mut game.server.lan_queues.block_events)
                     .into_iter()
                     .filter_map(|(p, id, count, _)| (p == at && id == 1).then_some(count))
                     .collect::<Vec<_>>();
@@ -603,6 +603,7 @@ pub mod tests {
                     if block == "shulker_box" {
                         game.server
                             .be_anims
+                            .level
                             .shulkers
                             .get(&at)
                             .map_or(0, |s| s.open_count)
@@ -1558,6 +1559,81 @@ pub(in crate::game) mod pickup_xp_tests {
         );
         assert_eq!(*seen.lock().unwrap(), [(7, 1), (15, 3)]);
         assert_eq!((orb, xp, delay), (Some((21, 2)), 21, 2));
+    }
+
+    /// The host's own player takes the orb it stands in through its pass (`tick_experience`),
+    /// with `mods` installed: the orb left, the player's total experience and `takeXpDelay`.
+    fn host_take_orb(
+        initial_value: i32,
+        initial_count: u32,
+        mods: Vec<ModEntry>,
+    ) -> (Option<(i32, u32)>, i32, u32) {
+        let mut out = (None, 0, 0);
+        mod_platform::testing::with_mods(mods.into(), || {
+            with_game(|game| {
+                game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                    game.motion,
+                    Vec3::new(0.5, 70.0, 0.5),
+                ));
+                crate::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
+                game.server.xp_delay = 0;
+                game.experience = Default::default();
+                game.orbs.push(make_orb(initial_value, initial_count));
+                game.tick_experience();
+                let surviving = game.orbs.iter().find(|o| o.id == 40);
+                out = (
+                    surviving.map(|o| (o.value, o.count)),
+                    game.experience.total,
+                    game.server.xp_delay,
+                );
+            });
+        });
+        out
+    }
+
+    /// `PlayerXpEvent.PickupXp` on the host's (integrated server, LAN host) own pass, as on a
+    /// guest's: the same pickup with no listener and with one that changes nothing, a cancel
+    /// keeps the orb and leaves `takeXpDelay` at 0, and a listener's live edit is what the
+    /// player takes.
+    #[test]
+    #[ignore = "daily"]
+    fn pickup_xp_hears_and_can_veto_the_host_players_own_pickup() {
+        let none = host_take_orb(7, 2, Vec::new());
+        assert_eq!(none, (Some((7, 1)), 7, 2));
+        let listen = vec![ModEntry::new("listen", Box::new(Listen(false)))];
+        assert_eq!(host_take_orb(7, 2, listen), none);
+        let cancel = vec![ModEntry::new("cancel", Box::new(Listen(true)))];
+        assert_eq!(host_take_orb(7, 2, cancel), (Some((7, 2)), 0, 0));
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let edit = vec![ModEntry::new(
+            "edit",
+            Box::new(Edit {
+                value: Some(15),
+                count: None,
+                expect_count_err: None,
+                kill: false,
+                cancel: false,
+                calls: Arc::clone(&calls),
+            }),
+        )];
+        assert_eq!(host_take_orb(7, 1, edit), (None, 15, 2));
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let kill = vec![ModEntry::new(
+            "kill",
+            Box::new(Edit {
+                value: None,
+                count: None,
+                expect_count_err: None,
+                kill: true,
+                cancel: false,
+                calls: Arc::clone(&calls),
+            }),
+        )];
+        assert_eq!(host_take_orb(7, 3, kill), (None, 0, 0));
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
     }
 }
 

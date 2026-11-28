@@ -77,7 +77,7 @@ pub fn main() -> Result<()> {
         }
         let p = &c["player"];
         let position = Vec3::new(db(&p["pos"][0]), db(&p["pos"][1]), db(&p["pos"][2]));
-        let mut player = PlayerMotion::new(&resources, position)?;
+        let mut player = PlayerMotion::new(&resources, position);
         player.ground.on_ground = p["ground"].as_bool().unwrap();
         player.shift_key_down = p["shift"].as_bool().unwrap();
         player.yaw = fl(&p["yr"]);

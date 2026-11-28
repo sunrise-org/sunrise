@@ -339,7 +339,7 @@ pub(crate) fn with_interaction_client_game_at(
             let (client, _server) = Pipe::pair();
             game.connect_local(client, "InteractionTest").unwrap();
             game.client.remote.as_mut().unwrap().logged_in = true;
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 3.5)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 3.5)));
             game.set_local_mode(sunrise_command::args::GameMode::Creative);
             game.world
                 .chunks
@@ -364,7 +364,7 @@ pub(crate) fn with_interaction_server_game_at(
 ) {
     sunrise_gameplay::game::native_entity_refs::tests::with_game_at(root, |game| {
         game.options.dedicated = Some(Vec::new());
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 3.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 3.5)));
         game.set_mode_id(1);
         game.world
             .chunks

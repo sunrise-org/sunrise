@@ -1,9 +1,9 @@
 //! A pack's text shader reading Polytone expression uniforms (`shader_modifiers/core/text.json`)
 //! and `PolyGlobals` through a game's frames: the atlas loads the GUI's, the world's and the
 //! see-through text's programs with their uniforms, the renderer the game builds takes them, and
-//! each drawn frame shows the values the frame evaluated and gave (fullbright changes nothing),
-//! or zeros where no world runs (the title screen, a loading screen). Each case runs in a process
-//! of its own (one event loop, its own game resources).
+//! each drawn frame shows the values the frame evaluated and gave, or zeros where no world runs
+//! (the title screen, a loading screen). Each case runs in a process of its own (one event loop,
+//! its own game resources).
 use super::lightmap_expression_tests::{corner_of as corner, frame};
 use super::native_entity_refs::tests::{run_fresh_cases, with_client_game};
 use crate::game::native_hooks::particle_count_tests::frame_scene;
@@ -56,11 +56,11 @@ fn pack() -> ResourceSource {
 #[test]
 #[ignore = "daily"]
 fn a_packs_text_draws_its_expression_uniforms() {
-    if run_fresh_cases(NAME, CASE, &["world", "fullbright", "loading"]) {
+    if run_fresh_cases(NAME, CASE, &["world", "loading"]) {
         return;
     }
     let case = std::env::var(CASE).unwrap();
-    let (loading, fullbright) = (case == "loading", case == "fullbright");
+    let loading = case == "loading";
     with_client_game(|game| {
         game.client.gui =
             crate::game::UiResources::load(&pack(), std::path::Path::new("")).unwrap();
@@ -103,19 +103,13 @@ fn a_packs_text_draws_its_expression_uniforms() {
         )]);
         game.client.text_displays.0.insert(1, display);
         game.tick_text_displays(game.clock.runs_normally());
-        // Fullbright, in its own process, is on from the first frame: it changes nothing.
-        game.client.renderer.0.as_mut().unwrap().fullbright = fullbright;
         // The world text over the frame with the GUI hidden (F1), then the GUI's (F3's text)
         // over it.
         game.client.chat_ui.hide_gui = true;
-        assert_eq!(
-            corner(game, frame),
-            [153, 192, 255],
-            "fullbright {fullbright}"
-        );
+        assert_eq!(corner(game, frame), [153, 192, 255]);
         game.client.chat_ui.hide_gui = false;
         game.client.debug = true;
-        assert_eq!(corner(game, frame), [51, 192, 0], "fullbright {fullbright}");
+        assert_eq!(corner(game, frame), [51, 192, 0]);
         // The title screen: no world runs, the GUI text's value and `PolyGlobals` are 0.
         game.client.title.0 = Some(game.new_title(std::path::PathBuf::from("saves")));
         assert!(!game.reads_pack_expressions(), "none to evaluate");

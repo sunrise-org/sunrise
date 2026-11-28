@@ -37,8 +37,7 @@ pub(crate) mod item_part_tests {
                 let mut body = sunrise_sim::motion::PlayerMotion::new(
                     game.motion,
                     sunrise_core::geometry::Vec3::new(0.0, 64.0, 0.0),
-                )
-                .unwrap();
+                );
                 body.entity_id = 7;
                 game.player = Some(body);
                 reader
@@ -292,6 +291,305 @@ pub(crate) mod item_part_tests {
                 assert!(
                     trace().is_empty(),
                     "creative catalogue display slots must not dispatch pickup overrides"
+                );
+            });
+        });
+    }
+
+    /// `MenuRef::slot_holds` and `slot_gives` answer on the client, so an `ItemPart` deciding a
+    /// predicted click reads the clicked slot's rules as vanilla's client-side `Slot` gives them
+    /// (`ArmorSlot.mayPlace`, `ResultSlot.mayPlace`, `Slot.getMaxStackSize`), for the local
+    /// player's live menu only.
+    #[test]
+    #[ignore = "daily"]
+    fn item_part_reads_slot_rules_during_client_prediction() {
+        use mod_api::__private::game::Fields;
+        use mod_api::{
+            ClientHost, Flow, Hooks, Host, HostSide, ItemPart, ItemStackedOnOtherEvent, Registrar,
+            RegistrationContext,
+        };
+        use std::cell::RefCell;
+        use sunrise_gameplay_common::game::Screen;
+        use sunrise_gameplay_common::game::api_values::TryIntoApi;
+
+        thread_local! {
+            /// (host is the server, clicked menu slot, slot_holds of the carried stack, slot_gives).
+            static ASKED: RefCell<Vec<(bool, usize, Option<u32>, Option<bool>)>> =
+                const { RefCell::new(Vec::new()) };
+        }
+        struct AsksClickedSlot;
+        #[mod_api::sunrise_part]
+        impl ItemPart for AsksClickedSlot {
+            fn item_stacked_on_other(
+                &self,
+                host: HostSide<'_>,
+                event: &mut ItemStackedOnOtherEvent<'_, '_>,
+            ) -> Flow {
+                let click = &event.click;
+                // The clicking player: the server's by UUID, a client's own local player.
+                let (server, host, player): (bool, &dyn Host, _) = match &host {
+                    HostSide::Server(h) => {
+                        (true, &**h, click.player.and_then(|uuid| h.player(uuid)))
+                    }
+                    HostSide::Client(h) => (false, &**h, h.local_player()),
+                };
+                if click.direction == StackedOnOtherDirection::CarriedOnOther
+                    && let Some(carried) = click.carried().cloned()
+                    && let Some(menu) = player.and_then(|player| player.container_menu(host))
+                {
+                    let asked = (
+                        server,
+                        click.slot,
+                        menu.slot_holds(host, click.slot, &carried),
+                        menu.slot_gives(host, click.slot),
+                    );
+                    ASKED.with(|asked_all| asked_all.borrow_mut().push(asked));
+                }
+                Flow::Continue
+            }
+        }
+        struct AsksMod;
+        #[mod_api::__subscriptions]
+        impl Hooks for AsksMod {
+            fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
+                let helmet = r.item_key("minecraft:iron_helmet");
+                r.item_part(helmet, AsksClickedSlot);
+            }
+        }
+
+        let mods: Mods = vec![ModEntry::new("asks_slot_rules", Box::new(AsksMod))].into();
+        sunrise_gameplay_common::game::api_values::install_parts(&mods).unwrap();
+        mod_platform::testing::with_mods(mods, || {
+            with_client_game(|game| {
+                let (_reader, _writer) = crate::game::remote::tests::connect_menu_test(game);
+                crate::game::remote::tests::spawn_menu_test(game);
+                let mut body = sunrise_sim::motion::PlayerMotion::new(
+                    game.motion,
+                    sunrise_core::geometry::Vec3::new(0.0, 64.0, 0.0),
+                );
+                body.entity_id = 7;
+                game.player = Some(body);
+                game.creative = false;
+                game.client.screen = Screen::Inventory;
+                game.armor = Default::default();
+                let helmet = || Some(ItemStack::new("minecraft:iron_helmet", 1));
+
+                // A predicted pickup on the chest armour slot (menu 6, game 501), then on the head
+                // slot (menu 5, game 500): the Part hears each on the client host with the slot's
+                // own rules, and plain pickup then places the helmet only where it fits.
+                game.carried = helmet();
+                assert!(game.menu_ops(&[(Some(501), 0, Input::Pickup)]));
+                assert!(game.menu_ops(&[(Some(500), 0, Input::Pickup)]));
+                assert_eq!(
+                    ASKED.with(|asked| asked.take()),
+                    [
+                        (false, 6, Some(0), Some(true)),
+                        (false, 5, Some(1), Some(true))
+                    ]
+                );
+                assert_eq!(game.armor[0], helmet());
+                assert_eq!(game.carried, None);
+
+                // The same reads outside a hook, through the client host.
+                let current_menu = |host: &dyn ClientHost| {
+                    host.local_player().unwrap().container_menu(host).unwrap()
+                };
+                let inventory = current_menu(game);
+                let player = inventory.fields().player;
+                let stone = ItemStack::new("minecraft:stone", 1).try_into_api().unwrap();
+                // ResultSlot.mayPlace refuses; a plain slot holds the item's own limit.
+                assert_eq!(inventory.slot_holds(game, 0, &stone), Some(0));
+                assert_eq!(inventory.slot_holds(game, 9, &stone), Some(64));
+                assert_eq!(inventory.slot_holds(game, 5, &stone), Some(0));
+                assert_eq!(inventory.slot_gives(game, 5), Some(true));
+                assert_eq!(inventory.slot_holds(game, 46, &stone), None);
+                assert_eq!(inventory.slot_gives(game, 46), None);
+                // Another player's menu answers nothing on this client (the local profile is 42).
+                let foreign = mod_api::__private::game::menu_ref(
+                    mod_api::__private::game::player_ref(player.entity(), 43),
+                    0,
+                    inventory.fields().generation,
+                );
+                assert_eq!(foreign.slot_holds(game, 9, &stone), None);
+                assert_eq!(foreign.slot_gives(game, 9), None);
+                // A chest menu the client's prediction does not model here (no container block
+                // is open) answers nothing rather than the inventory's rules, and the replaced
+                // inventory handle is stale.
+                game.client
+                    .remote
+                    .as_mut()
+                    .unwrap()
+                    .menu
+                    .set(Some((1, "minecraft:generic_9x3".into())));
+                let chest = current_menu(game);
+                assert_eq!(chest.slot_holds(game, 54, &stone), None);
+                assert_eq!(chest.slot_gives(game, 54), None);
+                assert_eq!(inventory.slot_holds(game, 9, &stone), None);
+            });
+        });
+    }
+
+    /// A client logged in with the local player's body (entity 7, profile 42) and the survival
+    /// inventory screen open.
+    fn logged_in_inventory(game: &mut sunrise_client_gameplay::game::ClientGame<'_>) {
+        crate::game::remote::tests::spawn_menu_test(game);
+        let mut body = sunrise_sim::motion::PlayerMotion::new(
+            game.motion,
+            sunrise_core::geometry::Vec3::new(0.0, 64.0, 0.0),
+        );
+        body.entity_id = 7;
+        game.player = Some(body);
+        game.creative = false;
+        game.client.screen = sunrise_gameplay_common::game::Screen::Inventory;
+        game.armor = Default::default();
+    }
+
+    /// A `can_equip` Part that reads the armour slot it is asked about (`MenuRef::slot_holds`
+    /// asks `ArmorSlot.mayPlace` again) gets the stack's own data answer for the nested read
+    /// instead of being asked again, as nested `menu_slot_rules` reads keep the slot's own
+    /// answers; the outer read still hears the Part.
+    #[test]
+    #[ignore = "daily"]
+    fn a_can_equip_part_reads_its_own_armour_slot_without_recursing() {
+        use mod_api::{CanEquipEvent, ClientHost, Hooks, Host, ItemPart, MenuRef, Registrar};
+        use std::cell::{Cell, RefCell};
+        use sunrise_gameplay_common::game::api_values::TryIntoApi;
+
+        thread_local! {
+            static MENU: Cell<Option<MenuRef>> = const { Cell::new(None) };
+            static ASKS: Cell<u32> = const { Cell::new(0) };
+            static NESTED: RefCell<Vec<Option<u32>>> = const { RefCell::new(Vec::new()) };
+        }
+        struct ReadsItsSlot;
+        #[mod_api::sunrise_part]
+        impl ItemPart for ReadsItsSlot {
+            fn can_equip(&self, host: &dyn Host, event: &mut CanEquipEvent<'_>) {
+                let asks = ASKS.get() + 1;
+                ASKS.set(asks);
+                // Without the guard, make reentry fail the assertions rather than overflow.
+                if asks > 3 {
+                    return;
+                }
+                if let Some(menu) = MENU.get() {
+                    let nested = menu.slot_holds(host, 5, event.stack);
+                    NESTED.with(|nested_all| nested_all.borrow_mut().push(nested));
+                }
+                event.can_equip = false;
+            }
+        }
+        struct ReadsMod;
+        #[mod_api::__subscriptions]
+        impl Hooks for ReadsMod {
+            fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
+                let helmet = r.item_key("minecraft:iron_helmet");
+                r.item_part(helmet, ReadsItsSlot);
+            }
+        }
+
+        let mods: Mods = vec![ModEntry::new("reads_its_slot", Box::new(ReadsMod))].into();
+        sunrise_gameplay_common::game::api_values::install_parts(&mods).unwrap();
+        mod_platform::testing::with_mods(mods, || {
+            with_client_game(|game| {
+                let (_reader, _writer) = crate::game::remote::tests::connect_menu_test(game);
+                logged_in_inventory(game);
+                let host: &dyn ClientHost = game;
+                let inventory = host.local_player().unwrap().container_menu(host).unwrap();
+                MENU.set(Some(inventory));
+                let helmet = ItemStack::new("minecraft:iron_helmet", 1)
+                    .try_into_api()
+                    .unwrap();
+                // The Part refuses the head slot; its own read of that slot is the helmet's
+                // `equippable` answer, one piece.
+                assert_eq!(inventory.slot_holds(game, 5, &helmet), Some(0));
+                assert_eq!(ASKS.get(), 1);
+                assert_eq!(NESTED.with(|nested| nested.take()), [Some(1)]);
+                MENU.set(None);
+            });
+        });
+    }
+
+    /// On a creative item tab the click runs on the screen's `ItemPickerMenu`, but the Part is
+    /// told the slot of the player's `InventoryMenu`, the menu its `MenuRef` names: hotbar slot
+    /// `n` is 36 + `n` there, and its rules answer.
+    #[test]
+    #[ignore = "daily"]
+    fn an_item_tab_hotbar_pickup_names_the_inventory_menu_slot() {
+        use mod_api::{
+            ClientHost, Flow, Hooks, HostSide, ItemPart, ItemStackedOnOtherEvent, Registrar,
+        };
+        use std::cell::RefCell;
+        use sunrise_gameplay_common::game::Screen;
+
+        thread_local! {
+            /// (clicked menu slot, slot_holds of the carried stack there).
+            static ASKED: RefCell<Vec<(usize, Option<u32>)>> = const { RefCell::new(Vec::new()) };
+        }
+        struct AsksClickedSlot;
+        #[mod_api::sunrise_part]
+        impl ItemPart for AsksClickedSlot {
+            fn item_stacked_on_other(
+                &self,
+                host: HostSide<'_>,
+                event: &mut ItemStackedOnOtherEvent<'_, '_>,
+            ) -> Flow {
+                let HostSide::Client(host) = &host else {
+                    return Flow::Continue;
+                };
+                let host: &dyn ClientHost = &**host;
+                let click = &event.click;
+                if click.direction == StackedOnOtherDirection::CarriedOnOther
+                    && let Some(carried) = click.carried().cloned()
+                    && let Some(menu) = host.local_player().and_then(|p| p.container_menu(host))
+                {
+                    let asked = (click.slot, menu.slot_holds(host, click.slot, &carried));
+                    ASKED.with(|asked_all| asked_all.borrow_mut().push(asked));
+                }
+                Flow::Continue
+            }
+        }
+        struct AsksMod;
+        #[mod_api::__subscriptions]
+        impl Hooks for AsksMod {
+            fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
+                let stick = r.item_key("minecraft:stick");
+                r.item_part(stick, AsksClickedSlot);
+            }
+        }
+
+        let mods: Mods = vec![ModEntry::new("asks_item_tab", Box::new(AsksMod))].into();
+        sunrise_gameplay_common::game::api_values::install_parts(&mods).unwrap();
+        mod_platform::testing::with_mods(mods, || {
+            with_client_game(|game| {
+                let (_reader, _writer) = crate::game::remote::tests::connect_menu_test(game);
+                logged_in_inventory(game);
+                game.creative = true;
+                game.client.screen = Screen::Creative;
+                game.refresh_creative_tabs();
+                let item_tab = game
+                    .client
+                    .creative_screen
+                    .0
+                    .tabs
+                    .iter()
+                    .position(|t| !t.inventory && !t.search && !t.items.is_empty())
+                    .expect("creative item tab");
+                game.client.creative_screen.0.select(item_tab);
+                assert!(game.creative_tab_open());
+                game.inventory = vec![None; game.inventory.len()];
+                // Hotbar 0 and 1 (game slots 0 and 1): picker slots 45 and 46, inventory menu
+                // slots 36 and 37. A stick stacks to 64 there; 45 would be the off hand.
+                for hotbar in [0, 1] {
+                    game.carried = Some(ItemStack::new("minecraft:stick", 1));
+                    assert!(game.click_open_inventory(Some(hotbar), 0, Input::Pickup));
+                }
+                assert_eq!(
+                    ASKED.with(|asked| asked.take()),
+                    [(36, Some(64)), (37, Some(64))]
+                );
+                // The pickups themselves ran on the picker's hotbar.
+                assert_eq!(
+                    game.inventory[0].as_ref().map(|s| (&*s.item, s.count)),
+                    Some(("minecraft:stick", 1))
                 );
             });
         });

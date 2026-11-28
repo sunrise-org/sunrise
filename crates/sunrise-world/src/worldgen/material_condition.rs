@@ -494,48 +494,17 @@ impl<R: RandomSource> Compiled<R> {
             MaterialCondition::Hole | MaterialCondition::Steep
         );
         let kind = match condition {
+            // A bound tag's members were checked against the biome catalog;
+            // vanilla's `HolderSet` has no size limit, so the explicit `biome_is`
+            // list cap below applies to that JSON list alone, not to a tag.
             MaterialCondition::BiomeTag(tag) => {
-                return Self::compile(
-                    MaterialCondition::Biome(tag.members().to_vec()),
-                    root,
-                    context,
-                    depth + 1,
-                );
+                return Self::bind_biomes(tag.members().to_vec(), context);
             }
             MaterialCondition::Biome(names) => {
                 if names.len() > 8192 {
                     return Err(DecodeError::Field("biome condition size"));
                 }
-                let names = names
-                    .iter()
-                    .map(|name| codec::identifier(name))
-                    .collect::<Result<BTreeSet<_>, _>>()?;
-                match &context.possible_biomes {
-                    Some(possible) if names.is_disjoint(possible) => Kind::Constant(false),
-                    Some(possible) if possible.is_subset(&names) => Kind::Constant(true),
-                    // An empty list would not ask whether the surface numbers
-                    // its biomes.
-                    _ if names.is_empty() => Kind::Biome(names),
-                    _ => match names
-                        .iter()
-                        .map(|name| context.surface.biome_index(name))
-                        .collect::<Option<Vec<_>>>()
-                    {
-                        // Names no biome has never match the block's biome.
-                        Some(ids) => {
-                            let mut bits = Vec::new();
-                            for id in ids.into_iter().flatten() {
-                                let word = id as usize / 64;
-                                if bits.len() <= word {
-                                    bits.resize(word + 1, 0);
-                                }
-                                bits[word] |= 1 << (id % 64);
-                            }
-                            Kind::BiomeIds(bits)
-                        }
-                        None => Kind::Biome(names),
-                    },
-                }
+                return Self::bind_biomes(names, context);
             }
             MaterialCondition::NoiseThreshold {
                 noise,
@@ -575,6 +544,48 @@ impl<R: RandomSource> Compiled<R> {
                 context.block_revision
             }
             .wrapping_sub(1),
+            result: None,
+        })
+    }
+    /// A biome set's `Kind` after identifier validation, as `Biome` and a
+    /// bound `BiomeTag` both compile it.
+    fn bind_biomes<S: MaterialSurfaceQueries>(
+        names: Vec<String>,
+        context: &mut Context<S>,
+    ) -> Result<Self, DecodeError> {
+        let names = names
+            .iter()
+            .map(|name| codec::identifier(name))
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        let kind = match &context.possible_biomes {
+            Some(possible) if names.is_disjoint(possible) => Kind::Constant(false),
+            Some(possible) if possible.is_subset(&names) => Kind::Constant(true),
+            // An empty list would not ask whether the surface numbers its
+            // biomes.
+            _ if names.is_empty() => Kind::Biome(names),
+            _ => match names
+                .iter()
+                .map(|name| context.surface.biome_index(name))
+                .collect::<Option<Vec<_>>>()
+            {
+                // Names no biome has never match the block's biome.
+                Some(ids) => {
+                    let mut bits = Vec::new();
+                    for id in ids.into_iter().flatten() {
+                        let word = id as usize / 64;
+                        if bits.len() <= word {
+                            bits.resize(word + 1, 0);
+                        }
+                        bits[word] |= 1 << (id % 64);
+                    }
+                    Kind::BiomeIds(bits)
+                }
+                None => Kind::Biome(names),
+            },
+        };
+        Ok(Self {
+            kind,
+            revision: context.block_revision.wrapping_sub(1),
             result: None,
         })
     }

@@ -30,25 +30,17 @@ impl ModEventsRegistrar for PartRegistrar {
                     reason: "the listener is not a method of this mod's Hooks type".into(),
                 });
             }
-            let clash = self
-                .parts
-                .mod_events
-                .iter()
-                .filter(|(other, _)| **other != event)
-                .flat_map(|(_, listeners)| listeners)
-                .find(|other| other.event_id == id);
-            if let Some(other) = clash {
-                return Err(DeclarationError::Rejected {
+            self.type_identities
+                .claim(
+                    TypeIdentityKind::ModEvent,
+                    id,
+                    self.mod_id,
+                    TypeIdentity::typed(event, type_name),
+                )
+                .map_err(|reason| DeclarationError::Rejected {
                     id: id.into(),
-                    reason: format!(
-                        "event {id} is listened to with two types, {} by {} and \
-                         {type_name} by {}",
-                        other.event_type,
-                        other.owner.id(),
-                        self.mod_id
-                    ),
-                });
-            }
+                    reason,
+                })?;
             let listeners = self.parts.mod_events.entry(event).or_default();
             let index = listeners.partition_point(|other| other.priority >= priority);
             listeners.insert(
@@ -60,7 +52,6 @@ impl ModEventsRegistrar for PartRegistrar {
                     ),
                     mod_index: self.mod_index,
                     event_id: id,
-                    event_type: type_name,
                     client,
                     priority,
                     receive_cancelled,

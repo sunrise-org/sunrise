@@ -15,7 +15,7 @@ fn player_game(
     resources: &mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
 ) -> sunrise_gameplay::game::ServerGame<'_> {
     let mut game = server_game(resources);
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)));
     // A fixed name: no generated sunrise-player.txt in the working directory.
     game.options.player_name = Some("PotionContents".into());
     game.build_registries();

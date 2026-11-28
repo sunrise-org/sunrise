@@ -297,7 +297,7 @@ impl mod_api::__private::LivingReads for BodyReads<'_> {
 /// `dispatch` runs with it once its reads are built, and not at all where they cannot be (no
 /// open world names the entity). Called only behind the hook's subscription check.
 pub fn with_lent_view(
-    lend: sunrise_sim::health::LivingLend<'_>,
+    lend: sunrise_sim::mobs::LivingLend<'_>,
     dispatch: impl FnOnce(&mod_api::LivingView<'_>),
 ) {
     let Some(reads) = (lend.reads)() else {
@@ -868,7 +868,7 @@ pub trait NativeLivingBodyGameExt6<'__sg>: crate::game::SideGame<'__sg> {
         };
         Ok(self
             .motion
-            .attributes
+            .attributes()
             .attribute_names_for(entity)
             .try_for_each(visit))
     }
@@ -880,7 +880,7 @@ pub trait NativeLivingBodyGameExt6<'__sg>: crate::game::SideGame<'__sg> {
         id: &str,
         visit: &mut dyn FnMut(AttributeModifierView<'_>) -> ControlFlow<()>,
     ) -> Result<ControlFlow<()>, EntityReadError> {
-        let catalog = &self.motion.attributes;
+        let catalog = self.motion.attributes();
         let modifiers = match self.native_living_visit_target(living)? {
             Target::Player => self
                 .player
@@ -939,7 +939,7 @@ pub trait NativeLivingBodyGameExt6<'__sg>: crate::game::SideGame<'__sg> {
     ) -> Option<f64> {
         body_attribute(
             self.native_living_body(target)?,
-            &self.motion.attributes,
+            self.motion.attributes(),
             name,
             kind,
         )

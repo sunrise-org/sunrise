@@ -360,7 +360,7 @@ impl OptionsUi {
                     rows.end(&mut out, y);
                 }
                 // Sunrise's own keys, under a category of their own after vanilla's: the same
-                // bindings the Extras and PvP pages set.
+                // bindings the Gameplay page sets.
                 let sunrise: Vec<_> = crate::extras::KEYS
                     .iter()
                     .filter(|(_, caption)| {

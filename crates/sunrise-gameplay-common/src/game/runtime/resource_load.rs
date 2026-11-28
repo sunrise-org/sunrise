@@ -453,60 +453,13 @@ pub(in crate::game) fn gameplay_tables(
             .map_err(|e| e.to_string())
         });
         let motion = startup::time("core.motion", || {
-            let mut motion =
-                MotionResources::load_with_conditions(root, assets, &facts, conditions)?;
-            // #812: the attribute types mods declare come first, appended
-            // after every vanilla attribute in the sorted catalog order, so
-            // the rows below may name a mod's own new attribute and the
-            // network ids stay the same on every side running these mods.
-            let declared = mod_api::__private::attribute_declarations();
-            if !declared.is_empty() {
-                motion.attributes =
-                    std::sync::Arc::new(with_mod_attributes(&motion.attributes, declared)?);
-            }
-            // #3728: then the bounds mods widen, on vanilla's attributes and
-            // the declared ones alike, before anything reads a definition.
-            let widenings = mod_api::__private::attribute_bounds_widenings();
-            if !widenings.is_empty() {
-                motion.attributes =
-                    std::sync::Arc::new(with_mod_widened_bounds(&motion.attributes, widenings)?);
-            }
-            // #845: a mod's declared attribute sets
-            // (`EntityAttributeCreationEvent`) become their entity types' rows
-            // in the live attribute map's catalog — the one record the mob
-            // logic and the attribute sync read (#1493) — built from the
-            // template's row, as the type's content row is.
-            for declaration in mod_api::__private::entity_attribute_declarations() {
-                motion.attributes = std::sync::Arc::new(
-                    motion
-                        .attributes
-                        .with_entity_row(
-                            &declaration.id,
-                            &declaration.template,
-                            &declaration.attributes,
-                        )
-                        .map_err(|error| {
-                            format!("mod entity attributes of {}: {error}", declaration.id)
-                        })?,
-                );
-            }
-            // #846: then the attributes mods add to existing types
-            // (`EntityAttributeModificationEvent`, fired after the creation
-            // event), on the same catalog rows.
-            let modifications = mod_api::__private::entity_attribute_modifications();
-            if !modifications.is_empty() {
-                motion.attributes = std::sync::Arc::new(with_mod_attribute_additions(
-                    &motion.attributes,
-                    modifications,
-                )?);
-            }
-            // #4473: then the attributes the content mods' effects declare
-            // modifiers on, which the complete catalog knows.
-            check_effect_modifier_attributes(
-                &motion.attributes,
-                sunrise_game_data::potions::mod_effects(),
-            )?;
-            Ok::<_, Box<dyn std::error::Error>>(motion)
+            MotionResources::load_with_conditions(
+                root,
+                assets,
+                &facts,
+                conditions,
+                finalize_attribute_catalog,
+            )
         })
         .map_err(|e| e.to_string());
         (light.join(), motion)
@@ -518,6 +471,50 @@ pub(in crate::game) fn gameplay_tables(
         facts,
         gameplay_projection,
     })
+}
+
+fn finalize_attribute_catalog(
+    mut catalog: sunrise_world::attributes::entity::Catalog,
+) -> Result<sunrise_world::attributes::entity::Catalog> {
+    // #812: the attribute types mods declare come first, appended
+    // after every vanilla attribute in the sorted catalog order, so
+    // the rows below may name a mod's own new attribute and the
+    // network ids stay the same on every side running these mods.
+    let declared = mod_api::__private::attribute_declarations();
+    if !declared.is_empty() {
+        catalog = with_mod_attributes(&catalog, declared)?;
+    }
+    // #3728: then the bounds mods widen, on vanilla's attributes and
+    // the declared ones alike, before anything reads a definition.
+    let widenings = mod_api::__private::attribute_bounds_widenings();
+    if !widenings.is_empty() {
+        catalog = with_mod_widened_bounds(&catalog, widenings)?;
+    }
+    // #845: a mod's declared attribute sets
+    // (`EntityAttributeCreationEvent`) become their entity types' rows
+    // in the live attribute map's catalog — the one record the mob
+    // logic and the attribute sync read (#1493) — built from the
+    // template's row, as the type's content row is.
+    for declaration in mod_api::__private::entity_attribute_declarations() {
+        catalog = catalog
+            .with_entity_row(
+                &declaration.id,
+                &declaration.template,
+                &declaration.attributes,
+            )
+            .map_err(|error| format!("mod entity attributes of {}: {error}", declaration.id))?;
+    }
+    // #846: then the attributes mods add to existing types
+    // (`EntityAttributeModificationEvent`, fired after the creation
+    // event), on the same catalog rows.
+    let modifications = mod_api::__private::entity_attribute_modifications();
+    if !modifications.is_empty() {
+        catalog = with_mod_attribute_additions(&catalog, modifications)?;
+    }
+    // #4473: then the attributes the content mods' effects declare
+    // modifiers on, which the complete catalog knows.
+    check_effect_modifier_attributes(&catalog, sunrise_game_data::potions::mod_effects())?;
+    Ok(catalog)
 }
 
 /// Publishes `catalog`'s entity type suppliers, the ones mods declared and added to included,
@@ -754,7 +751,7 @@ pub fn prepare_core(
         collision,
     } = core;
     // The accepted suppliers and resolved entity keys belong to the same Parts installation.
-    publish_entity_type_defaults(&motion.attributes);
+    publish_entity_type_defaults(motion.attributes());
     let assets = Arc::new(assets);
     // The namespaces of the mod block states registered now: what every level.dat saved from
     // here on records, and what a world is checked against before it opens (`level_mods`). A

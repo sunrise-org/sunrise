@@ -4,7 +4,7 @@ use super::*;
 #[derive(sunrise_mod_api_macros::Wire)]
 pub struct ToolUse {
     pub player: Option<u32>,
-    pub hand: crate::client::first_person::Hand,
+    pub hand: crate::Hand,
     pub pos: [i32; 3],
     pub face: [i32; 3],
     pub click: [f64; 3],

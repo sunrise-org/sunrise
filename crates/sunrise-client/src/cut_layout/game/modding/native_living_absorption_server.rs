@@ -29,7 +29,7 @@ mod tests {
     #[ignore = "daily"]
     fn a_players_absorption_is_cut_to_zero_and_max_absorption_and_synced() {
         with_game(|game| {
-            let mut player = PlayerMotion::new(game.motion, Vec3::ZERO).unwrap();
+            let mut player = PlayerMotion::new(game.motion, Vec3::ZERO);
             player
                 .set_modifier(
                     "minecraft:max_absorption",
@@ -116,7 +116,7 @@ mod tests {
     #[ignore = "daily"]
     fn an_aborted_transaction_restores_the_absorption_of_a_player_and_a_mob() {
         with_resident_game(|game| {
-            let mut player = PlayerMotion::new(game.motion, Vec3::ZERO).unwrap();
+            let mut player = PlayerMotion::new(game.motion, Vec3::ZERO);
             player
                 .set_modifier(
                     "minecraft:max_absorption",

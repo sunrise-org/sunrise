@@ -291,7 +291,7 @@ fn a_detonate_listener_edits_reorders_and_adds_positions() {
 #[ignore = "daily"]
 fn tnt_primes_owned_by_the_causing_entity() {
     with_watch(|game, _| {
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(14.5, 80.0, 14.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(14.5, 80.0, 14.5)));
         bind_local_player(game, 11, 123);
         set(game, [5, 80, 5], "tnt");
         let mut blast = blast(ExplosionInteraction::Tnt);

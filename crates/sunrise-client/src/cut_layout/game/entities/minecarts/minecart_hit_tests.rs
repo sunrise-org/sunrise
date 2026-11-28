@@ -18,9 +18,10 @@ fn game_with_player(
     let mut game = server_game(resources);
     game.build_registries();
     game.set_allow_commands(true);
-    game.player = Some(
-        sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(8.5, 64.0, 8.5)).unwrap(),
-    );
+    game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+        game.motion,
+        Vec3::new(8.5, 64.0, 8.5),
+    ));
     game
 }
 

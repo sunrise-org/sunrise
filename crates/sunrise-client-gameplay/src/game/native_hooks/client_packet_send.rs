@@ -9,7 +9,7 @@ impl crate::game::ClientGame<'_> {
     /// order it sends them. Not heard: what the network thread sends itself
     /// (keep-alives, configuration pongs, cookies, the configuration phase), the answers the
     /// connection sends in whichever phase it is in (a resource pack's status, a
-    /// dialog's custom click action), and far terrain requests. Cancel drops the
+    /// dialog's custom click action). Cancel drops the
     /// packet: the game goes on as if it had been sent. Client-side, on any
     /// server, single player's own included. Every packet exposes its protocol
     /// type id; custom payloads also expose their channel and raw bytes.

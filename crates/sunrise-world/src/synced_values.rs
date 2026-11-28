@@ -75,8 +75,15 @@ impl<T: SyncedValue> SyncedValues<T> {
             })
             .collect::<Vec<_>>();
         entries.sort_unstable_by_key(|e| e.id);
-        if entries.iter().any(|e| e.id == 255) || entries.windows(2).any(|e| e[0].id == e[1].id) {
-            return Err(invalid("duplicate or reserved synchronized field ID"));
+        // SynchedEntityData.defineId allows IDs only through 254.
+        if entries.last().is_some_and(|entry| entry.id == 255) {
+            return Err(invalid("reserved synchronized field ID 255"));
+        }
+        if let Some(pair) = entries.windows(2).find(|pair| pair[0].id == pair[1].id) {
+            return Err(invalid(format!(
+                "duplicate synchronized field ID {}",
+                pair[0].id
+            )));
         }
         Ok(Self {
             entries,

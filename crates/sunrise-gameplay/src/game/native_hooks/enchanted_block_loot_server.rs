@@ -72,7 +72,7 @@ pub(in crate::game) mod tests {
             game.server.lan_acting_entity = None;
             game.server.lan_acting = None;
             let origin = sunrise_core::geometry::Vec3::ZERO;
-            let mut host = sunrise_sim::motion::PlayerMotion::new(game.motion, origin).unwrap();
+            let mut host = sunrise_sim::motion::PlayerMotion::new(game.motion, origin);
             host.entity_id = 7;
             game.player = Some(host);
             with_mods(mods(None), || {

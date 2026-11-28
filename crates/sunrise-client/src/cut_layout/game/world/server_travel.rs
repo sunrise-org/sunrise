@@ -53,8 +53,7 @@ pub(crate) mod tests {
         super::super::native_guest_turn_tests::with_guests(|game| {
             // A player whose file was saved 7 ticks into its cooldown, before its first body.
             let body =
-                sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5))
-                    .unwrap();
+                sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5));
             game.server.lan.as_mut().unwrap().hub.update_guest(12, |g| {
                 g.motion = None;
                 g.loaded_body = Some(sunrise_sim::lan::guest::SavedBody::of(&body));
@@ -107,13 +106,10 @@ pub(crate) mod tests {
                     g.sleeping = sleeping;
                     g.vehicle = riding.then_some(99);
                     g.motion = body.then(|| {
-                        Box::new(
-                            sunrise_sim::motion::PlayerMotion::new(
-                                game.common.motion,
-                                Vec3::new(3.5, 64.0, 5.5),
-                            )
-                            .unwrap(),
-                        )
+                        Box::new(sunrise_sim::motion::PlayerMotion::new(
+                            game.common.motion,
+                            Vec3::new(3.5, 64.0, 5.5),
+                        ))
                     });
                     if dead {
                         g.motion.as_mut().unwrap().set_health(0.0, false).unwrap();
@@ -138,13 +134,10 @@ pub(crate) mod tests {
             game.server.lan.as_mut().unwrap().hub.update_guest(12, |g| {
                 g.sleeping = false;
                 g.vehicle = Some(99);
-                g.motion = Some(Box::new(
-                    sunrise_sim::motion::PlayerMotion::new(
-                        game.common.motion,
-                        Vec3::new(3.5, 64.0, 5.5),
-                    )
-                    .unwrap(),
-                ));
+                g.motion = Some(Box::new(sunrise_sim::motion::PlayerMotion::new(
+                    game.common.motion,
+                    Vec3::new(3.5, 64.0, 5.5),
+                )));
             });
             let threshold = game
                 .ui
@@ -193,13 +186,10 @@ pub(crate) mod tests {
                 game.world.set(3, 64, 5, portal).unwrap();
                 game.server.lan.as_mut().unwrap().hub.update_guest(12, |g| {
                     g.position = [3.5, 64.0, 5.5];
-                    g.motion = Some(Box::new(
-                        sunrise_sim::motion::PlayerMotion::new(
-                            game.common.motion,
-                            Vec3::new(3.5, 64.0, 5.5),
-                        )
-                        .unwrap(),
-                    ));
+                    g.motion = Some(Box::new(sunrise_sim::motion::PlayerMotion::new(
+                        game.common.motion,
+                        Vec3::new(3.5, 64.0, 5.5),
+                    )));
                 });
                 // A survival player whose wait reaches the portal's transition time this tick.
                 let threshold = game.ui.rules.int_at(
@@ -263,6 +253,7 @@ pub(crate) mod tests {
                 // It left with 7; the source level has run it down to 3 since.
                 game.server
                     .portals
+                    .level
                     .entities
                     .entry(base + 1)
                     .or_default()
@@ -281,7 +272,7 @@ pub(crate) mod tests {
                     game.mob_object(base + 10).is_some(),
                     "natural carrier arrival must transfer retained passenger"
                 );
-                assert_eq!(game.server.portals.entities[&(base + 1)].cooldown, 7);
+                assert_eq!(game.server.portals.level.entities[&(base + 1)].cooldown, 7);
                 assert!(
                     !game
                         .server
@@ -290,6 +281,7 @@ pub(crate) mod tests {
                         .parked_mut(source)
                         .unwrap()
                         .portal_states
+                        .entities
                         .contains_key(&(base + 1))
                 );
                 game.native_joins_flush(false, 0);
@@ -368,6 +360,7 @@ pub(crate) mod tests {
                     game.persist.forced_meta.insert(leaf, [5, 6, 7, 8]);
                     game.server
                         .portals
+                        .level
                         .entities
                         .entry(leaf)
                         .or_default()
@@ -413,7 +406,7 @@ pub(crate) mod tests {
                         Vec3::new(32.0, 91.0, 48.0)
                     );
                     assert_eq!(game.persist.forced_meta.get(&leaf), Some(&[5, 6, 7, 8]));
-                    assert_eq!(game.server.portals.entities[&leaf].cooldown, 19);
+                    assert_eq!(game.server.portals.level.entities[&leaf].cooldown, 19);
                     assert_eq!(state.get(game, Holder::Entity(leaf), Clone::clone), Ok(77));
                     if !conflict {
                         assert_eq!(state.get(game, Holder::Entity(held), Clone::clone), Ok(41));
@@ -526,7 +519,7 @@ pub(crate) mod tests {
                 game,
                 sunrise_core::position::ChunkPos::new(0, 0),
             );
-            game.server.tickets.0.add_portal((0, 0));
+            game.server.chunk_ticking.tickets.add_portal((0, 0));
             game.update_chunk_tickets();
             assert!(game.entity_ticking_area()(1, 2));
             // Supply the block's real inside notification, then exercise the actual
@@ -534,6 +527,7 @@ pub(crate) mod tests {
             let delay = sunrise_sim::nether_portal::ENTITY_DELAY;
             game.server
                 .portals
+                .level
                 .entities
                 .entry(root)
                 .or_default()

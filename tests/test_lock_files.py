@@ -35,6 +35,7 @@ class LockFileTests(unittest.TestCase):
         """Another process holds `path` locked, with "held" in it, until the returned process is stopped."""
         process = subprocess.Popen([sys.executable, "-c", HOLDER, str(path), str(ROOT)], stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE, text=True)
+        self.addCleanup(process.stdout.close)
         self.addCleanup(process.wait)
         self.addCleanup(process.stdin.close)
         self.assertEqual(process.stdout.readline().strip(), "locked")
@@ -43,6 +44,7 @@ class LockFileTests(unittest.TestCase):
     def release(self, process):
         process.stdin.close()
         process.wait()
+        process.stdout.close()
 
     def test_a_machine_slot_held_elsewhere_keeps_its_content(self):
         slots = self.root / "slots"

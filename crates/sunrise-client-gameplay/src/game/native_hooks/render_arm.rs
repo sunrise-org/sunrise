@@ -24,3 +24,7 @@ impl crate::game::ClientGame<'_> {
         self.fire_render_arm(player, player_entity_id, left, draw, canceled);
     }
 }
+
+#[cfg(all(test, feature = "client"))]
+#[path = "render_arm_tests.rs"]
+mod tests;

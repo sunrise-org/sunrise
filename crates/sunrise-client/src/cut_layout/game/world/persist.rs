@@ -507,7 +507,7 @@ mod item_display_saved_transform_tests {
                 .add_empty_chunk(ChunkPos::new(x, z))
                 .unwrap();
         }
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)));
         game.creative = true;
         assert!(game.run_command("fill 0 199 0 31 199 31 stone"));
         assert!(
@@ -765,7 +765,7 @@ mod baby_modifier_mutation_tests {
                 .unwrap();
             assert!(game.run_command("forceload add 0 0"));
             assert!(game.run_command("difficulty normal"));
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)));
             game.load_ticking_neighbourhood(0, 0);
             game.creative = true;
             test(game);
@@ -1050,7 +1050,7 @@ mod attribute_instance_save_tests {
                 .add_empty_chunk(ChunkPos::new(0, 0))
                 .unwrap();
             assert!(game.run_command("forceload add 0 0"));
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)));
             game.load_ticking_neighbourhood(0, 0);
             game.creative = true;
             test(game);
@@ -1238,7 +1238,7 @@ mod mob_inventory_merge_tests {
                 .add_empty_chunk(ChunkPos::new(0, 0))
                 .unwrap();
             assert!(game.run_command("forceload add 0 0"));
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)));
             game.load_ticking_neighbourhood(0, 0);
             game.creative = true;
             test(game);
@@ -1492,7 +1492,7 @@ mod invalid_passenger_tests {
                 .add_empty_chunk(ChunkPos::new(0, 0))
                 .unwrap();
             assert!(game.run_command("forceload add 0 0"));
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)));
             game.load_ticking_neighbourhood(0, 0);
             game.creative = true;
             let time = game.world.game_time;
@@ -1698,7 +1698,7 @@ mod h262_enderman_absolute_anger_tests {
         );
         assert!(game.run_command("difficulty normal"));
         assert!(game.run_command("forceload add 0 0"));
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)));
         game.creative = true;
         assert!(game.run_command("fill 0 199 0 31 199 31 stone"));
         assert!(
@@ -1944,7 +1944,7 @@ mod sulfur_body_attribute_tests {
         assert!(game.run_command("forceload add 0 0"));
         assert!(game.run_command("difficulty normal"));
         assert!(game.run_command("scoreboard objectives add h192 dummy"));
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)));
         game.creative = true;
         game.load_ticking_neighbourhood(0, 0);
         test(&mut game);
@@ -2240,7 +2240,7 @@ mod summoned_knot_tests {
                 .add_empty_chunk(ChunkPos::new(x, z))
                 .unwrap();
         }
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)));
         game.creative = true;
         assert!(game.run_command("fill 0 199 0 31 199 31 stone"));
         assert!(
@@ -2471,13 +2471,13 @@ mod summoned_knot_tests {
             assert!(game.use_knot([14, 200, 2], false));
             assert_eq!(game.mobs[pig].extra.leash, Some(Holder::Knot([14, 200, 2])));
             game.lan_assign_ids();
-            let natural = game.server.knot_ids[&[14, 200, 2]];
+            let natural = game.server.knot_state.knot_ids[&[14, 200, 2]];
             let ids = summon_knots(game);
             for _ in 0..101 {
                 game.tick().unwrap();
             }
             game.lan_assign_ids();
-            assert_eq!(game.server.knot_ids[&[14, 200, 2]], natural);
+            assert_eq!(game.server.knot_state.knot_ids[&[14, 200, 2]], natural);
             let pig = game
                 .mobs
                 .iter()
@@ -2681,7 +2681,7 @@ mod mob_hurt_cooldown_tests {
                 .unwrap();
             assert!(game.run_command("forceload add 0 0"));
             assert!(game.run_command("difficulty normal"));
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)));
             game.load_ticking_neighbourhood(0, 0);
             game.creative = true;
             test(game);
@@ -2966,7 +2966,7 @@ mod trader_llama_discard_tests {
         game.load_ticking_neighbourhood(0, 0);
         assert!(game.run_command("forceload add 0 0"));
         assert!(game.run_command("difficulty normal"));
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)));
         game.creative = true;
         test(&mut game);
     }

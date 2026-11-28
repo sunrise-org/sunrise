@@ -125,8 +125,7 @@ use sunrise_hooks::tunnel;
 /// connection (`TransferState`), so a proxy's backend switch keeps them.
 pub type Cookies = Arc<Mutex<HashMap<String, Vec<u8>>>>;
 
-/// A recording of the session's packets: the tap a replay recorder plugs into. Replay recording is a
-/// platform feature (docs/layers.md, "Controllers, replays and UI pages"); the engine only
+/// A recording of the session's packets. The engine only
 /// hands it the packets: the network thread what it receives, the game thread what the client makes for
 /// the recording itself (its own movement, pose and swings).
 pub trait PacketRecorder: Send {
@@ -173,14 +172,13 @@ pub enum Event {
     QuietCommands,
     /// The server supports private custom recipe-book synchronization.
     CustomBooks,
-    /// The server samples far terrain for this client (`lod_net`).
-    FarTerrain(crate::lod_net::Offer),
     /// ClientConfigurationPacketListenerImpl.handleEnabledFeatures.
     Features(Vec<String>),
     /// Configuration finished: the play state begins with these registries.
     Joined {
         registries: Arc<Dynamic>,
         datapacks: crate::datapack_net::Receiver,
+        custom_registries: crate::custom_registry_net::SyncedCustomRegistries,
         uuid: u128,
         name: String,
     },
@@ -208,6 +206,7 @@ pub enum Event {
     Reconfigured {
         registries: Arc<Dynamic>,
         datapacks: crate::datapack_net::Receiver,
+        custom_registries: crate::custom_registry_net::SyncedCustomRegistries,
     },
     /// ClientboundResourcePackPushPacket, in configuration or in play.
     PackPush(cfg::ResourcePackPush),
@@ -276,7 +275,6 @@ impl Event {
             | Self::Joined { .. }
             | Self::Reconfigured { .. }
             | Self::Features(_)
-            | Self::FarTerrain(_)
             | Self::CustomBooks
             | Self::QuietCommands
             | Self::DecodeError(_)
@@ -312,25 +310,25 @@ impl Event {
             Self::Configuration(task) => task.owned_bytes(),
             Self::Cookie(task) => size_of::<CookieTask>() + task.cookie.owned_bytes(),
             Self::QuietCommands | Self::CustomBooks | Self::ClearDialog | Self::PackPop(_) => 0,
-            Self::FarTerrain(crate::lod_net::Offer {
-                distance: _,
-                in_flight: _,
-                per_second: _,
-            }) => 0,
             Self::Features(values) => values.owned_heap_bytes(),
             // configure only inserts/replaces before freezing these snapshots.
             Self::Joined {
                 registries,
                 datapacks,
+                custom_registries,
                 name,
                 ..
             } => dynamic(registries)
                 .saturating_add(datapacks.owned_heap_bytes())
+                .saturating_add(custom_registries.owned_heap_bytes())
                 .saturating_add(name.capacity()),
             Self::Reconfigured {
                 registries,
                 datapacks,
-            } => dynamic(registries).saturating_add(datapacks.owned_heap_bytes()),
+                custom_registries,
+            } => dynamic(registries)
+                .saturating_add(datapacks.owned_heap_bytes())
+                .saturating_add(custom_registries.owned_heap_bytes()),
             Self::Packet(packet) | Self::ObservePacket(packet) => {
                 size_of::<play::Clientbound>() + packet.owned_heap_bytes()
             }
@@ -476,8 +474,6 @@ pub struct Session {
     pub cookies: Cookies,
     /// SUNRISE_NET_DEBUG=1 logs every packet sent from the game thread.
     debug: bool,
-    /// The far terrain requests waiting for the server (`lod_net`).
-    far: Arc<crate::lod_net::Inbox>,
     /// The recording running, if any.
     recorder: RecorderSlot,
     pings: PingSamples,
@@ -508,9 +504,20 @@ impl Session {
         lang: Arc<Language>,
         resources: Arc<ItemData>,
         reports: Arc<crate::chunk_io::Reports>,
+        custom_registries: crate::custom_registry_net::LocalRegistries,
     ) -> Self {
         Self::start(
-            address, name, auth, info, lang, None, None, resources, reports, false,
+            address,
+            name,
+            auth,
+            info,
+            lang,
+            None,
+            None,
+            resources,
+            reports,
+            custom_registries,
+            false,
         )
     }
     /// `ClientHandshakePacketListenerImpl.handleHello`: LAN entries can continue
@@ -524,9 +531,20 @@ impl Session {
         lang: Arc<Language>,
         resources: Arc<ItemData>,
         reports: Arc<crate::chunk_io::Reports>,
+        custom_registries: crate::custom_registry_net::LocalRegistries,
     ) -> Self {
         Self::start(
-            address, name, auth, info, lang, None, None, resources, reports, true,
+            address,
+            name,
+            auth,
+            info,
+            lang,
+            None,
+            None,
+            resources,
+            reports,
+            custom_registries,
+            true,
         )
     }
     /// `ConnectScreen.startConnecting` for a `transfer`: the cookies the
@@ -540,6 +558,7 @@ impl Session {
         cookies: Cookies,
         resources: Arc<ItemData>,
         reports: Arc<crate::chunk_io::Reports>,
+        custom_registries: crate::custom_registry_net::LocalRegistries,
     ) -> Self {
         Self::start(
             address,
@@ -551,6 +570,7 @@ impl Session {
             Some(cookies),
             resources,
             reports,
+            custom_registries,
             false,
         )
     }
@@ -566,6 +586,7 @@ impl Session {
         lang: Arc<Language>,
         resources: Arc<ItemData>,
         reports: Arc<crate::chunk_io::Reports>,
+        custom_registries: crate::custom_registry_net::LocalRegistries,
     ) -> Self {
         Self::start(
             "local",
@@ -577,10 +598,11 @@ impl Session {
             None,
             resources,
             reports,
+            custom_registries,
             false,
         )
     }
-    /// A lightweight session for studio replay playback without background network IO.
+    /// A lightweight offline session without background network IO.
     pub fn replay(name: &str) -> Self {
         let (_send, events) = event_channel();
         Self {
@@ -590,12 +612,11 @@ impl Session {
             configuring: Arc::new(AtomicBool::new(false)),
             thread: None,
             payloads: crate::raw_payloads::Transport::empty(),
-            address: "studio-replay".to_owned(),
+            address: "offline".to_owned(),
             name: name.to_owned(),
             counters: Arc::new(Mutex::new(None)),
             cookies: Default::default(),
             debug: false,
-            far: Arc::new(crate::lod_net::Inbox::default()),
             recorder: Arc::new(Mutex::new(None)),
             pings: Arc::default(),
             serial: next_serial(),
@@ -612,6 +633,7 @@ impl Session {
         transfer_from: Option<Cookies>,
         resources: Arc<ItemData>,
         reports: Arc<crate::chunk_io::Reports>,
+        custom_registries: crate::custom_registry_net::LocalRegistries,
         lan: bool,
     ) -> Self {
         let (send, events) = event_channel();
@@ -632,8 +654,6 @@ impl Session {
         let (thread_writer, thread_counters, thread_cookies) =
             (writer.clone(), counters.clone(), cookies.clone());
         let thread_configuring = configuring.clone();
-        let far = Arc::new(crate::lod_net::Inbox::default());
-        let thread_far = far.clone();
         let recorder = Arc::new(Mutex::new(None));
         let thread_recorder = recorder.clone();
         let pings = Arc::default();
@@ -659,7 +679,6 @@ impl Session {
                         &thread_configuring,
                         &thread_counters,
                         &thread_cookies,
-                        &thread_far,
                         transfer_from,
                         &resources,
                         lan,
@@ -667,6 +686,7 @@ impl Session {
                         &thread_payloads,
                         &thread_pings,
                         &reports,
+                        &custom_registries,
                         &mut after_login,
                     )
                 });
@@ -674,7 +694,6 @@ impl Session {
                 // the payload epoch when main drops the listener, so a bundle
                 // already in its member loop still has its handler table.
                 report_connection_end(result, &thread_writer, &send, after_login);
-                thread_far.cancel();
             })
             .inspect_err(|error| {
                 // No reader runs to report the end: say it here, or the session waits forever.
@@ -699,7 +718,6 @@ impl Session {
             counters,
             cookies,
             debug,
-            far,
             recorder,
             pings,
             serial: next_serial(),
@@ -794,7 +812,7 @@ impl Session {
         initialize(&recorder);
         *slot = Some(Box::new(recorder));
     }
-    /// Stop recording and finalize the `.mcpr` archive.
+    /// Stop recording and finalize the recorder output.
     pub fn stop_recording(&self) -> Option<std::io::Result<PathBuf>> {
         let rec = self.recorder.lock().unwrap().take()?;
         Some(rec.stop())
@@ -892,36 +910,6 @@ impl Session {
             .as_ref()
             .ok_or(mod_api::PayloadSendError::Disconnected)?
             .prepare_payload(body, id)
-    }
-    /// Far terrain the server samples, as it offered (`Event::FarTerrain`):
-    /// biomes named by this client's indices, block states below `states`.
-    pub fn far_terrain(
-        &self,
-        offer: crate::lod_net::Offer,
-        biomes: HashMap<String, u16>,
-        states: u32,
-    ) -> Arc<crate::lod_net::RemoteSource> {
-        crate::lod_net::RemoteSource::new(self.far.clone(), offer, biomes, states)
-    }
-    /// The far terrain requests its samplers queued go to the server, from
-    /// the game thread, among its other packets.
-    pub fn send_far_terrain(&self) {
-        for data in self.far.requests() {
-            self.send(play::Serverbound::CustomPayload(cfg::CustomPayload {
-                channel: crate::lod_net::CHANNEL.into(),
-                data,
-            }));
-        }
-    }
-    /// The far terrain made with [`Self::far_terrain`] ends: its samplers
-    /// stop waiting for the server.
-    pub fn cancel_far_terrain(&self) {
-        self.far.cancel();
-    }
-    /// The connection is configured again (a proxy's next server): requests
-    /// the old server held never come back, so their slots are freed.
-    pub fn reset_far_terrain(&self) {
-        self.far.reset();
     }
     /// ServerboundResourcePackPacket, in whichever phase the connection is.
     pub fn send_pack_status(&self, id: u128, action: i32) {
@@ -1505,7 +1493,6 @@ fn run(
     configuring: &Arc<AtomicBool>,
     shared_counters: &Mutex<Option<Arc<Counters>>>,
     cookies: &Cookies,
-    far: &Arc<crate::lod_net::Inbox>,
     transfer_from: Option<Cookies>,
     resources: &ItemData,
     lan: bool,
@@ -1513,6 +1500,7 @@ fn run(
     payloads: &Arc<crate::raw_payloads::Transport>,
     pings: &PingSamples,
     reports: &Arc<crate::chunk_io::Reports>,
+    custom_registries: &crate::custom_registry_net::LocalRegistries,
     after_login: &mut bool,
 ) -> Result<Reason, Reason> {
     let singleplayer = local.is_some();
@@ -1686,7 +1674,7 @@ fn run(
         writer.attach_droppable(queue.clone());
     }
     *shared_writer.lock().unwrap() = Some(writer);
-    let (registries, datapacks) = configure(
+    let (registries, datapacks, custom_registries_synced) = configure(
         &mut reader,
         shared_writer,
         configuring,
@@ -1695,11 +1683,13 @@ fn run(
         cookies,
         resources,
         payloads,
+        custom_registries,
     )?;
     let registries = Arc::new(registries);
     send.send_wait(Event::Joined {
         registries: registries.clone(),
         datapacks,
+        custom_registries: custom_registries_synced,
         uuid: profile.uuid,
         name: profile.name,
     })
@@ -1712,12 +1702,12 @@ fn run(
         lang,
         send,
         cookies,
-        far,
         resources,
         recorder,
         payloads,
         pings,
         reports,
+        custom_registries,
     )
 }
 
@@ -1927,13 +1917,11 @@ enum PlayIoAction {
     KeepAlive(cfg::KeepAlive),
     ChunkBatchStart,
     ChunkBatchFinished(i32),
-    FarTile(Vec<u8>),
 }
 
 pub struct PlayIo {
     common: Arc<CommonIo>,
     lang: Arc<Language>,
-    far: Arc<crate::lod_net::Inbox>,
     pings: PingSamples,
     reports: Arc<crate::chunk_io::Reports>,
     // ClientPacketListener.chunkBatchSizeCalculator.
@@ -1982,7 +1970,6 @@ impl PlayIo {
                     chunks_per_tick: batch.desired_chunks_per_tick(),
                 })
             }
-            PlayIoAction::FarTile(data) => return self.far.deliver(data),
         };
         if let Some(writer) = self.common.writer.lock().unwrap().as_ref() {
             let _ = writer.send_bypassing_held(&reply.encode());
@@ -2025,12 +2012,12 @@ fn receive_play(
     lang: &Arc<Language>,
     send: &ingress::Producer<Event>,
     cookies: &Cookies,
-    far: &Arc<crate::lod_net::Inbox>,
     resources: &ItemData,
     recorder: &RecorderSlot,
     payloads: &Arc<crate::raw_payloads::Transport>,
     pings: &PingSamples,
     reports: &Arc<crate::chunk_io::Reports>,
+    custom_registries: &crate::custom_registry_net::LocalRegistries,
 ) -> Result<Reason, Reason> {
     use play_bundle::{PlayBundle, PlayTurn};
     use sunrise_protocol::payload_negotiation::Phase;
@@ -2038,7 +2025,6 @@ fn receive_play(
         Arc::new(PlayIo {
             common: CommonIo::new(shared_writer, cookies, Phase::Play),
             lang: lang.clone(),
-            far: far.clone(),
             pings: pings.clone(),
             reports: reports.clone(),
             batch: Mutex::default(),
@@ -2189,7 +2175,7 @@ fn receive_play(
                     .recv()
                     .map_err(|_| Reason::plain("Disconnected"))?
                     .map_err(|error| connection_lost(error, lang))?;
-                let (snapshot, datapacks) = configure(
+                let (snapshot, datapacks, custom_registries) = configure(
                     reader,
                     shared_writer,
                     configuring,
@@ -2198,12 +2184,14 @@ fn receive_play(
                     cookies,
                     resources,
                     payloads,
+                    custom_registries,
                 )?;
                 registries = Arc::new(snapshot);
                 io = new_listener();
                 send.send_wait(Event::Reconfigured {
                     registries: registries.clone(),
                     datapacks,
+                    custom_registries,
                 })
                 .map_err(|error| Reason::plain(error.to_string()))?;
             }
@@ -2223,10 +2211,6 @@ fn receive_play(
             }
             play::Clientbound::CustomPayload(p) if p.channel == "minecraft:brand" => {
                 receive_brand(&p, send);
-            }
-            // A far tile, straight to the sampler waiting for it.
-            play::Clientbound::CustomPayload(p) if p.channel == crate::lod_net::CHANNEL => {
-                io.handle(PlayIoAction::FarTile(p.data));
             }
             play::Clientbound::CustomPayload(payload) => {
                 if let Some(payload) = receive_application(
@@ -2295,7 +2279,15 @@ fn configure(
     cookies: &Cookies,
     resources: &ItemData,
     payloads: &Arc<crate::raw_payloads::Transport>,
-) -> Result<(Dynamic, crate::datapack_net::Receiver), Reason> {
+    local_registries: &crate::custom_registry_net::LocalRegistries,
+) -> Result<
+    (
+        Dynamic,
+        crate::datapack_net::Receiver,
+        crate::custom_registry_net::SyncedCustomRegistries,
+    ),
+    Reason,
+> {
     use sunrise_protocol::payload_negotiation::Phase;
     let io = CommonIo::new(writer, cookies, Phase::Configuration);
     let config = Arc::new(Configuration::default());
@@ -2305,6 +2297,8 @@ fn configure(
     let mut negotiation =
         sunrise_protocol::payload_negotiation::Negotiation::new(payloads.local.manifest.clone());
     let mut datapacks = crate::datapack_net::Receiver::default();
+    let mut custom_registries =
+        crate::custom_registry_net::Receiver::new(local_registries.clone(), reader.is_memory());
     let reply = |p: cfg::Serverbound| -> Result<(), Reason> {
         match writer.lock().unwrap().as_mut() {
             Some(w) => p
@@ -2395,6 +2389,13 @@ fn configure(
             }
             cfg::Clientbound::CustomPayload(p) if p.channel == crate::datapack_net::CHANNEL => {
                 datapacks.accept_chunk(&p.data).map_err(Reason::plain)?;
+            }
+            cfg::Clientbound::CustomPayload(p)
+                if p.channel == crate::custom_registry_net::CHANNEL =>
+            {
+                custom_registries
+                    .accept_chunk(&p.data)
+                    .map_err(Reason::plain)?;
             }
             cfg::Clientbound::CustomPayload(p) => {
                 let Some(p) = receive_application(
@@ -2532,12 +2533,13 @@ fn configure(
                     configuring: configuring.clone(),
                     play,
                     datapacks,
+                    custom_registries,
                     content_verified,
                     menu_extra_revision,
                     resume,
                 })))
                 .map_err(|error| Reason::plain(error.to_string()))?;
-                let (registries, datapacks) = match ready.recv() {
+                let (registries, datapacks, custom_registries) = match ready.recv() {
                     Ok(result) => result?,
                     Err(_) => {
                         if let Some(reason) = config.take_packet_error() {
@@ -2549,7 +2551,7 @@ fn configure(
                 if let Some(features) = features {
                     let _ = send.send_wait(Event::Features(features));
                 }
-                return Ok((registries, datapacks));
+                return Ok((registries, datapacks, custom_registries));
             }
             _ => {}
         }
@@ -2571,9 +2573,6 @@ fn brand_event(payload: &cfg::CustomPayload) -> Option<Event> {
             .map(Event::Brand),
         sunrise_protocol::quiet::CHANNEL => Some(Event::QuietCommands),
         sunrise_protocol::custom_book::CHANNEL => Some(Event::CustomBooks),
-        crate::lod_net::CHANNEL => {
-            crate::lod_net::Offer::decode(&payload.data).map(Event::FarTerrain)
-        }
         _ => None,
     }
 }
@@ -2917,6 +2916,7 @@ mod tests {
                             &Cookies::default(),
                             &data,
                             &crate::raw_payloads::Transport::empty(),
+                            &crate::custom_registry_net::LocalRegistries::default(),
                         )
                     },
                     |_| {},
@@ -2989,6 +2989,7 @@ mod tests {
                                 &Cookies::default(),
                                 &data,
                                 &transport,
+                                &crate::custom_registry_net::LocalRegistries::default(),
                             )
                         },
                         |_| {},
@@ -3382,6 +3383,7 @@ mod tests {
                             &Cookies::default(),
                             &data,
                             &crate::raw_payloads::Transport::empty(),
+                            &crate::custom_registry_net::LocalRegistries::default(),
                         )
                     },
                     |_| {},
@@ -3717,6 +3719,7 @@ mod tests {
                 Arc::new(Language::new()),
                 Arc::clone(&data),
                 Arc::default(),
+                crate::custom_registry_net::LocalRegistries::default(),
             );
             let (stream, _) = listener.accept().unwrap();
             stream
@@ -3948,12 +3951,12 @@ mod tests {
                 &Arc::new(disconnect_language()),
                 &send,
                 &Cookies::default(),
-                &Arc::default(),
                 &data,
                 &Arc::new(Mutex::new(None)),
                 &crate::raw_payloads::Transport::empty(),
                 &Arc::default(),
                 &Arc::default(),
+                &crate::custom_registry_net::LocalRegistries::default(),
             ));
         });
         let ended = result
@@ -4017,6 +4020,7 @@ mod tests {
                         &Cookies::default(),
                         &data,
                         &crate::raw_payloads::Transport::empty(),
+                        &crate::custom_registry_net::LocalRegistries::default(),
                     )
                 },
                 |_| {},
@@ -4090,6 +4094,7 @@ mod tests {
                     &Cookies::default(),
                     &data,
                     &crate::raw_payloads::Transport::empty(),
+                    &crate::custom_registry_net::LocalRegistries::default(),
                 )
             },
             |event| {
@@ -4158,6 +4163,7 @@ mod tests {
                     &Cookies::default(),
                     &data,
                     &crate::raw_payloads::Transport::empty(),
+                    &crate::custom_registry_net::LocalRegistries::default(),
                 ),
                 |event| effects.push(event)
             )
@@ -4273,6 +4279,7 @@ mod tests {
                         &Cookies::default(),
                         &resources,
                         &crate::raw_payloads::Transport::empty(),
+                        &crate::custom_registry_net::LocalRegistries::default(),
                     )
                 });
                 // The configuration actor resolves codecs on the same thread that installed
@@ -4288,7 +4295,7 @@ mod tests {
                     panic!("expected the configuration finish task");
                 };
                 change.acknowledge();
-                let (registries, _) = worker.join().unwrap().unwrap();
+                let (registries, _, _) = worker.join().unwrap().unwrap();
                 assert_eq!(registries.consume_effect_id("effect_test:charge"), Some(0));
                 assert_eq!(
                     registries.consume_effect_id("minecraft:apply_effects"),
@@ -4444,6 +4451,7 @@ mod tests {
                     &Cookies::default(),
                     &resources,
                     &crate::raw_payloads::Transport::empty(),
+                    &crate::custom_registry_net::LocalRegistries::default(),
                 )
             },
             |_| {},
@@ -4481,6 +4489,7 @@ mod tests {
                         &Cookies::default(),
                         &data,
                         &crate::raw_payloads::Transport::empty(),
+                        &crate::custom_registry_net::LocalRegistries::default(),
                     )
                 },
                 |_| {},
@@ -4510,7 +4519,7 @@ mod tests {
         let revision = thread
             .join()
             .unwrap()
-            .map(|(registries, _)| registries.menu_extra_revision)
+            .map(|(registries, _, _)| registries.menu_extra_revision)
             .unwrap_or(0);
         drop(writer);
         std::fs::remove_dir_all(root).unwrap();
@@ -4548,6 +4557,7 @@ mod tests {
                         &Cookies::default(),
                         &data,
                         &crate::raw_payloads::Transport::empty(),
+                        &crate::custom_registry_net::LocalRegistries::default(),
                     )
                 },
                 |_| {},
@@ -4622,7 +4632,6 @@ mod tests {
                 counters: Arc::new(Mutex::new(None)),
                 cookies: Cookies::default(),
                 debug: false,
-                far: Arc::default(),
                 recorder: Arc::new(Mutex::new(None)),
                 pings: Arc::default(),
                 serial: next_serial(),
@@ -4678,12 +4687,12 @@ mod tests {
                 &Arc::new(Language::new()),
                 &send,
                 &Cookies::default(),
-                &Arc::default(),
                 &data,
                 &Arc::new(Mutex::new(None)),
                 &crate::raw_payloads::Transport::empty(),
                 &thread_pings,
                 &Arc::default(),
+                &crate::custom_registry_net::LocalRegistries::default(),
             )
         });
         let mut server = Connection::local(server);
@@ -4755,7 +4764,6 @@ mod tests {
             counters: Arc::new(Mutex::new(None)),
             cookies: Cookies::default(),
             debug: false,
-            far: Arc::default(),
             recorder: Arc::new(Mutex::new(None)),
             pings: Arc::default(),
             serial: next_serial(),
@@ -4772,12 +4780,12 @@ mod tests {
                 &Arc::new(Language::new()),
                 &send,
                 &cookies,
-                &Arc::default(),
                 &data,
                 &recorder,
                 &crate::raw_payloads::Transport::empty(),
                 &Arc::default(),
                 &Arc::default(),
+                &crate::custom_registry_net::LocalRegistries::default(),
             );
             report_connection_end(result, &writer, &send, true);
         });
@@ -5255,12 +5263,12 @@ mod tests {
                 &Arc::new(Language::new()),
                 &send,
                 &Cookies::default(),
-                &Arc::default(),
                 &data,
                 &Arc::new(Mutex::new(None)),
                 &crate::raw_payloads::Transport::empty(),
                 &Arc::default(),
                 &Arc::default(),
+                &crate::custom_registry_net::LocalRegistries::default(),
             )
         });
         let mut server = Connection::local(server);
@@ -5315,7 +5323,6 @@ mod tests {
             counters: Arc::new(Mutex::new(None)),
             cookies: Cookies::default(),
             debug: false,
-            far: Arc::default(),
             recorder: Arc::new(Mutex::new(None)),
             pings: Arc::default(),
             serial: next_serial(),
@@ -5377,7 +5384,6 @@ mod tests {
             counters: Arc::new(Mutex::new(None)),
             cookies: Cookies::default(),
             debug: false,
-            far: Arc::default(),
             recorder: Arc::new(Mutex::new(None)),
             pings: Arc::default(),
             serial: next_serial(),
@@ -5397,12 +5403,12 @@ mod tests {
                 &Arc::new(Language::new()),
                 &send,
                 &Cookies::default(),
-                &Arc::default(),
                 &data,
                 &thread_recorder,
                 &crate::raw_payloads::Transport::empty(),
                 &Arc::default(),
                 &Arc::default(),
+                &crate::custom_registry_net::LocalRegistries::default(),
             )
         });
         let tick_end = play::Serverbound::ClientTickEnd(Empty);
@@ -5534,7 +5540,6 @@ mod tests {
             counters: Arc::new(Mutex::new(None)),
             cookies: Cookies::default(),
             debug: false,
-            far: Arc::default(),
             recorder: Arc::new(Mutex::new(None)),
             pings: Arc::default(),
             serial: next_serial(),
@@ -5555,12 +5560,12 @@ mod tests {
                 &Arc::new(Language::new()),
                 &send,
                 &thread_cookies,
-                &Arc::default(),
                 &data,
                 &thread_recorder,
                 &crate::raw_payloads::Transport::empty(),
                 &Arc::default(),
                 &Arc::default(),
+                &crate::custom_registry_net::LocalRegistries::default(),
             )
         });
 
@@ -5788,6 +5793,7 @@ mod tests {
                 Arc::new(lang),
                 Arc::clone(&data),
                 Arc::default(),
+                crate::custom_registry_net::LocalRegistries::default(),
             );
             let (reason, _credit) = loop {
                 let (event, credit) = session
@@ -5833,7 +5839,7 @@ mod tests {
         fn status(&self) -> RecorderStatus {
             RecorderStatus {
                 active: true,
-                path: PathBuf::from("test.mcpr"),
+                path: PathBuf::from("packets.log"),
                 elapsed: Duration::ZERO,
                 packet_count: self.0.lock().unwrap().len() as u64,
                 bytes_written: 0,
@@ -5841,7 +5847,7 @@ mod tests {
             }
         }
         fn stop(self: Box<Self>) -> std::io::Result<PathBuf> {
-            Ok(PathBuf::from("test.mcpr"))
+            Ok(PathBuf::from("packets.log"))
         }
     }
     impl TestRecorder {
@@ -5856,7 +5862,7 @@ mod tests {
 
     #[test]
     fn session_recorder_gets_the_play_packets_the_network_thread_receives() {
-        let (root, data) = empty_item_data("studio_recording");
+        let (root, data) = empty_item_data("packet_recording");
         let (client, server) = sunrise_protocol::connection::Pipe::pair();
         let (mut reader, writer) = Connection::local(client).split();
         let (send, events) = event_channel();
@@ -5868,11 +5874,10 @@ mod tests {
             configuring: Arc::new(AtomicBool::new(false)),
             thread: None,
             address: "local".into(),
-            name: "StudioTester".into(),
+            name: "PacketTester".into(),
             counters: Arc::new(Mutex::new(None)),
             cookies: Cookies::default(),
             debug: false,
-            far: Arc::default(),
             recorder: Arc::new(Mutex::new(None)),
             pings: Arc::default(),
             serial: next_serial(),
@@ -5896,12 +5901,12 @@ mod tests {
                 &Arc::new(Language::new()),
                 &send,
                 &Cookies::default(),
-                &Arc::default(),
                 &data,
                 &thread_recorder,
                 &crate::raw_payloads::Transport::empty(),
                 &Arc::default(),
                 &Arc::default(),
+                &crate::custom_registry_net::LocalRegistries::default(),
             )
         });
 
@@ -5924,7 +5929,7 @@ mod tests {
 
         assert_eq!(
             session.stop_recording().unwrap().unwrap(),
-            PathBuf::from("test.mcpr")
+            PathBuf::from("packets.log")
         );
         assert!(!session.is_recording());
         // The recorder is handed both; what a recording keeps is the recorder's choice.
@@ -5936,7 +5941,7 @@ mod tests {
     fn session_recorder_gets_the_packets_the_client_makes() {
         use sunrise_protocol::entity_data::{Value, serializer};
 
-        let session = Session::replay("StudioTester");
+        let session = Session::replay("PacketTester");
         session.record_clientbound(&play::Clientbound::SwingAnimation(play::SwingAnimation {
             id: 1,
             hand: 0,
@@ -6131,12 +6136,12 @@ mod tests {
                 &lang,
                 &send,
                 &Cookies::default(),
-                &Arc::default(),
                 &data,
                 &Arc::new(Mutex::new(None)),
                 &crate::raw_payloads::Transport::empty(),
                 &Arc::default(),
                 &Arc::default(),
+                &crate::custom_registry_net::LocalRegistries::default(),
             );
             let _ = done_tx.send(result);
         });
@@ -6446,7 +6451,7 @@ mod tests {
         let mut waypoint_extra = play::Clientbound::TrackedWaypoint(play::TrackedWaypoint {
             operation: 1,
             id: play::WaypointId::Uuid(1),
-            style: "minecraft:default".into(),
+            style: sunrise_core::identifier::Identifier::parse("minecraft:default").unwrap(),
             color: None,
             target: play::WaypointTarget::Empty,
         })
@@ -6611,6 +6616,7 @@ mod tests {
                                     &Cookies::default(),
                                     &data,
                                     &crate::raw_payloads::Transport::empty(),
+                                    &crate::custom_registry_net::LocalRegistries::default(),
                                 )
                             },
                             |_| {},
@@ -6672,6 +6678,7 @@ mod tests {
                                 &Cookies::default(),
                                 &data,
                                 &crate::raw_payloads::Transport::empty(),
+                                &crate::custom_registry_net::LocalRegistries::default(),
                             )
                         },
                         |_| {},

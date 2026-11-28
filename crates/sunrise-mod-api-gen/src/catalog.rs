@@ -12,7 +12,7 @@ pub(crate) use gameplay::{Binding as GameplayBinding, BindingKind};
 
 use quote::ToTokens;
 use serde::Deserialize;
-use std::{collections::HashSet, fmt, fs, path::Path};
+use std::{collections::HashSet, fmt, path::Path};
 
 /// Which side of the connection a hook or helper runs on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -961,19 +961,28 @@ impl Catalog {
     /// The catalog of the checkout at `root`: every file of the declarations directory, sorted by
     /// name, so the order never depends on a list a PR edits.
     pub fn load(root: &Path) -> Result<Self, CatalogError> {
+        Self::load_tracked(root, &mut crate::Inputs::default())
+    }
+
+    pub(crate) fn load_tracked(
+        root: &Path,
+        inputs: &mut crate::Inputs,
+    ) -> Result<Self, CatalogError> {
         let read_error = |path: &Path, error: String| CatalogError::Read {
             path: path.display().to_string(),
             error,
         };
         let dir = root.join(DECLARATIONS);
-        let modules =
-            sunrise_game_discovery::module_files(&dir).map_err(|error| read_error(&dir, error))?;
+        let modules = inputs
+            .module_files(&dir)
+            .map_err(|error| read_error(&dir, error))?;
         let files = modules
             .iter()
             .map(|module| {
                 let path = dir.join(format!("{module}.rs"));
-                let text =
-                    fs::read_to_string(&path).map_err(|e| read_error(&path, e.to_string()))?;
+                let text = inputs
+                    .read_to_string(&path)
+                    .map_err(|e| read_error(&path, e.to_string()))?;
                 Ok((path.display().to_string(), text))
             })
             .collect::<Result<Vec<_>, CatalogError>>()?;
@@ -1062,6 +1071,7 @@ impl Hook {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::fs;
 
     fn hook(name: &str, extra: serde_json::Value) -> serde_json::Value {
         let mut hook = json!({

@@ -74,7 +74,7 @@ fn heard(test: impl FnOnce(&mut ServerGame<'_>, &Mutex<Heard>)) -> Heard {
 
 fn player_with_sword(game: &mut ServerGame<'_>) {
     use sunrise_sim::motion::PlayerMotion;
-    let mut player = PlayerMotion::new(game.motion, Vec3::ZERO).unwrap();
+    let mut player = PlayerMotion::new(game.motion, Vec3::ZERO);
     player.entity_id = 7;
     game.player = Some(player);
     game.common.inventory[game.common.selected] = Some(ItemStack::new("minecraft:iron_sword", 1));
@@ -211,6 +211,7 @@ fn knockback_fires_and_lends_views_when_stacks_have_unprojectable_components_or_
         game.remember_mob_player_credit(42);
 
         let by_player = sunrise_sim::mobs::Damage {
+            direct: None,
             attacker: Some(Who::Player),
             ..sunrise_sim::mobs::Damage::of(sunrise_sim::mobs::DamageKind::Generic)
         };

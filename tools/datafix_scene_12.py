@@ -720,7 +720,8 @@ def tag_for(scene, name, data, k, stacks):
         text = texts[k % len(texts)]
         return ','.join('Text%d:%s' % (i + 1, text[i]) for i in range(4))
     if name == 'mob_spawner':
-        mob = [m for m in MOBS if scene.entity_form(m)][k % len([m for m in MOBS if scene.entity_form(m)])]
+        supported = [m for m in MOBS if scene.entity_form(m)]
+        mob = supported[k % len(supported)]
         spawn = 'SpawnData:{id:%s}' % (q(OLD_NAMES.get(mob, mob.title())) if k % 2 else scene.eid(mob))
         if k % 3 == 0:
             spawn = ('SpawnData:{id:"minecraft:zombie",HandItems:[%s,{}],ArmorItems:[{},{},{},%s],CustomName:"Spawned",Health:5.0f},'
@@ -807,11 +808,14 @@ def make_player(Bot, varint, parse_varint, mcstring):
     """A Bot (protocol 340) that keeps the connection alive, confirms teleports and can act: dig, place, use, attack."""
 
     class Player(Bot):
-        def __init__(self, *args):
+        def __init__(self, port, protocol, name, problems=None):
+            # All set before the base class joins: its keep-alive thread starts in __init__ and uses them.
+            self.name = name
+            self.problems = problems    # the run's list: a failed handler is recorded here, naming this bot
             self.entities = {}    # entity id -> mob type id
             self.pos = (0.0, 0.0, 0.0)
             self.lock = threading.Lock()
-            super().__init__(*args)
+            super().__init__(port, protocol, name)
 
         def idle(self):
             self.sock.settimeout(1.0)
@@ -824,8 +828,14 @@ def make_player(Bot, varint, parse_varint, mcstring):
                     break
                 try:
                     self.handle(pid, data)
-                except Exception:
-                    pass
+                except Exception as error:
+                    # Expected shutdown: Bot.leave() sets self.stop before closing the socket.
+                    if isinstance(error, (EOFError, OSError)) and self.stop.is_set():
+                        break
+                    # On the keep-alive thread this would reach only threading.excepthook: record it in the run too.
+                    if self.problems is not None:
+                        self.problems.append((f'bot {self.name} packet 0x{pid:02x}', [f'{type(error).__name__}: {error}']))
+                    raise
 
         def handle(self, pid, data):
             if self.protocol < 340:     # 1.8.9 (47) to 1.11.2 (316): only stay joined
@@ -1171,7 +1181,7 @@ def top(scene, stacks):
     scene.block(x + 8, 253, z, 'bed', 1, '{color:14}')
     scene.block(x + 7, 253, z, 'bed', 9, '{color:14}')
     scene.block(x + 10, 255, z, 'standing_banner', 3, banner_tag(5, 3))
-    scene.block(x + 12, 250, z, 'shulker_box' if False else 'purple_shulker_box', 5, '{Items:%s}' % stacks.items(5))
+    scene.block(x + 12, 250, z, 'purple_shulker_box', 5, '{Items:%s}' % stacks.items(5))
     scene.block(x + 14, 255, z, 'mob_spawner', 0, '{SpawnData:{id:%s},MaxNearbyEntities:6s,RequiredPlayerRange:1s}' % scene.eid('ghast'))
     for i in range(8):      # and the very bottom of the world, next to the bedrock
         scene.block(scene.bx + 2 + 2 * i, 5 + i, scene.bz + 3, 'sponge', i % 2)
@@ -1256,7 +1266,6 @@ def entity_list(scene, stacks):
             form = scene.entity_form(mount)
             mid = form[0] if form else mount
             rider, rnbt = riders[0]
-            rform = scene.entity_form(rider)
             add(rider, (rnbt + ',' if rnbt else '') + 'Riding:{id:%s%s%s}' % (q(mid), (',' + form[1]) if form and form[1] else '',
                                                                               (',' + mount_nbt) if mount_nbt else ''))
 
@@ -1593,7 +1602,7 @@ def lab_actions(scene, server, bot, problems):
     for dx, dz, n, d in ring:
         bot.place(x + dx, y, z + dz, 1)
         pause(0.25)
-    bot.send(0x08, varint0(0))
+    bot.send(0x08, varint(0))
     pause(0.5)
     # note block: hit it, the cake is eaten by the right click above
     bot.send(0x14, bytes([0]) + pos_long(x - 3, y, z - 1) + bytes([1]))
@@ -1610,18 +1619,18 @@ def lab_actions(scene, server, bot, problems):
         px += 0.2
         bot.move(px, y, pz)
         pause(0.06)
-    bot.send(0x15, varint0(3) + varint0(0) + varint0(0))
+    bot.send(0x15, varint(3) + varint(0) + varint(0))
     for i in range(24):
         px -= 0.25
         bot.move(px, y, pz)
         pause(0.06)
-    bot.send(0x15, varint0(4) + varint0(0) + varint0(0))
-    bot.send(0x15, varint0(0) + varint0(0) + varint0(0))
+    bot.send(0x15, varint(4) + varint(0) + varint(0))
+    bot.send(0x15, varint(0) + varint(0) + varint(0))
     for i in range(10):
         px += 0.1
         bot.move(px, y, pz)
         pause(0.06)
-    bot.send(0x15, varint0(1) + varint0(0) + varint0(0))
+    bot.send(0x15, varint(1) + varint(0) + varint(0))
     for i in range(3):
         bot.send(0x0D, struct.pack('>dddB', px, y + 0.42, pz, 0))
         pause(0.15)
@@ -1648,7 +1657,7 @@ def lab_actions(scene, server, bot, problems):
     # drop an item
     bot.held(7)
     pause(0.2)
-    bot.send(0x14, varint0(4) + pos_long(0, 0, 0) + bytes([0]))
+    bot.send(0x14, varint(4) + pos_long(0, 0, 0) + bytes([0]))
     pause(0.3)
     # kill a few mobs
     for kind, tid in (('pig', 90), ('zombie', 54), ('skeleton', 51), ('cow', 92), ('sheep', 91)):
@@ -1666,9 +1675,9 @@ def lab_actions(scene, server, bot, problems):
     pause(0.6)
     eid = max([e for e, t in bot.entities.items() if t == 120], default=None)
     if eid is not None:
-        bot.send(0x0A, varint0(eid) + varint0(0) + varint0(0))
+        bot.send(0x0A, varint(eid) + varint(0) + varint(0))
         pause(0.4)
-    bot.send(0x08, varint0(1))
+    bot.send(0x08, varint(1))
     say(['kill @e[tag=labvictim]'])
     # the maps: slot 0, 1 and 2 hold an empty map each
     for slot, (mx, mz) in enumerate(((x, z), (x - 80, z - 60), (x - 40, z - 20))):
@@ -1692,16 +1701,6 @@ def lab_actions(scene, server, bot, problems):
          f'effect {PLAYER} minecraft:speed 99999 1 true', f'effect {PLAYER} minecraft:night_vision 99999 0 true',
          f'effect {PLAYER} minecraft:regeneration 99999 0 false', f'tp {PLAYER} {scene.bx}.5 {LAYERS[0]} {scene.bz}.5'])
     pause(1.5)
-
-
-def varint0(v):
-    out = b''
-    while True:
-        b = v & 0x7F
-        v >>= 7
-        out += bytes([b | (0x80 if v else 0)])
-        if not v:
-            return out
 
 
 # Slow commands at the start of the last batch: while the server executes them the rest of the batch arrives, so that
@@ -1753,7 +1752,7 @@ def populate(server, Bot, port, protocol, name, problems, *, mcstring, origin=DE
          *(['gamerule announceAdvancements false', 'gamerule spawnRadius 7'] if era == 12 else []), 'time set 6000', 'weather clear 999999', 'difficulty 2',
          'worldborder set 59999968', 'worldborder damage amount 0.25', 'worldborder warning distance 7'])
     say(scene.cmds)
-    bot = Player(port, protocol, name)
+    bot = Player(port, protocol, name, problems)
     time.sleep(3)
     say(inventory_commands(scene, stacks))
     say([f'xp 117L {name}', f'xp 29 {name}',
@@ -1867,7 +1866,7 @@ def build_flat(h, force=False):
         # are loaded (they stay loaded, being within the spawn radius).
         batch(server, ['setworldspawn 64 4 64'], problems)
         Player = make_player(JoinedBot, varint, parse_varint, h.mcstring)
-        visitor = Player(port, protocol, h.BOT)
+        visitor = Player(port, protocol, h.BOT, problems)
         time.sleep(2)
         for x, z in ((24, 24), (24, 72), (24, 104), (72, 24), (72, 72), (72, 104), (104, 24), (104, 72), (104, 104), (72, 123), (-8, 63), (32, 103)):
             batch(server, [f'tp {h.BOT} {x}.5 4 {z}.5'], problems)

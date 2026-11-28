@@ -27,7 +27,7 @@ pub(crate) fn put_portal(game: &mut sunrise_gameplay::game::ServerGame<'_>, x: i
 fn armor_stands_in_a_nether_portal_go_through_and_cool_down() {
     let mut resources = None;
     let mut game = server_game(&mut resources);
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 65.0, 8.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 65.0, 8.5)));
     game.load_ticking_neighbourhood(0, 0);
     // A stand standing in the portal at (4, 64..65, 4); a marker whose 0 by 0
     // box sweeps no block in the one at (8, 64..65, 8); and a `NoGravity` stand

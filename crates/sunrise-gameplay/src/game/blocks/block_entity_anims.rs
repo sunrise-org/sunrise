@@ -64,7 +64,7 @@ impl ServerGame<'_> {
                 self.barrel_openers_changed(key, open)
             }
             Some(Ticker::Shulker { .. }) => {
-                let shulker = self.server.be_anims.shulkers.entry(pos).or_default();
+                let shulker = self.server.be_anims.level.shulkers.entry(pos).or_default();
                 let (count, edge) = if open {
                     shulker.start_open()
                 } else {
@@ -183,6 +183,7 @@ impl ServerGame<'_> {
         let nearby = self
             .server
             .be_anims
+            .level
             .bells
             .get(&pos)
             .and_then(|b| b.nearby.clone())
@@ -226,6 +227,7 @@ impl ServerGame<'_> {
         let tick = self
             .server
             .be_anims
+            .level
             .bells
             .entry(pos)
             .or_default()
@@ -262,6 +264,7 @@ impl ServerGame<'_> {
         let closed = self
             .server
             .be_anims
+            .level
             .shulkers
             .get(&pos)
             .is_none_or(|s| s.status == ShulkerStatus::Closed);
@@ -282,10 +285,10 @@ impl ServerGame<'_> {
     /// `BellBlockEntity.serverTick`: ringing server bells belong to the world,
     /// including when no renderer is attached.
     pub(in crate::game::server_side) fn tick_bell_servers(&mut self) {
-        if self.server.be_anims.bells.is_empty() {
+        if self.server.be_anims.level.bells.is_empty() {
             return;
         }
-        let mut positions: Vec<_> = self.server.be_anims.bells.keys().copied().collect();
+        let mut positions: Vec<_> = self.server.be_anims.level.bells.keys().copied().collect();
         positions.sort_unstable();
         let tags = self.items().entity_type_tags.clone();
         for pos in positions {
@@ -295,7 +298,7 @@ impl ServerGame<'_> {
                 .ticker(self.common.world.block(pos[0], pos[1], pos[2]).0)
                 != Some(Ticker::Bell)
             {
-                self.server.be_anims.bells.remove(&pos);
+                self.server.be_anims.level.bells.remove(&pos);
             } else if self.block_ticking_area()(pos[0], pos[2]) {
                 self.server_tick_bell(pos, &tags);
             }
@@ -319,6 +322,7 @@ impl ServerGame<'_> {
         let mut positions: Vec<[i32; 3]> = self
             .server
             .be_anims
+            .level
             .conduit_servers
             .keys()
             .copied()
@@ -329,10 +333,9 @@ impl ServerGame<'_> {
             self.tick_conduit_server(pos);
         }
     }
-    /// Sets `be_anims.conduit_servers` to the conduits in the
-    /// chunks that tick blocks, keeping the state of those already known.
+    /// Updates `be_anims.level.conduit_servers` from block-ticking chunks, preserving existing state.
     pub(in crate::game::server_side) fn find_conduits(&mut self) {
-        let levels = self.server.tickets.0.levels();
+        let levels = self.server.chunk_ticking.tickets.levels();
         let kinds = &self.server.be_anims.kinds;
         let is_conduit = |id: u32| matches!(kinds.get(id as usize), Some(Some(Ticker::Conduit)));
         let mut found = Vec::new();
@@ -355,10 +358,14 @@ impl ServerGame<'_> {
                 }
             }
         }
-        let mut old = std::mem::take(&mut self.server.be_anims.conduit_servers);
+        let mut old = std::mem::take(&mut self.server.be_anims.level.conduit_servers);
         for pos in found {
             let known = old.remove(&pos).unwrap_or_default();
-            self.server.be_anims.conduit_servers.insert(pos, known);
+            self.server
+                .be_anims
+                .level
+                .conduit_servers
+                .insert(pos, known);
         }
     }
     /// `ConduitBlockEntity.serverTick` of the conduit at `pos`, in a chunk
@@ -369,13 +376,13 @@ impl ServerGame<'_> {
         let state = self.common.world.block(pos[0], pos[1], pos[2]).0;
         if self.server.be_anims.ticker(state) != Some(Ticker::Conduit) {
             // Broken since the chunks were searched.
-            self.server.be_anims.conduit_servers.remove(&pos);
+            self.server.be_anims.level.conduit_servers.remove(&pos);
             return;
         }
         if !self
             .server
+            .chunk_ticking
             .tickets
-            .0
             .levels()
             .block_ticking_at(pos[0], pos[2])
             || !self
@@ -389,6 +396,7 @@ impl ServerGame<'_> {
         let mut conduit = self
             .server
             .be_anims
+            .level
             .conduit_servers
             .remove(&pos)
             .unwrap_or_default();
@@ -440,7 +448,11 @@ impl ServerGame<'_> {
         if short {
             self.server_play_sound("minecraft:block.conduit.ambient.short", centre, 1.0, 1.0);
         }
-        self.server.be_anims.conduit_servers.insert(pos, conduit);
+        self.server
+            .be_anims
+            .level
+            .conduit_servers
+            .insert(pos, conduit);
     }
     /// `ConduitBlockEntity.applyEffects`: conduit power for every player
     /// in water or rain within `frames / 7 * 16` blocks.
@@ -621,6 +633,7 @@ impl ServerGame<'_> {
         let server = self
             .server
             .be_anims
+            .level
             .gateway_servers
             .entry(key)
             .or_insert(initial);
@@ -646,6 +659,7 @@ impl ServerGame<'_> {
     pub fn gateway_available(&self, pos: [i32; 3]) -> bool {
         self.server
             .be_anims
+            .level
             .gateway_servers
             .get(&pos)
             .copied()
@@ -661,6 +675,7 @@ impl ServerGame<'_> {
         let entered = self
             .server
             .be_anims
+            .level
             .gateway_servers
             .entry(pos)
             .or_insert(initial)
@@ -692,7 +707,7 @@ impl ServerGame<'_> {
         }
         match self.server.be_anims.ticker(state) {
             Some(Ticker::Shulker { .. }) => {
-                let shulker = self.server.be_anims.shulkers.entry(pos).or_default();
+                let shulker = self.server.be_anims.level.shulkers.entry(pos).or_default();
                 if shulker.trigger_event(a, b) {
                     // Publish shulker lid status change to the collision snapshot immediately.
                     self.common.world.shulkers.insert(pos, shulker.clone());
@@ -703,6 +718,7 @@ impl ServerGame<'_> {
                 let rung = self
                     .server
                     .be_anims
+                    .level
                     .bells
                     .entry(pos)
                     .or_default()
@@ -723,6 +739,7 @@ impl ServerGame<'_> {
         self.common.world.shulkers.extend(
             self.server
                 .be_anims
+                .level
                 .shulkers
                 .iter()
                 .map(|(p, s)| (*p, s.clone())),

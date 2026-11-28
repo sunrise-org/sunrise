@@ -149,7 +149,7 @@ impl ModLayer {
 /// The states mods colour: their layers by slot ([`Tint::Mod`]), and every state as a mod reads
 /// it, kept while a mod's own source is registered.
 #[derive(Clone, Default)]
-pub(super) struct ModTints {
+pub struct ModTints {
     pub(super) layers: Vec<Box<[ModLayer]>>,
     pub(super) values: Option<ModTintValues>,
     pub(super) has_sources: bool,

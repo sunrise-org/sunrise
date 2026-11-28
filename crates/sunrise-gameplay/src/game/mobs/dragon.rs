@@ -1950,7 +1950,7 @@ impl crate::game::ServerGame<'_> {
             .as_ref()
             .and_then(|d| {
                 d.live.read(
-                    &self.common.motion.attributes,
+                    self.common.motion.attributes(),
                     "minecraft:ender_dragon",
                     "minecraft:knockback_resistance",
                     sunrise_world::attribute_map::ValueKind::Computed,

@@ -106,7 +106,7 @@ impl KnockbackCredit for CreditLoan<'_> {
     fn snapshot<'a>(&'a self, pushed: &Hurting<'_>, _: &'a Attack) -> (i32, Option<&'a ItemStack>) {
         let selected = match pushed {
             Hurting::Mob(mob, _) => {
-                assert_eq!(mob.id as i32, self.plan.victim);
+                assert_eq!(mob.id, self.plan.victim as u32);
                 if self.players.contains_key(&mob.id) {
                     // An unresolved remembered player still takes precedence over a mob.
                     self.plan.player.as_ref().map(|(_, entity)| entity)

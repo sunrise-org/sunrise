@@ -754,6 +754,8 @@ impl crate::game::ServerGame<'_> {
         from: &str,
         to: &str,
     ) {
+        #[cfg(test)]
+        crate::game::state_seam::tests::record_arrival_ticket(self, true);
         self.fire_player_changed_dimension(player, name, from, to);
     }
     /// A server player finished loading the world around them after joining, respawning or changing
@@ -1303,6 +1305,8 @@ impl crate::game::ServerGame<'_> {
     /// portal rectangle or the End platform origin. The completed blocks are
     /// already in the world.
     pub(in crate::game) fn native_portal_create(&mut self, dimension: &str, pos: [i32; 3]) {
+        #[cfg(test)]
+        crate::game::state_seam::tests::record_arrival_ticket(self, false);
         self.fire_portal_create(dimension, pos);
     }
     /// A thrown splash or lingering potion applied its hit effects.

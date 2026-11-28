@@ -214,6 +214,16 @@ pub trait NativeEntityStateCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
         )
     }
 
+    /// Returns the entity's frozen ticks (`Entity.getTicksFrozen`): this side's own count on a
+    /// server, the synced `DATA_TICKS_FROZEN` of the local player and tracked mobs on a client.
+    fn entity_ticks_frozen(&self, entity: EntityRef) -> Option<i32> {
+        match self.native_target_body(self.native_entity_read_target(entity)?)? {
+            Body::Player(p) => Some(p.ticks_frozen),
+            Body::Mob(m) => Some(m.ticks_frozen),
+            Body::Other(_) => None,
+        }
+    }
+
     /// The entity's air (`Entity.getAirSupply`): players and mobs.
     fn entity_air_supply(&self, entity: EntityRef) -> Option<i32> {
         match self.native_target_body(self.native_entity_read_target(entity)?)? {

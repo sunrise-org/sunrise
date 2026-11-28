@@ -159,7 +159,7 @@ pub(crate) mod tests {
             empty_answer: Arc<Mutex<Option<Answer>>>,
             empty_food: Arc<Mutex<Option<i32>>>,
             empty_clicks: Arc<Mutex<Vec<(sunrise_world::registry::BlockStateId, u128)>>>,
-            clicks: Arc<Mutex<Vec<(u128, mod_api::client::first_person::Hand)>>>,
+            clicks: Arc<Mutex<Vec<(u128, mod_api::Hand)>>>,
             item_uses: Arc<AtomicUsize>,
         }
         #[mod_api::sunrise_part]
@@ -199,7 +199,7 @@ pub(crate) mod tests {
                 let HostSide::Server(host) = host else {
                     return None;
                 };
-                assert_eq!(event.click.hand, mod_api::client::first_person::Hand::Main);
+                assert_eq!(event.click.hand, mod_api::Hand::Main);
                 if let Some(level) = self.empty_food.lock().unwrap().take() {
                     let player = host.player(event.click.player).unwrap();
                     assert!(player.set_food_level(host, level));
@@ -298,7 +298,6 @@ pub(crate) mod tests {
                 let net = NetConfig {
                     listen: false,
                     announce: false,
-                    lod_distance: 0,
                     ..NetConfig::lan(0, String::new(), 2)
                 };
                 let config = HubConfig {
@@ -350,7 +349,7 @@ pub(crate) mod tests {
 
                 // BlockState.useItemOn replaces the template. Only TryWithEmptyHand
                 // reaches useWithoutItem, which toggles this lever on the main hand.
-                use mod_api::client::first_person::Hand;
+                use mod_api::Hand;
                 use std::sync::atomic::Ordering::SeqCst;
                 let lever = game
                     .pack
@@ -621,16 +620,33 @@ pub(crate) mod tests {
                     ..hit
                 };
                 game.start_audio_capture();
-                game.server.lan_block_events.clear();
+                game.server.lan_queues.block_events.clear();
                 assert!(game.use_hand(Some(&pot_hit)).unwrap());
-                assert!(!game.server.lan_block_events.iter().any(|&(p, b0, b1, _)| {
-                    p == pot_hit.pos && b0 == 1 && b1 == crate::game::decorated_pot::WOBBLE_NEGATIVE
-                }));
+                assert!(
+                    !game
+                        .server
+                        .lan_queues
+                        .block_events
+                        .iter()
+                        .any(|&(p, b0, b1, _)| {
+                            p == pot_hit.pos
+                                && b0 == 1
+                                && b1 == crate::game::decorated_pot::WOBBLE_NEGATIVE
+                        })
+                );
                 *user.empty_answer.lock().unwrap() = None;
                 assert!(game.use_hand(Some(&pot_hit)).unwrap());
-                assert!(game.server.lan_block_events.iter().any(|&(p, b0, b1, _)| {
-                    p == pot_hit.pos && b0 == 1 && b1 == crate::game::decorated_pot::WOBBLE_NEGATIVE
-                }));
+                assert!(
+                    game.server
+                        .lan_queues
+                        .block_events
+                        .iter()
+                        .any(|&(p, b0, b1, _)| {
+                            p == pot_hit.pos
+                                && b0 == 1
+                                && b1 == crate::game::decorated_pot::WOBBLE_NEGATIVE
+                        })
+                );
                 game.stop_audio_capture();
                 let shelf = game
                     .with_props(
@@ -872,13 +888,10 @@ pub(crate) mod tests {
     #[ignore = "daily"]
     fn fake_body_does_not_count_toward_sleep() {
         super::super::native_entity_refs::tests::with_game(|game| {
-            game.player = Some(
-                sunrise_sim::motion::PlayerMotion::new(
-                    game.motion,
-                    sunrise_core::geometry::Vec3::ZERO,
-                )
-                .unwrap(),
-            );
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                sunrise_core::geometry::Vec3::ZERO,
+            ));
             game.server.lan_acting_fake = false;
             let real = game.sleep_counts();
             assert_eq!(real.0, 1);

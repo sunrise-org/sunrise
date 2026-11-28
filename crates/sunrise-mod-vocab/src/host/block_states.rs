@@ -128,7 +128,10 @@ pub trait BlockStatesBackend {
     /// rule that sets `correct_for_drops` and names the block of `state`, and the first such rule
     /// says yes. A stack with no tool component, or no matching rule, is not the correct tool. Only
     /// the stack is asked: not whether the block requires a tool, the player, the position or any
-    /// mod's hooks (`PlayerRef::has_correct_tool_for_drops` asks those). None for an unknown state.
+    /// mod's hooks (`PlayerRef::has_correct_tool_for_drops` asks those). A rule's block tags are
+    /// the side's: on the server the open world's, as its data packs bind them, the ones the
+    /// game's own harvest reads; on the client the game's built-in tags until the client
+    /// receives the world's tables (#6597). None for an unknown state.
     fn block_state_correct_tool_for_drops(
         &self,
         stack: &ItemStack,
@@ -233,6 +236,32 @@ pub trait BlockStatesBackend {
     /// `BlockState.isRedstoneConductor` for a state alone. None if the state is unknown
     /// or the predicate needs a level and position.
     fn block_state_is_redstone_conductor(&self, state: BlockState) -> Option<bool>;
+    /// Side: both.
+    /// `BlockStateBase.getLightDampening()`: how much light the state stops, 0 to 15 (stone 15,
+    /// water and leaves 1, air and glass 0), the value light propagation subtracts when light
+    /// passes through it. None for an unknown state.
+    fn block_state_light_dampening(&self, state: BlockState) -> Option<u8>;
+    /// Side: both.
+    /// `BlockState.isSuffocating(level, pos)` for a state alone: the block's own predicate
+    /// (`BlockBehaviour.Properties.isSuffocating`, default `blocksMotion` with a full collision
+    /// shape: stone yes, glass and leaves no, a piston unless extended, a shulker box
+    /// when closed) as the level's suffocation rules bind it, the same rules
+    /// `level_state_is_suffocating` reads: on the server the open world's, with its data packs'
+    /// `#minecraft:causes_suffocation`; on the client the game's built-in rules until the client
+    /// receives the world's tables (#6597). None for an unknown state, and for one
+    /// whose answer depends on the position or its block entity (a shulker box, a shape that a
+    /// block entity publishes or that a declared offset moves); `level_state_is_suffocating`
+    /// answers those at a position.
+    fn block_state_is_suffocating(&self, state: BlockState) -> Option<bool>;
+    /// Side: both.
+    /// `BlockState.isValidSpawn(level, pos, entityType)`: whether a mob of `entity_type` may
+    /// spawn on top of the state, from the same table natural spawning reads (a state with a
+    /// sturdy top face and a light emission below 14 by default, a block's declared
+    /// `spawn_rule` over it; leaves for ocelots and parrots, ice for polar bears, magma for fire
+    /// immune types). The state alone, not its neighbours or a position: natural spawning reads
+    /// none for it, so the answer holds at every position. None for an unknown
+    /// state and for an entity type the game has no spawn species for.
+    fn block_state_is_valid_spawn(&self, state: BlockState, entity_type: &str) -> Option<bool>;
     /// Side: both.
     /// The read of `BlockStates::block_class`: `Ok(None)` for an unknown state.
     fn block_state_class(

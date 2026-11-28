@@ -25,7 +25,6 @@ use sunrise_gameplay_common::game::native_server::argument_kinds::{
     custom_value, dimension_value, nbt_value, parsed_type, positional_value,
 };
 use sunrise_gameplay_common::game::native_server::command_tree_for;
-use sunrise_gameplay_common::game::native_server::online_mode_of;
 use sunrise_gameplay_common::game::native_server::orb_meets;
 use sunrise_gameplay_common::game::native_server::ordered_box;
 use sunrise_gameplay_common::game::native_server::register_command_nodes;
@@ -195,12 +194,13 @@ impl crate::game::ServerGame<'_> {
             ));
         }
         let id = self.server.next_entity.checked_add(1)?;
-        let entity_id = i32::try_from(id).ok()?;
+        // The guest record keeps the same 32 bits as its signed carrier, as `Hub::admit` does
+        // for a joining player: IDs from 0x8000_0000 on are as good as any (#6374).
+        let entity_id = id as i32;
         let motion = PlayerMotion::new(
             self.common.motion,
             sunrise_core::geometry::Vec3::new(0.0, 0.0, 0.0),
-        )
-        .ok()?;
+        );
         let host = self.server.lan.as_mut()?;
         let conn = host.hub.lan.shared.next_id()?;
         let mut guest = Guest::connectionless(conn, uuid, name.into(), entity_id, [0.0; 3], motion);
@@ -282,6 +282,18 @@ impl crate::game::ServerGame<'_> {
             .ok_or(PlayerDataRefusal::Stale)
     }
 
+    /// `native_resident_player_turn` for a living player only: a dead one is `Stale`.
+    pub(in crate::game) fn native_living_player_turn(
+        &self,
+        player: PlayerRef,
+    ) -> Result<PlayerTurn, PlayerDataRefusal> {
+        if !self.common.is_logical_server() {
+            return Err(PlayerDataRefusal::Client);
+        }
+        self.player_handle_turn(player, true)
+            .ok_or(PlayerDataRefusal::Stale)
+    }
+
     pub(in crate::game) fn native_as_resident_player(
         &mut self,
         player: PlayerRef,
@@ -322,35 +334,39 @@ impl crate::game::ServerGame<'_> {
             .command_source
             .clone()
             .unwrap_or_else(|| self.player_source());
-        let origin = if let Some(id) = self.server.exec.0.functions.last() {
-            CommandSource::Function {
+        use crate::game::state_seam::CommandOrigin;
+        let origin = match CommandOrigin::read(self, &source) {
+            CommandOrigin::Function(id) => CommandSource::Function {
                 id: mod_api::Identifier::parse(id).map_err(|_| err("command.failed", &[]))?,
                 permission,
-            }
-        } else if let Some((x, y, z)) = source.block {
-            CommandSource::CommandBlock {
+            },
+            CommandOrigin::Block((x, y, z), dimension) => CommandSource::CommandBlock {
                 position: [x, y, z],
-                level: source.origin_dimension.key(),
+                level: dimension.key(),
                 permission,
+            },
+            CommandOrigin::Cart(id) => {
+                let entity = self
+                    .with_source(
+                        super::commands::execute::Source {
+                            dimension: source.origin_dimension,
+                            ..source
+                        },
+                        |game| game.entity(id),
+                    )
+                    .ok_or_else(|| err("argument.entity.notfound.entity", &[]))?;
+                CommandSource::CommandBlockMinecart { entity, permission }
             }
-        } else if let Some(id) = source.cart {
-            let entity = self
-                .with_source(
-                    super::commands::execute::Source {
-                        dimension: source.origin_dimension,
-                        ..source
-                    },
-                    |game| game.entity(id),
-                )
-                .ok_or_else(|| err("argument.entity.notfound.entity", &[]))?;
-            CommandSource::CommandBlockMinecart { entity, permission }
-        } else if source.origin_player {
-            let player = self
-                .native_acting_player()
-                .ok_or_else(|| err("argument.entity.notfound.player", &[]))?;
-            CommandSource::Player { player, permission }
-        } else {
-            CommandSource::Console { permission }
+            CommandOrigin::Player(actor) => {
+                #[cfg(test)]
+                crate::game::state_seam::tests::record_command_actor(actor);
+                let _ = actor;
+                let player = self
+                    .native_acting_player()
+                    .ok_or_else(|| err("argument.entity.notfound.player", &[]))?;
+                CommandSource::Player { player, permission }
+            }
+            CommandOrigin::Console => CommandSource::Console { permission },
         };
         Ok(origin)
     }
@@ -967,7 +983,7 @@ impl crate::game::ServerGame<'_> {
     /// tickets keep them only while a mod listens (`update_chunk_tickets`).
     pub(in crate::game::server_side) fn run_chunk_ticket_level_updates(&mut self) {
         use sunrise_sim::ticket_levels::UNLOADED;
-        let changes = self.server.tickets.0.take_changes();
+        let changes = self.server.chunk_ticking.tickets.take_changes();
         if changes.is_empty() {
             return;
         }
@@ -1532,7 +1548,7 @@ impl crate::game::ServerGame<'_> {
     }
 
     /// Resolves `entity` to a mutable live experience orb in the active or any parked server level.
-    fn native_orb_mut(
+    pub(in crate::game) fn native_orb_mut(
         &mut self,
         entity: EntityRef,
     ) -> Result<&mut sunrise_sim::entities::ExperienceOrb, ExperienceOrbWriteError> {
@@ -2017,22 +2033,6 @@ impl crate::game::ServerGame<'_> {
         pos: [i32; 3],
     ) -> Option<bool> {
         self.level_is_raining_at(level, pos)
-    }
-}
-
-#[expect(dead_code, reason = "dedicated settings stay engine-private")]
-impl crate::game::ServerGame<'_> {
-    pub(in crate::game) fn native_online_mode(&self) -> Option<bool> {
-        Some(online_mode_of(&self.dedicated_lan()?.shared.config))
-    }
-
-    pub(in crate::game) fn native_server_port(&self) -> Option<u16> {
-        Some(self.dedicated_lan()?.port)
-    }
-
-    fn dedicated_lan(&self) -> Option<&sunrise_sim::lan::Lan> {
-        self.common.options.dedicated.as_ref()?;
-        Some(&self.server.lan.as_ref()?.hub.lan)
     }
 }
 

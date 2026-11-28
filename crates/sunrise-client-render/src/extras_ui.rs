@@ -242,7 +242,7 @@ impl Screen for ExtrasScreen {
     fn press(&mut self, s: &mut Settings, row: ExtraRow, back: bool) -> Vec<Output> {
         match row {
             ExtraRow::Item(item) => {
-                item.cycle(&mut s.extras, back);
+                item.cycle(&mut s.extras);
                 vec![Output::Event(Event::Changed)]
             }
             ExtraRow::Zoom(i) => {
@@ -269,7 +269,7 @@ impl Screen for ExtrasScreen {
     fn wheel_step(&mut self, s: &mut Settings, row: ExtraRow, back: bool) -> Option<Vec<Output>> {
         match row {
             ExtraRow::Item(item) => {
-                item.cycle(&mut s.extras, back);
+                item.cycle(&mut s.extras);
                 Some(vec![Output::Event(Event::Changed)])
             }
             ExtraRow::Added(page, r) if steps(page, r) => {

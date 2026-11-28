@@ -9,16 +9,22 @@ use sunrise_client::camera::CameraFluid;
 use sunrise_client::gfx::pack_uniforms::{PackInputs, PlayerStatus, ViewEntity};
 use sunrise_client::shader_options::ShaderOptions;
 use sunrise_game_data::text::Text;
+use sunrise_items::items::{BlockTagFlags, EntityTypeTags, Items};
 use sunrise_mod_package::mod_list::ModList;
 use sunrise_shaders::{
-    BlockIds, BlockLayers, Macros, Pack, Properties, Tonemap, dimension_folder_named, load_post,
+    BlockIds, BlockLayers, Macros, Pack, Properties, TagMembers, Tonemap, dimension_folder_named,
+    load_post,
 };
+use sunrise_world::loot::{ItemTagNames, LootTags};
 
 use super::native_shaders::{fingerprint, outcome, refused, remember};
 use super::{Dim, Screen};
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
+use std::sync::Arc;
+use sunrise_client_render::graphics::IrisCompat;
 use sunrise_client_render::render_geometry::EntitySpan;
 
 /// The values the player chose for pack `name`'s options (`shaderpacks/<name>.txt`).
@@ -29,13 +35,170 @@ pub(in crate::game::client_side) fn chosen_shader_options(name: &str) -> BTreeMa
         .unwrap_or_default()
 }
 
-/// Pack `name`'s options, screens and names in `language`, with the values the player chose.
+thread_local! {
+    /// The identity scans (`sunrise_shaders::asks_for_identity`) this thread asked for: the main
+    /// thread's, for the title screen, the HDR read before the frame, Shader Options and the load.
+    static IDENTITY_SCANS: RefCell<IdentityScans> = RefCell::default();
+    /// How many scans ran on this thread (`scan_identity`): the tests show the frame runs none.
+    #[cfg(test)]
+    static SCANS_RUN_HERE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// What an identity scan reads: the pack's files (`fingerprint`, `None` when it can't be taken),
+/// the options chosen for it and the programs mods request.
+#[derive(Clone, PartialEq)]
+struct ScanKey {
+    files: Option<u64>,
+    chosen: BTreeMap<String, String>,
+    mod_programs: Vec<String>,
+}
+
+/// A pack's answer from its scan: where it asks, if it does.
+type Asked = Option<String>;
+
+/// The identity scans by pack path (`IDENTITY_SCANS`): the last one of each pack that landed, with
+/// what it read, and the one running on a thread of its own, with what it reads and where its
+/// answer comes.
+#[derive(Default)]
+struct IdentityScans {
+    done: HashMap<std::path::PathBuf, (ScanKey, Asked)>,
+    running: HashMap<std::path::PathBuf, (ScanKey, std::sync::mpsc::Receiver<Asked>)>,
+}
+
+impl IdentityScans {
+    /// Whether the scan of the pack at `path` still runs; one that landed is kept (`done`). With
+    /// `wait`, it waits for it to land.
+    fn running(&mut self, path: &Path, wait: bool) -> bool {
+        use std::sync::mpsc::TryRecvError;
+        let Some((_, answer)) = self.running.get(path) else {
+            return false;
+        };
+        let asked = match answer.try_recv() {
+            Ok(asked) => asked,
+            Err(TryRecvError::Empty) if !wait => return true,
+            Err(TryRecvError::Empty) => answer.recv().unwrap_or_default(),
+            // Its thread ended without an answer (`scan_identity` contains a scan's panic).
+            Err(TryRecvError::Disconnected) => None,
+        };
+        if let Some((key, _)) = self.running.remove(path) {
+            self.done.insert(path.to_owned(), (key, asked));
+        }
+        false
+    }
+
+    /// The answer kept for the pack at `path` read as `key` says. One whose fingerprint can't be
+    /// taken answers once, the read it was made for: such a pack is scanned at every read.
+    fn kept(&mut self, path: &Path, key: &ScanKey) -> Option<Asked> {
+        let (kept, asked) = self.done.get(path).filter(|(kept, _)| kept == key)?;
+        let asked = asked.clone();
+        if kept.files.is_none() {
+            self.done.remove(path);
+        }
+        Some(asked)
+    }
+}
+
+/// Where pack `name` at `path` asks for the identity macros (Auto), its files, the options chosen
+/// for it and the programs mods request as they are now (`ScanKey`): the answer kept for them,
+/// else that of a scan started on a thread of its own (`scan_identity`). `None` while that scan
+/// runs: the caller goes on without the answer and asks again; with `wait`, it waits for it. A
+/// lookup while a scan runs only looks at whether it has landed.
+fn auto_identity(path: &Path, name: &str, wait: bool) -> Option<Asked> {
+    IDENTITY_SCANS.with_borrow_mut(|scans| {
+        loop {
+            if scans.running(path, wait) {
+                return None;
+            }
+            let requests = sunrise_client_render::mod_pipelines::pack_program_requests();
+            let key = ScanKey {
+                files: fingerprint(path),
+                chosen: chosen_shader_options(name),
+                mod_programs: requests.into_iter().flat_map(|r| r.programs).collect(),
+            };
+            if let Some(asked) = scans.kept(path, &key) {
+                return Some(asked);
+            }
+            let (send, answer) = std::sync::mpsc::channel();
+            let (at, read) = (path.to_owned(), key.clone());
+            let spawned = std::thread::Builder::new()
+                .name("identity scan".into())
+                .spawn(move || _ = send.send(scan_identity(&at, read.chosen, &read.mod_programs)));
+            if let Err(e) = spawned {
+                log::warn!("shader pack {name}: no thread for its identity scan ({e}); read here");
+                return Some(scan_identity(path, key.chosen, &key.mod_programs));
+            }
+            scans.running.insert(path.to_owned(), (key, answer));
+            if !wait {
+                return None;
+            }
+        }
+    })
+}
+
+/// The identity scan of the pack at `path` with the options `chosen` for it and the programs mods
+/// request (`sunrise_shaders::asks_for_identity`), on the calling thread. A pack that can't be
+/// opened doesn't ask (its load says why it can't run); a scan that panics doesn't either, and
+/// its panic is logged.
+fn scan_identity(path: &Path, chosen: BTreeMap<String, String>, mod_programs: &[String]) -> Asked {
+    #[cfg(test)]
+    SCANS_RUN_HERE.with(|n| n.set(n.get() + 1));
+    let pack = Pack::open(path).ok()?.with_chosen(chosen);
+    let asked =
+        sunrise_level::crash::contain(|| sunrise_shaders::asks_for_identity(&pack, mod_programs));
+    asked.unwrap_or_else(|why| {
+        log::warn!(
+            "shader pack {}: identity scan stopped: {why}",
+            path.display()
+        );
+        None
+    })
+}
+
+/// The scans still running land; the tests' stand-in for the frames a game draws meanwhile.
+#[cfg(test)]
+fn await_identity_scans() {
+    IDENTITY_SCANS.with_borrow_mut(|scans| {
+        let paths: Vec<_> = scans.running.keys().cloned().collect();
+        for path in paths {
+            scans.running(&path, true);
+        }
+    });
+}
+
+/// Why pack `name` at `path` runs with Iris compatibility under the switch `mode` (decision D-8),
+/// for the log: On, or Auto and where the pack asks (`auto_identity`); `Some(None)`: it runs
+/// without. `None`: on Auto, its scan is still running (never with `wait`).
+fn identity(mode: IrisCompat, path: &Path, name: &str, wait: bool) -> Option<Option<String>> {
+    match mode {
+        IrisCompat::Off => Some(None),
+        IrisCompat::On => Some(Some("turned on in Sunrise Settings".into())),
+        IrisCompat::Auto => auto_identity(path, name, wait).map(|asked| asked.map(asks)),
+    }
+}
+
+/// Why a pack that asks runs with Iris compatibility, `at` where it asks.
+fn asks(at: String) -> String {
+    format!("its programs test them ({at})")
+}
+
+/// Whether the pick `name` runs with Iris compatibility under the switch `mode`, its files and
+/// options read as they are now (`identity`); `None` while its scan runs (never with `wait`).
+fn pick_identity(name: &str, mode: IrisCompat, wait: bool) -> Option<bool> {
+    let path = crate::game::ClientGame::shader_packs_dir().join(name);
+    Some(identity(mode, &path, name, wait)?.is_some())
+}
+
+/// Pack `name`'s options, screens and names in `language`, with the values the player chose,
+/// read with `macros` and the identity macros where its Iris compatibility (`mode`) is on, as
+/// its load will be: `ShaderOptions::iris_compat` says which.
 pub(in crate::game::client_side) fn read_shader_options(
     name: &str,
     language: &str,
     macros: &Macros,
+    mode: IrisCompat,
 ) -> Option<ShaderOptions> {
-    let pack = match Pack::open(&crate::game::ClientGame::shader_packs_dir().join(name)) {
+    let path = crate::game::ClientGame::shader_packs_dir().join(name);
+    let pack = match Pack::open(&path) {
         Ok(pack) => pack,
         Err(e) => {
             log::warn!("shader pack {name}: {e}");
@@ -46,16 +209,30 @@ pub(in crate::game::client_side) fn read_shader_options(
     let lang = sunrise_shaders::Lang::load(&pack, language);
     let chosen = chosen_shader_options(name);
     let pack = pack.with_chosen(chosen.clone());
-    let text = pack.read_text("shaders.properties").unwrap_or_default();
-    let properties = Properties::parse(&text, &sunrise_shaders::properties_macros(&pack, macros));
+    // As the load reads it, with the feature macros the pack asks for and its identity answer:
+    // the page opened by the player waits for the scan when it is still running.
+    let compat = identity(mode, &path, name, true).flatten().is_some();
+    let mut macros = macros.clone();
+    macros.set_identity(compat);
+    let (properties, _) = sunrise_shaders::read_properties(&pack, &mut macros);
     let screens = sunrise_shaders::Screens::parse(&properties, &options);
-    Some(ShaderOptions::new(
-        name.to_owned(),
-        options,
-        screens,
-        lang,
-        chosen,
-    ))
+    let mut options = ShaderOptions::new(name.to_owned(), options, screens, lang, chosen);
+    options.iris_compat = compat;
+    Some(options)
+}
+
+/// The macros the Shader Options page reads the pick with, in game and on the title screen:
+/// the standard set, then `renderer`'s (`Renderer::define_pack_macros`: its device's feature
+/// answers, such as `IRIS_FEATURE_PER_BUFFER_BLENDING`, among them), as the load reads it. With
+/// no renderer made yet, the standard set alone, so the device's answers are not there.
+pub(in crate::game) fn shader_options_macros(
+    renderer: Option<&sunrise_client::gfx::Renderer>,
+) -> Macros {
+    let mut macros = Macros::standard();
+    if let Some(renderer) = renderer {
+        renderer.define_pack_macros(&mut macros);
+    }
+    macros
 }
 
 /// Saves the values chosen on the Shader Options page; none chosen removes the file.
@@ -156,17 +333,56 @@ pub(in crate::game) fn startup_pack_shape(
     )
 }
 
+/// A pack's id files as the load reads them, each with `macros` as `read_properties` left them
+/// (the feature answers among them): `block.properties` (ids and `layer.*` rules, 4.1, 4.2), and
+/// `entity.properties` and `item.properties` (`NamedIds::read`).
+struct IdFiles {
+    blocks: BlockIds,
+    layers: BlockLayers,
+    named: NamedIds,
+    /// The rules of `item.properties` and of `entity.properties`, which `PackIds::resolve`
+    /// resolves against the world's tags.
+    item_rules: BlockIds,
+    entity_rules: BlockIds,
+}
+
+fn read_id_files(pack: &Pack, macros: &Macros) -> IdFiles {
+    let block_properties = Properties::parse(
+        &pack.read_text("block.properties").unwrap_or_default(),
+        macros,
+    );
+    let (named, item_rules, entity_rules) = NamedIds::read(pack, macros);
+    IdFiles {
+        blocks: BlockIds::parse(&block_properties),
+        layers: BlockLayers::parse(&block_properties),
+        named,
+        item_rules,
+        entity_rules,
+    }
+}
+
 /// The `sunrise.hdr` request of pack `name` at `path` as the frame is picked for it: its
-/// `shaders.properties` read with the standard macros and the pack's options as chosen, since
-/// the renderer's macros come with the renderer the answer picks; and a note for each value
-/// the request's keys don't take. Nothing when the pack can't be read.
-fn read_pick_hdr(name: &str, path: &Path) -> (Option<Tonemap>, Vec<String>) {
+/// `shaders.properties` read with the standard macros, the identity macros where its Iris
+/// compatibility (`mode`) is on, and the pack's options as chosen, since the renderer's macros
+/// come with the renderer the answer picks; a note for each value the request's keys don't take;
+/// and whether the identity answer's scan was still running (`identity` without waiting), so the
+/// request was read without it. Nothing when the pack can't be read.
+fn read_pick_hdr(
+    name: &str,
+    path: &Path,
+    mode: IrisCompat,
+) -> (Option<Tonemap>, Vec<String>, bool) {
     let Ok(pack) = Pack::open(path) else {
-        return (None, Vec::new());
+        return (None, Vec::new(), false);
     };
     let pack = pack.with_chosen(chosen_shader_options(name));
-    let (properties, _) = sunrise_shaders::read_properties(&pack, &mut Macros::standard());
-    hdr_request(&properties)
+    // The frame doesn't wait for a scan still running: read without the answer meanwhile.
+    let compat = identity(mode, path, name, false);
+    let mut macros = Macros::standard();
+    macros.set_identity(compat.as_ref().is_some_and(Option::is_some));
+    let (properties, _) = sunrise_shaders::read_properties(&pack, &mut macros);
+    let (hdr, notes) = hdr_request(&properties);
+    (hdr, notes, compat.is_none())
 }
 
 /// The request in `properties` and its notes, as the log gives them.
@@ -179,18 +395,20 @@ fn hdr_request(properties: &Properties) -> (Option<Tonemap>, Vec<String>) {
     (hdr, notes)
 }
 
-/// The loader's read of pack `name`'s `shaders.properties` with `macros` (the standard set and
-/// the renderer's), and what it logs about it, in order: each required feature Sunrise lacks,
-/// each note of the file. Under the switch, also each note about the HDR request not already
-/// logged for the pick (`pick_hdr`), and, when the request read here differs from `frame`, the
-/// one the renderer's frame was made for (`Renderer::pack_hdr`), that the frame's answer counts.
+/// The loader's read of pack `name`'s `shaders.properties` with `macros` (the standard set, the
+/// renderer's and the identity answer of its Iris compatibility switch `mode`), and what it logs
+/// about it, in order: each required feature Sunrise lacks, each note of the file. Under the
+/// switch, also each note about the HDR request not already logged for the pick (`pick_hdr`),
+/// and, when the request read here differs from `served`, the answer Sunrise serves the pack
+/// (`served_hdr`), that the served answer counts.
 /// A load reads the pack's files again: the pick's request is read again at the next frame.
 fn loaded_properties(
     pack: &Pack,
     macros: &mut Macros,
     switch: bool,
-    frame: Option<Tonemap>,
+    served: Option<Tonemap>,
     name: &str,
+    mode: IrisCompat,
     pick_hdr: &mut PickHdr,
 ) -> (Properties, Vec<String>) {
     let (properties, mut log) = sunrise_shaders::read_properties(pack, macros);
@@ -202,12 +420,12 @@ fn loaded_properties(
     );
     if switch {
         let (loaded, notes) = hdr_request(&properties);
-        pick_hdr.follow(name);
+        pick_hdr.follow(name, mode);
         log.extend(pick_hdr.unreported(notes));
-        if loaded != frame {
+        if loaded != served {
             log.push(format!(
                 "shaders.properties asks for Sunrise's HDR as {loaded:?} with the renderer's \
-                 macros, but the frame was made for {frame:?}: the frame's answer counts"
+                 macros, but it is served {served:?}: the served answer counts"
             ));
         }
         pick_hdr.forget();
@@ -215,9 +433,33 @@ fn loaded_properties(
     (properties, log)
 }
 
+/// Sunrise's HDR as the loader serves it to the pick: under the switch, the request the
+/// renderer's frame was made for (`installed`: `Renderer::pack_hdr_pick`, `Renderer::pack_hdr`)
+/// when it was made for this pick (`current`: `picked_pack`, `PickedPack::hdr`) and its request
+/// now. A frame kept for another pick, or for this pick's old request, after its rebuild failed
+/// (`reconcile_pack_hdr`), serves nothing. The loader's own read of the properties with the
+/// renderer's macros doesn't count (`loaded_properties` notes a difference). `None`: not served.
+fn served_hdr(
+    switch: bool,
+    installed: (&str, Option<Tonemap>),
+    current: (&str, Option<Tonemap>),
+) -> Option<Tonemap> {
+    installed.1.filter(|_| switch && installed == current)
+}
+
+/// Serves `hdr` (`served_hdr`) to the pack read with `macros` and `inputs`, after its
+/// properties were read: its programs see `SUNRISE_HDR` (`Macros::define_sunrise_hdr`), and its
+/// `final` is translated as writing linear light (`GameInputs::hdr`). Not served, both are left
+/// as they are.
+fn serve_hdr(hdr: Option<Tonemap>, macros: &mut Macros, inputs: &mut sunrise_shaders::GameInputs) {
+    if let Some(tonemap) = hdr {
+        macros.define_sunrise_hdr(tonemap);
+    }
+    inputs.hdr = hdr;
+}
+
 /// The shader pack key (Sunrise Settings' Shaders page), by identity: the translated key's
-/// vanilla name against the bound one, so a rebind never becomes another mapping's default
-/// (Replay Studio's camera-keyframe shortcut stays physical K's).
+/// vanilla name against the bound one, so a rebind never becomes another mapping's default.
 impl crate::game::ClientGame<'_> {
     pub(in crate::game::client_side) fn shader_pack_key_press(&mut self, name: &str) -> bool {
         if self.client.screen != Screen::Playing
@@ -258,7 +500,7 @@ impl crate::game::ClientGame<'_> {
 }
 
 /// What a renderer readies for the pick, unless it was refused, is missing or its owner is off.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct PickedPack {
     /// It draws flat where the device can: the sections are laid out so.
     pub draws_flat: bool,
@@ -271,10 +513,13 @@ pub(crate) struct PickedPack {
     /// Under the switch, the running pack's `sunrise.hdr` request (`PickHdr`); the renderer
     /// made for this pick keeps it (`Renderer::pack_hdr`).
     pub hdr: Option<Tonemap>,
+    /// The pick (`picked_pack`) this is the shape of: a renderer made for it keeps it with its
+    /// HDR request (`Renderer::pack_hdr_pick`).
+    pub pick: String,
 }
 impl PickedPack {
     /// What it asks of the renderer's frame.
-    pub(crate) fn frame(self) -> sunrise_client::gfx::FrameRequest {
+    pub(crate) fn frame(&self) -> sunrise_client::gfx::FrameRequest {
         sunrise_client::gfx::FrameRequest::new().with_hdr_float(self.hdr_float)
     }
 }
@@ -291,7 +536,9 @@ fn pack_shape(
     let path = dir.join(picked);
     let active = !picked.is_empty()
         && !sunrise_client::shader_pack_list::unsupported(&dir, picked)
-        && (!switch || (path.exists() && outcome(&path) != Some(false)))
+        && (!switch
+            || (path.exists()
+                && outcome(&path, settings.sunrise.iris_compat_of(picked)) != Some(false)))
         && path
             .file_name()
             .is_none_or(|f| !active_pack(&f.to_string_lossy(), &settings.mods).is_empty());
@@ -299,7 +546,7 @@ fn pack_shape(
     let hdr = if !switch {
         None
     } else if active {
-        pick_hdr.answer(picked, &path)
+        pick_hdr.answer(picked, &path, settings.sunrise.iris_compat_of(picked))
     } else {
         // Not running: whatever runs it again reads its files as they are then.
         pick_hdr.forget();
@@ -312,6 +559,7 @@ fn pack_shape(
         starts_wide: active,
         hdr_float: switch && (!active || hdr.is_some()),
         hdr,
+        pick: picked.to_owned(),
     }
 }
 
@@ -320,13 +568,18 @@ fn pack_shape(
 /// is read again when the pick changes, after a frame where the pick doesn't run (off, refused,
 /// missing, its mod off), and after each point where the pick's files or chosen options can
 /// change (`forget`): a load of the pack, an options save, a resource reload, a scan of the
-/// packs. Each frame otherwise compares the pick's name and reads nothing.
+/// packs; and once the identity scan it was read without has landed. Each frame otherwise
+/// compares the pick's name (and, while that scan runs, whether it has landed) and reads nothing.
 #[derive(Default)]
 pub(crate) struct PickHdr {
-    /// The pick (`picked_pack`) the rest is for.
+    /// The pick (`picked_pack`) the rest is for, and its Iris compatibility switch.
     pick: String,
+    mode: IrisCompat,
     /// Its request as last read; `None`: to be read.
     hdr: Option<Option<Tonemap>>,
+    /// That read was made without the identity answer, whose scan was still running: it is read
+    /// again once the scan has landed (`IdentityScans::running`).
+    scanning: bool,
     /// The notes about its request already in the log, so a read again doesn't repeat them.
     reported: Vec<String>,
 }
@@ -334,17 +587,28 @@ pub(crate) struct PickHdr {
 impl PickHdr {
     /// The request of pack `picked` at `path`, read unless a read of that pick is kept. A note
     /// about an unknown value is logged once.
-    fn answer(&mut self, picked: &str, path: &Path) -> Option<Tonemap> {
-        self.follow(picked);
+    fn answer(&mut self, picked: &str, path: &Path, mode: IrisCompat) -> Option<Tonemap> {
+        self.follow(picked, mode);
         if let Some(hdr) = self.hdr {
-            return hdr;
+            let landed =
+                self.scanning && !IDENTITY_SCANS.with_borrow_mut(|s| s.running(path, false));
+            if !landed {
+                return hdr;
+            }
         }
-        let (hdr, notes) = read_pick_hdr(picked, path);
+        let (hdr, notes, scanning) = read_pick_hdr(picked, path, mode);
         for note in self.unreported(notes) {
             log::warn!("shader pack {picked}: {note}");
         }
         self.hdr = Some(hdr);
+        self.scanning = scanning;
         hdr
+    }
+
+    /// The request of pack `picked` as last read, without reading anything: `None` when it
+    /// wasn't read since the pick changed or `forget`.
+    fn kept(&self, picked: &str) -> Option<Tonemap> {
+        self.hdr.flatten().filter(|_| self.pick == picked)
     }
 
     /// The pick's files or chosen options may have changed: the next answer reads them again.
@@ -352,11 +616,16 @@ impl PickHdr {
         self.hdr = None;
     }
 
-    fn follow(&mut self, picked: &str) {
+    fn follow(&mut self, picked: &str, mode: IrisCompat) {
         if self.pick != picked {
             picked.clone_into(&mut self.pick);
             self.hdr = None;
             self.reported.clear();
+        }
+        // Another switch reads the request with other macros.
+        if self.mode != mode {
+            self.mode = mode;
+            self.hdr = None;
         }
     }
 
@@ -377,11 +646,12 @@ impl PickHdr {
 /// installed one keeps its own.
 pub(in crate::game) fn reconcile_pack_hdr(
     follows: bool,
-    installed: &mut Option<Tonemap>,
-    picked: Option<Tonemap>,
+    installed: (&mut String, &mut Option<Tonemap>),
+    picked: (&str, Option<Tonemap>),
 ) -> bool {
     if follows {
-        *installed = picked;
+        picked.0.clone_into(installed.0);
+        *installed.1 = picked.1;
     }
     !follows
 }
@@ -436,8 +706,20 @@ fn running_block_state_id(
 /// geometry.
 #[cfg_attr(any(test, feature = "test-support"), derive(Default))]
 pub struct PackIds {
-    pub(in crate::game) entities: HashMap<String, i32>,
+    /// `entity.properties` and `item.properties`.
+    pub(in crate::game) named: NamedIds,
     pub(in crate::game) blocks: BlockIds,
+    /// `item.properties` and `entity.properties` as read, for `resolve`: kept after it only
+    /// while they name a tag, the only case a later `resolve` reads them again.
+    item_rules: Option<BlockIds>,
+    entity_rules: Option<BlockIds>,
+    /// The world's tags the ids were resolved against (`resolve`), when a rule names a tag
+    /// (`%tag`, 4.1): `sync_pack_ids` resolves them again once the world's tags are replaced.
+    tags: Option<WorldTags>,
+    /// `blocks`' rules by the block name they reach through the world's tags
+    /// (`BlockIds::by_name`), for `blockEntityId`; none while `blocks` names no tag, whose ids
+    /// `BlockIds::id` finds by name.
+    block_rules: Option<HashMap<String, Vec<usize>>>,
     /// `block.properties`' `layer.*` rules (4.2), as the terrain meshes them.
     pub(in crate::game::client_side) layers: super::pack_layers::PackLayers,
     /// `terrain_state_ids` of the loaded pack: two ids per block state, the model's then the
@@ -445,18 +727,10 @@ pub struct PackIds {
     pub(in crate::game) terrain_states: Vec<i32>,
     /// `blockEntityId` by block state, filled as states are drawn.
     pub(in crate::game) block_states: RefCell<HashMap<u32, i32>>,
-    /// The id of a name the file lacks: 65535, or 0 without the file.
-    pub(in crate::game) missing_entity: i32,
     pub(in crate::game) missing_block: i32,
-    /// `item.properties` (4.1) and the id of a held item the file lacks, or of an empty hand:
-    /// −1, or 0 without the file (5.3).
-    pub(in crate::game) items: HashMap<String, i32>,
-    pub(in crate::game) missing_item: i32,
     /// `currentRenderedItemId` of each block item (`StateFacts::item` of its block's default
     /// state): that state's `block.properties` id, or 0.
     pub(in crate::game) block_items: HashMap<String, i32>,
-    /// Whether the pack has `item.properties` (`currentRenderedItemId` of an item it lacks).
-    pub(in crate::game) item_file: bool,
     /// `oldHandLight` (3.2): the first held item and light are those of the brighter hand.
     pub(in crate::game) old_hand_light: bool,
     /// `vignette`: `false` hides the game's vignette over the pack's image.
@@ -467,7 +741,182 @@ pub struct PackIds {
     pub(in crate::game) separate_ao: bool,
 }
 
+/// The world's block, item and entity type tables the client reads, as `sync_pack_layers`
+/// reads them: the tags its server sent, else the remote's tags, else the game's own.
+macro_rules! client_items {
+    ($game:expr) => {
+        $game
+            .common
+            .server_items
+            .as_deref()
+            .or_else(|| $game.client.remote.as_ref()?.tags.as_ref())
+            .unwrap_or_else(|| $game.common.res.items())
+    };
+}
+
+/// The tags a pack's `%tag` entries read (D-9), by tag name.
+struct PackTags<'a> {
+    blocks: Cow<'a, TagMembers>,
+    items: Cow<'a, TagMembers>,
+    entities: Cow<'a, TagMembers>,
+}
+
+impl PackTags<'_> {
+    /// No tags: what a pack whose entries name none reads.
+    fn none() -> Self {
+        Self {
+            blocks: Cow::Owned(TagMembers::new()),
+            items: Cow::Owned(TagMembers::new()),
+            entities: Cow::Owned(TagMembers::new()),
+        }
+    }
+}
+
+/// Which binding of the world's tags a pack's ids were resolved against. Connected to a server
+/// (the window of a single-player world included), the tags it sent: `install_server_items`
+/// makes a new `server_items` for each tags packet. Otherwise the world's tables, each from
+/// one binding: every path that replaces the block tags rebuilds `block_tag_flags`
+/// (`Items::rebuild_block_tag_flags`), the item tags bind `ItemTagNames` again
+/// (`Items::set_tags`), and the entity type tags are a new `EntityTypeTags`
+/// (`Items::set_entity_type_tags`). Held, so no address is reused.
+enum WorldTags {
+    Sent(Arc<Items>),
+    Tables {
+        blocks: Arc<BlockTagFlags>,
+        items: Option<ItemTagNames>,
+        entities: Arc<EntityTypeTags>,
+    },
+}
+
+impl WorldTags {
+    fn tables(items: &Items) -> Self {
+        Self::Tables {
+            blocks: items.block_tag_flags.clone(),
+            items: items.item_tag_names().cloned(),
+            entities: items.entity_type_tags.clone(),
+        }
+    }
+
+    /// Whether these are still the tags of a world whose server sent `sent` (`None`: not
+    /// connected) and whose tables are `items`.
+    fn hold(&self, sent: Option<&Arc<Items>>, items: &Items) -> bool {
+        match (self, sent) {
+            (Self::Sent(held), Some(now)) => Arc::ptr_eq(held, now),
+            (
+                Self::Tables {
+                    blocks,
+                    items: names,
+                    entities,
+                },
+                None,
+            ) => {
+                Arc::ptr_eq(blocks, &items.block_tag_flags)
+                    && Arc::ptr_eq(entities, &items.entity_type_tags)
+                    && match (names, items.item_tag_names()) {
+                        (Some(held), Some(now)) => held.same_generation(now),
+                        (None, None) => true,
+                        _ => false,
+                    }
+            }
+            _ => false,
+        }
+    }
+}
+
+/// The ids `entity.properties` and `item.properties` give names (4.1), and what a name each
+/// file lacks reads (5.3). Each file decides its own default: `entityId` follows
+/// `entity.properties` alone, `heldItemId` `item.properties` alone.
+#[cfg_attr(any(test, feature = "test-support"), derive(Default))]
+pub struct NamedIds {
+    /// `entity.properties` (4.1).
+    pub(in crate::game) entities: HashMap<String, i32>,
+    /// The `entityId` of an entity `entity.properties` lacks: 65535, or 0 without the file.
+    pub(in crate::game) missing_entity: i32,
+    /// `item.properties` (4.1).
+    pub(in crate::game) items: HashMap<String, i32>,
+    /// Whether the pack has `item.properties` (`currentRenderedItemId` of an item it lacks).
+    pub(in crate::game) item_file: bool,
+    /// The id of a held item `item.properties` lacks, or of an empty hand: −1, or 0 without
+    /// the file.
+    pub(in crate::game) missing_item: i32,
+}
+
+impl NamedIds {
+    /// Reads the pack's `entity.properties` and `item.properties` with `macros`. Whether the
+    /// pack has a file decides its default, even when the file can't be read (a zipped file past
+    /// the size cap): such a file gives no ids. The ids are the files' entries by name, with no
+    /// tag; with them, the files' rules, items' then entities', which `PackIds::resolve` resolves
+    /// against the world's tags (`%tag`, 4.1).
+    pub(in crate::game) fn read(pack: &Pack, macros: &Macros) -> (Self, BlockIds, BlockIds) {
+        let read = |kind: &str| {
+            let path = format!("{kind}.properties");
+            let text = pack.read_text(&path);
+            // A successful read proves the file is there; only a failed one needs the lookup.
+            let present = text.is_some() || pack.exists(&path);
+            let rules = BlockIds::parse_kind(
+                &Properties::parse(text.as_deref().unwrap_or_default(), macros),
+                kind,
+            );
+            (rules, present)
+        };
+        let (entity_rules, entity_file) = read("entity");
+        let (item_rules, item_file) = read("item");
+        let named = Self {
+            entities: entity_rules.plain(&TagMembers::new()),
+            missing_entity: if entity_file { 65535 } else { 0 },
+            items: item_rules.plain(&TagMembers::new()),
+            item_file,
+            missing_item: if item_file { -1 } else { 0 },
+        };
+        (named, item_rules, entity_rules)
+    }
+
+    /// The `entityId` of entity type `name` (5.3).
+    pub(in crate::game) fn entity_id(&self, name: &str) -> i32 {
+        self.entities
+            .get(name)
+            .copied()
+            .unwrap_or(self.missing_entity)
+    }
+}
+
 impl PackIds {
+    /// Whether an entry names a tag: only then do the ids follow the world's tags.
+    fn names_tags(&self) -> bool {
+        let names = |rules: &Option<BlockIds>| rules.as_ref().is_some_and(BlockIds::names_tags);
+        self.blocks.names_tags() || names(&self.item_rules) || names(&self.entity_rules)
+    }
+
+    /// Resolves the ids against `tags` (a `%tag` entry gives its members the id, 4.1), taken
+    /// from the binding `bound`: the terrain's table, the block items', the items' and the
+    /// entities', and the block entities' from their next draw on.
+    fn resolve(
+        &mut self,
+        registry: &sunrise_world::registry::BlockRegistry,
+        facts: &sunrise_items::blocks::BlockFacts,
+        tags: &PackTags<'_>,
+        bound: WorldTags,
+    ) {
+        self.terrain_states = terrain_state_ids(registry, &self.blocks, &tags.blocks);
+        self.block_items = block_item_ids(facts, registry, &self.blocks, &tags.blocks);
+        self.block_rules = self.blocks.names_tags().then(|| {
+            (self.blocks.by_name(&tags.blocks).into_iter())
+                .map(|(name, rules)| (name.to_owned(), rules))
+                .collect()
+        });
+        if let Some(rules) = &self.item_rules {
+            self.named.items = rules.plain(&tags.items);
+        }
+        if let Some(rules) = &self.entity_rules {
+            self.named.entities = rules.plain(&tags.entities);
+        }
+        self.block_states.get_mut().clear();
+        self.tags = self.names_tags().then_some(bound);
+        // Rules naming no tag give the same ids every time: nothing reads them again.
+        self.item_rules = self.item_rules.take().filter(BlockIds::names_tags);
+        self.entity_rules = self.entity_rules.take().filter(BlockIds::names_tags);
+    }
+
     /// The pack's `block.properties` id for the block state at registry index `state`, the
     /// model id the terrain carries; `None` when the file gives it none or the index is past
     /// the registry.
@@ -481,18 +930,159 @@ impl PackIds {
 
 #[cfg(any(test, feature = "test-support"))]
 impl PackIds {
+    /// A pack's ids from its `block.properties`, `item.properties` and `entity.properties`
+    /// texts, resolved against `game`'s world as the loader resolves them.
+    pub fn of_files(
+        game: &crate::game::ClientGame<'_>,
+        block: &str,
+        item: &str,
+        entity: &str,
+    ) -> Self {
+        let parse = |text: &str, kind: &str| {
+            BlockIds::parse_kind(&Properties::parse(text, &Macros::standard()), kind)
+        };
+        let mut ids = Self {
+            blocks: parse(block, "block"),
+            item_rules: Some(parse(item, "item")),
+            entity_rules: Some(parse(entity, "entity")),
+            named: NamedIds {
+                item_file: true,
+                missing_item: -1,
+                missing_entity: 65535,
+                ..Default::default()
+            },
+            missing_block: 65535,
+            ..Default::default()
+        };
+        let (tags, bound) = pack_tags(
+            game.client.remote.as_ref(),
+            game.common.server_items.as_ref(),
+            client_items!(game),
+            ids.names_tags(),
+        );
+        ids.resolve(
+            game.common.pack.assets.registry,
+            game.common.res.facts(),
+            &tags,
+            bound,
+        );
+        ids
+    }
+
     pub fn with_entity_ids<'a>(ids: impl IntoIterator<Item = (&'a str, i32)>) -> Self {
         Self {
-            entities: ids
-                .into_iter()
-                .map(|(name, id)| (name.into(), id))
-                .collect(),
+            named: NamedIds {
+                entities: ids
+                    .into_iter()
+                    .map(|(name, id)| (name.into(), id))
+                    .collect(),
+                ..Default::default()
+            },
             ..Default::default()
         }
     }
 }
 
+/// The tags a pack's `%tag` entries read now (D-9), and which binding they are; none unless
+/// `wanted` (a pack whose entries name no tag reads none). Connected to a server (`remote`,
+/// whose tags packets made `sent`), the tags it sent; otherwise the world's tables, `items`.
+/// Those packets are also `sent`'s tables.
+fn pack_tags<'a>(
+    remote: Option<&'a crate::game::client_side::remote_client::Remote>,
+    sent: Option<&Arc<Items>>,
+    items: &'a Items,
+    wanted: bool,
+) -> (PackTags<'a>, WorldTags) {
+    if let (Some(remote), Some(sent)) = (remote, sent) {
+        let bound = WorldTags::Sent(sent.clone());
+        if !wanted {
+            return (PackTags::none(), bound);
+        }
+        let names = |registry: &str| -> TagMembers {
+            let Some(ids) = remote.builtin.get(registry) else {
+                return TagMembers::new();
+            };
+            let tags = remote.registries.tags.get(registry).into_iter().flatten();
+            tags.map(|(tag, members)| {
+                let members = members.iter().filter_map(|&id| ids.name(id));
+                (tag.clone(), members.map(str::to_owned).collect())
+            })
+            .collect()
+        };
+        let tags = PackTags {
+            blocks: Cow::Owned(names("minecraft:block")),
+            items: Cow::Owned(names("minecraft:item")),
+            entities: Cow::Owned(names(EntityTypeTags::REGISTRY)),
+        };
+        return (tags, bound);
+    }
+    let bound = WorldTags::tables(items);
+    if !wanted {
+        return (PackTags::none(), bound);
+    }
+    let tags = PackTags {
+        blocks: Cow::Borrowed(&items.block_tags),
+        items: Cow::Borrowed(&items.item_tags),
+        entities: Cow::Borrowed(&**items.entity_type_tags.members()),
+    };
+    (tags, bound)
+}
+
 impl crate::game::ClientGame<'_> {
+    /// Drops the running or building pack when the pick changed to `picked`.
+    fn apply_shader_pack_pick(&mut self, picked: &str) {
+        if self.client.native_shaders.picked != picked {
+            picked.clone_into(&mut self.client.native_shaders.picked);
+            self.client.native_shaders.identity_build = None;
+            self.client.native_shaders.identity_seen = None;
+            self.client.native_shaders.identity_recheck = false;
+            self.set_translucent_layers(Vec::new());
+            self.client.pack_ids = None;
+            if let Some(renderer) = &mut self.client.renderer.0 {
+                renderer.drop_shader_packs();
+            }
+        }
+    }
+    /// A title screen frame, which loads no pack and resolves no pack path: shaders turned off in
+    /// the settings still drop the pack now, and the cancelled builds that have ended are joined,
+    /// as `shader_pack_inputs` does in a world, so neither keeps its GPU objects until a world
+    /// draws.
+    pub(in crate::game::client_side) fn shader_pack_title_frame(&mut self) {
+        if picked_pack(&self.client.settings).is_empty() {
+            self.apply_shader_pack_pick("");
+        }
+        if let Some(renderer) = &self.client.renderer.0 {
+            renderer.reap_pack_builds();
+        }
+    }
+    /// Resolves the loaded pack's ids again when the world's tags its `%tag` entries (4.1) were
+    /// resolved against were replaced (a server's tags, `/reload`, another world), and hands
+    /// the renderer the terrain's. Nothing for a pack whose entries name no tag.
+    pub fn sync_pack_ids(&mut self) {
+        let Some(held) = (self.client.pack_ids.as_ref()).and_then(|ids| ids.tags.as_ref()) else {
+            return;
+        };
+        let sent = (self.client.remote.as_ref()).and(self.common.server_items.as_ref());
+        if held.hold(sent, client_items!(self)) {
+            return;
+        }
+        let (tags, bound) = pack_tags(
+            self.client.remote.as_ref(),
+            self.common.server_items.as_ref(),
+            client_items!(self),
+            true,
+        );
+        let Some(ids) = self.client.pack_ids.as_mut() else {
+            return;
+        };
+        let registry = self.common.pack.assets.registry;
+        ids.resolve(registry, self.common.res.facts(), &tags, bound);
+        drop(tags);
+        if let Some(renderer) = &mut self.client.renderer.0 {
+            renderer.set_pack_block_ids(ids.terrain_states.clone());
+        }
+    }
+
     /// Loads the pack for the current dimension when it changed, and returns this frame's
     /// inputs to the pack's uniforms.
     pub(in crate::game::client_side) fn shader_pack_inputs(
@@ -535,6 +1125,8 @@ impl crate::game::ClientGame<'_> {
         // Its `layer.*` rules (4.2), none without a pack: in the frame after it loads or drops, as
         // the flags above, so one meshing of every section takes them all.
         self.sync_pack_layers();
+        // Its ids, before this frame's held items and entities read them.
+        self.sync_pack_ids();
         let selected = picked_pack(&self.client.settings).to_owned();
         let dir = Self::shader_packs_dir();
         let path = dir.join(&selected);
@@ -551,13 +1143,48 @@ impl crate::game::ClientGame<'_> {
         } else {
             path.to_string_lossy().into_owned()
         };
-        if self.client.native_shaders.picked != picked {
-            self.client.native_shaders.picked = picked.clone();
-            self.set_translucent_layers(Vec::new());
-            self.client.pack_ids = None;
-            if let Some(renderer) = &mut self.client.renderer.0 {
-                renderer.drop_shader_packs();
+        self.apply_shader_pack_pick(&picked);
+        let dimension = match self.common.dim {
+            Dim::Overworld | Dim::Extra(_) => 0,
+            Dim::Nether => -1,
+            Dim::End => 1,
+        };
+        // Sunrise's HDR as the renderer serves it to the pick (`served_hdr`), looked up only under
+        // the switch and for a pick that runs: the pick's request as this frame's `follow_frame`
+        // read it (`PickHdr::kept`), no file read here. A build for another answer is dropped
+        // before any result is looked at, so a stale build's refusal never counts against the
+        // pick; a build for another dimension is left to be polled, as without the extension.
+        let served = match &self.client.renderer.0 {
+            Some(renderer)
+                if super::native_shaders::linear_frame_switch() && !picked.is_empty() =>
+            {
+                let request = self.client.native_shaders.pick_hdr.borrow().kept(&selected);
+                served_hdr(
+                    true,
+                    (&renderer.pack_hdr_pick, renderer.pack_hdr),
+                    (&selected, request),
+                )
             }
+            _ => None,
+        };
+        if let Some(renderer) = &mut self.client.renderer.0 {
+            renderer.drop_superseded_pack_load(served);
+        }
+        // A pack loaded (or building) with another Iris compatibility switch, or another identity
+        // answer, than the pick's now is dropped before it can run (`poll_shader_pack_unless`),
+        // and loads again below.
+        let mode = self.client.settings.sunrise.iris_compat_of(&selected);
+        // The pick's answer read again for the pack list (`refresh_identity`), once its scan has
+        // landed.
+        if self.client.native_shaders.identity_recheck
+            && let Some(seen) = pick_identity(&selected, mode, false)
+        {
+            self.client.native_shaders.identity_seen = Some(seen);
+            self.client.native_shaders.identity_recheck = false;
+        }
+        let stale = self.client.native_shaders.stale_identity(mode);
+        if stale {
+            self.client.pack_ids = None;
         }
         // A pack whose pipelines were building runs once they are built, or is turned off.
         if let Some((dimension, name, started, report)) = self
@@ -565,11 +1192,11 @@ impl crate::game::ClientGame<'_> {
             .renderer
             .0
             .as_mut()
-            .and_then(|r| r.poll_shader_pack())
+            .and_then(|r| r.poll_shader_pack_unless(stale))
         {
             match report {
                 Ok(Some((programs, notes))) => {
-                    remember(&path, fingerprint(&path), true);
+                    remember(&path, fingerprint(&path), mode, true);
                     for note in notes {
                         log::warn!("shader pack {name}: {note}");
                     }
@@ -580,7 +1207,7 @@ impl crate::game::ClientGame<'_> {
                         started.elapsed().as_millis()
                     );
                 }
-                Ok(None) => remember(&path, fingerprint(&path), false),
+                Ok(None) => remember(&path, fingerprint(&path), mode, false),
                 // Stopped because it isn't wanted any more: not the pack's failure.
                 Err(refused) if refused.is_cancelled() => {}
                 Err(refused) => {
@@ -600,33 +1227,48 @@ impl crate::game::ClientGame<'_> {
             return PackInputs::default();
         }
         let name = selected.clone();
-        let dimension = match self.common.dim {
-            Dim::Overworld | Dim::Extra(_) => 0,
-            Dim::Nether => -1,
-            Dim::End => 1,
-        };
         if let Some(renderer) = &mut self.client.renderer.0
-            && renderer.shader_pack_dimension() != Some(dimension)
-            && !(super::native_shaders::linear_frame_switch() && refused(&path, fingerprint(&path)))
+            && renderer.shader_pack_loaded_for() != Some((dimension, served))
+            && !(super::native_shaders::linear_frame_switch()
+                && refused(&path, fingerprint(&path), mode))
+            // Its Iris compatibility, decided before anything is translated: on Auto with no
+            // answer kept, its scan runs on a thread of its own, and the game draws without the
+            // pack until a frame finds the scan landed.
+            && let Some(compat) = identity(mode, &path, &name, false)
         {
             let name = name.as_str();
             let started = std::time::Instant::now();
             // A pack is not the game's own code: one that makes the shader compiler (or our
             // translation of it) panic is turned off instead of crashing every world load (#3525).
             let loaded = sunrise_level::crash::contain(|| {
-                match Pack::open(&path).map(|p| p.with_chosen(chosen_shader_options(name))) {
+                let chosen = chosen_shader_options(name);
+                match Pack::open(&path).map(|p| p.with_chosen(chosen.clone())) {
                     Ok(pack) => {
                         let mut macros = Macros::standard();
                         renderer.define_pack_macros(&mut macros);
+                        if let Some(why) = &compat {
+                            log::info!(
+                                "shader pack {name}: runs with Iris compatibility (IS_IRIS, \
+                                 IRIS_VERSION {}): {why}",
+                                sunrise_shaders::IRIS_VERSION
+                            );
+                        }
+                        macros.set_identity(compat.is_some());
+                        self.client.native_shaders.identity_build = Some((mode, compat.is_some()));
+                        self.client.native_shaders.identity_seen = Some(compat.is_some());
+                        self.client.native_shaders.identity_recheck = false;
                         // Its conditionals test the pack's options too.
                         let (properties, log) = loaded_properties(
                             &pack,
                             &mut macros,
                             super::native_shaders::linear_frame_switch(),
-                            renderer.pack_hdr,
+                            served,
                             name,
+                            mode,
                             &mut self.client.native_shaders.pick_hdr.borrow_mut(),
                         );
+                        #[cfg(test)]
+                        renderer.test_hooks.loaded_log.clone_from(&log);
                         for line in log {
                             log::warn!("shader pack {name}: {line}");
                         }
@@ -653,7 +1295,8 @@ impl crate::game::ClientGame<'_> {
                         renderer.set_pack_terrain_bindings(
                             sunrise_client::gfx::pack_atlas::TerrainBindings::of(&properties),
                         );
-                        let inputs = renderer.pack_inputs();
+                        let mut inputs = renderer.pack_inputs();
+                        serve_hdr(served, &mut macros, &mut inputs);
                         let mut post = load_post(&pack, &folder, &properties, &macros, &inputs);
                         // Textures that name one of the game's: from the resource packs over
                         // the game's own resources.
@@ -668,33 +1311,20 @@ impl crate::game::ClientGame<'_> {
                         let names: Vec<&str> =
                             biomes.list.iter().map(|b| b.name.as_str()).collect();
                         post.custom.set_biomes(&names);
-                        let text = pack.read_text("block.properties").unwrap_or_default();
-                        let block_properties = Properties::parse(&text, &macros);
-                        let ids = BlockIds::parse(&block_properties);
-                        let layers = BlockLayers::parse(&block_properties);
+                        let IdFiles {
+                            blocks: ids,
+                            layers,
+                            named,
+                            item_rules: items,
+                            entity_rules: entities,
+                        } = read_id_files(&pack, &macros);
                         for note in ids.notes.iter().chain(&layers.notes) {
                             log::warn!("shader pack {name}: block.properties: {note}");
                         }
-                        let text = pack.read_text("entity.properties");
-                        let entities = BlockIds::parse_kind(
-                            &Properties::parse(text.as_deref().unwrap_or_default(), &macros),
-                            "entity",
-                        );
-                        let text = pack.read_text("item.properties");
-                        let items = BlockIds::parse_kind(
-                            &Properties::parse(text.as_deref().unwrap_or_default(), &macros),
-                            "item",
-                        );
-                        let block_items = block_item_ids(
-                            self.common.res.facts(),
-                            self.common.pack.assets.registry,
-                            &ids,
-                        );
-                        self.client.pack_ids = Some(PackIds {
-                            block_items,
-                            item_file: text.is_some(),
-                            items: items.plain(),
-                            missing_item: if text.is_some() { -1 } else { 0 },
+                        let mut pack_ids = PackIds {
+                            block_items: HashMap::new(),
+                            named,
+                            item_rules: Some(items),
                             // OQ-21: on unless the pack turns it off.
                             old_hand_light: properties
                                 .get("oldHandLight")
@@ -708,19 +1338,31 @@ impl crate::game::ClientGame<'_> {
                                 .get("oldLighting")
                                 .is_some_and(|v| v.trim() == "true"),
                             separate_ao,
-                            entities: entities.plain(),
-                            missing_entity: if text.is_some() { 65535 } else { 0 },
+                            entity_rules: Some(entities),
+                            tags: None,
+                            block_rules: None,
                             missing_block: if ids.is_empty() { 0 } else { 65535 },
-                            blocks: ids.clone(),
+                            blocks: ids,
                             layers: super::pack_layers::PackLayers::new(name, layers),
                             terrain_states: Vec::new(),
                             block_states: RefCell::default(),
-                        });
+                        };
                         let started_ids = std::time::Instant::now();
-                        let table = terrain_state_ids(self.common.pack.assets.registry, &ids);
-                        if let Some(pack_ids) = &mut self.client.pack_ids {
-                            pack_ids.terrain_states.clone_from(&table);
-                        }
+                        let (tags, bound) = pack_tags(
+                            self.client.remote.as_ref(),
+                            self.common.server_items.as_ref(),
+                            client_items!(self),
+                            pack_ids.names_tags(),
+                        );
+                        pack_ids.resolve(
+                            self.common.pack.assets.registry,
+                            self.common.res.facts(),
+                            &tags,
+                            bound,
+                        );
+                        drop(tags);
+                        let table = pack_ids.terrain_states.clone();
+                        self.client.pack_ids = Some(pack_ids);
                         log::info!(
                             "shader pack {name}: mc_Entity for {} of {} block states in {} ms",
                             table.chunks(2).filter(|p| p[0] != -1).count(),
@@ -733,7 +1375,7 @@ impl crate::game::ClientGame<'_> {
                         renderer.load_shader_pack(dimension, post, table, name.to_owned(), started);
                     }
                     Err(e) => {
-                        remember(&path, fingerprint(&path), false);
+                        remember(&path, fingerprint(&path), mode, false);
                         self.client.pack_ids = None;
                         log::warn!("shader pack {name}: {e}");
                         // Without a pack this can't fail.
@@ -947,13 +1589,35 @@ impl crate::game::ClientGame<'_> {
 
     /// The Shader Options page opened: the picked pack's options, screens and names.
     pub(in crate::game::client_side) fn open_shader_options(&mut self) {
-        let mut macros = Macros::standard();
-        if let Some(renderer) = &self.client.renderer.0 {
-            renderer.define_pack_macros(&mut macros);
-        }
+        let macros = shader_options_macros(self.client.renderer.0.as_deref());
         let name = &self.client.settings.sunrise.shader_pack;
+        let mode = self.client.settings.sunrise.iris_compat_of(name);
         self.client.settings.shader_options =
-            read_shader_options(name, &self.client.settings.language, &macros);
+            read_shader_options(name, &self.client.settings.language, &macros, mode);
+        // What was read is the pick's answer now: a pack replaced under its name that answers
+        // otherwise loads again (`NativeShaders::stale_identity`).
+        if let Some(o) = &self.client.settings.shader_options
+            && o.pack == picked_pack(&self.client.settings)
+        {
+            self.client.native_shaders.identity_seen = Some(o.iris_compat);
+            self.client.native_shaders.identity_recheck = false;
+        }
+    }
+
+    /// The pick's files may have changed (the pack list read again): its identity answer is read
+    /// again, so a pack replaced under its name that answers otherwise loads again. A scan this
+    /// starts runs on a thread of its own; the frames after take its answer once it has landed
+    /// (`shader_pack_inputs`).
+    pub(in crate::game::client_side) fn refresh_identity(&mut self) {
+        let name = picked_pack(&self.client.settings);
+        if name.is_empty() {
+            return;
+        }
+        let mode = self.client.settings.sunrise.iris_compat_of(name);
+        match pick_identity(name, mode, false) {
+            Some(seen) => self.client.native_shaders.identity_seen = Some(seen),
+            None => self.client.native_shaders.identity_recheck = true,
+        }
     }
 
     /// The Shader Options page closed with changes: they are saved, and the pack loads again.
@@ -990,7 +1654,8 @@ impl crate::game::ClientGame<'_> {
         error: &str,
     ) {
         let path = Self::shader_packs_dir().join(name);
-        remember(&path, fingerprint(&path), false);
+        let mode = self.client.settings.sunrise.iris_compat_of(name);
+        remember(&path, fingerprint(&path), mode, false);
         log::error!("shader pack {name}: turned off: {error}");
         self.client.pack_ids = None;
         if let Some(renderer) = &mut self.client.renderer.0 {
@@ -1037,12 +1702,12 @@ impl crate::game::ClientGame<'_> {
     }
 
     /// `currentRenderedItemId` of a held `item`, [`rendered_item_id`]'s; 0 without a pack.
-    pub(in crate::game::client_side) fn rendered_item_id(&self, item: &str) -> i32 {
+    pub fn rendered_item_id(&self, item: &str) -> i32 {
         self.client.pack_ids.as_ref().map_or(0, |ids| {
             rendered_item_id(
                 ids.block_items.get(item).copied(),
-                ids.items.get(item).copied(),
-                ids.item_file,
+                ids.named.items.get(item).copied(),
+                ids.named.item_file,
             )
         })
     }
@@ -1062,9 +1727,9 @@ impl crate::game::ClientGame<'_> {
         ]
         .map(|slot| {
             let item = self.common.stack_in(slot).map(|s| &*s.item);
-            let id = item.and_then(|i| ids.items.get(i).copied());
+            let id = item.and_then(|i| ids.named.items.get(i).copied());
             (
-                id.unwrap_or(ids.missing_item),
+                id.unwrap_or(ids.named.missing_item),
                 item.map_or(0, |i| i32::from(lum.of(i))),
             )
         });
@@ -1100,18 +1765,14 @@ impl crate::game::ClientGame<'_> {
         }
     }
 
-    pub(in crate::game) fn entity_part_span(
+    pub fn entity_part_span(
         &self,
         start: usize,
         name: &str,
         translucent: bool,
     ) -> Option<EntitySpan> {
         let id = match &self.client.pack_ids {
-            Some(ids) => ids
-                .entities
-                .get(name)
-                .copied()
-                .unwrap_or(ids.missing_entity),
+            Some(ids) => ids.named.entity_id(name),
             None if native_spans() => name_id(name),
             None => return None,
         };
@@ -1125,7 +1786,7 @@ impl crate::game::ClientGame<'_> {
     }
 
     /// Starts a span for the block entity of block state `state`.
-    pub(in crate::game::client_side) fn mark_block_entity(&self, start: usize, state: u32) {
+    pub fn mark_block_entity(&self, start: usize, state: u32) {
         let Some(ids) = &self.client.pack_ids else {
             if native_spans() {
                 self.push_span(start, "BLOCK_ENTITIES", state as i32);
@@ -1141,8 +1802,14 @@ impl crate::game::ClientGame<'_> {
                 registry
                     .state(sunrise_world::registry::BlockStateId(state))
                     .and_then(|s| {
-                        ids.blocks
-                            .id(&s.name, |k| s.properties.get(k).map(String::as_str))
+                        let properties = |k: &str| s.properties.get(k).map(String::as_str);
+                        match &ids.block_rules {
+                            Some(by_name) => {
+                                let rules = by_name.get(&s.name)?;
+                                ids.blocks.pick(rules.iter().copied(), properties)
+                            }
+                            None => ids.blocks.id(&s.name, properties, |_| false),
+                        }
                     })
                     .unwrap_or(ids.missing_block)
             });
@@ -1245,13 +1912,15 @@ pub(in crate::game::client_side) fn rendered_item_id(
 }
 
 /// The block items' `currentRenderedItemId`: for each block's default state, the item it gives
-/// (`StateFacts::item`) takes the state's id in `ids`, or 0. A block named as its item wins over
-/// another block giving that item.
+/// (`StateFacts::item`) takes the state's id in `ids` (its block's tags in `tags`), or 0. A block
+/// named as its item wins over another block giving that item.
 pub(in crate::game::client_side) fn block_item_ids(
     facts: &sunrise_items::blocks::BlockFacts,
     registry: &sunrise_world::registry::BlockRegistry,
     ids: &BlockIds,
+    tags: &TagMembers,
 ) -> HashMap<String, i32> {
+    let by_name = ids.by_name(tags);
     let mut out = HashMap::new();
     for (i, state) in facts.states.iter().enumerate() {
         let id = sunrise_world::registry::BlockStateId(i as u32);
@@ -1260,7 +1929,7 @@ pub(in crate::game::client_side) fn block_item_ids(
         }
         let value = registry
             .state(id)
-            .and_then(|s| ids.id(&s.name, |k| s.properties.get(k).map(String::as_str)))
+            .and_then(|s| state_id(ids, &by_name, s))
             .unwrap_or(0);
         if state.item == state.name {
             out.insert(state.item.to_string(), value);
@@ -1287,21 +1956,34 @@ pub(in crate::game::client_side) fn name_id(name: &str) -> i32 {
     hash as i32
 }
 
+/// The id `ids` give `state`, with `by_name` (`BlockIds::by_name`) the rules reaching each block.
+fn state_id(
+    ids: &BlockIds,
+    by_name: &HashMap<&str, Vec<usize>>,
+    state: &sunrise_world::chunk::BlockState,
+) -> Option<i32> {
+    let rules = by_name.get(state.name.as_str())?;
+    ids.pick(rules.iter().copied(), |k| {
+        state.properties.get(k).map(String::as_str)
+    })
+}
+
 /// Model/fluid material ids by the original state, independent of sprite sharing and
-/// multipart model selection. Waterlogged model faces retain their model id; emitted
-/// fluid faces use the fluid's state (the source state itself for liquid blocks).
+/// multipart model selection, a `%tag` rule reaching the blocks `tags` lists under it.
+/// Waterlogged model faces retain their model id; emitted fluid faces use the fluid's state
+/// (the source state itself for liquid blocks).
 pub(in crate::game::client_side) fn terrain_state_ids(
     registry: &sunrise_world::registry::BlockRegistry,
     ids: &BlockIds,
+    tags: &TagMembers,
 ) -> Vec<i32> {
     use sunrise_world::{
         fluid::{FluidKind, FluidState},
         registry::BlockStateId,
     };
-    let material = |state: &sunrise_world::chunk::BlockState| {
-        ids.id(&state.name, |k| state.properties.get(k).map(String::as_str))
-            .unwrap_or(-1)
-    };
+    let by_name = ids.by_name(tags);
+    let material =
+        |state: &sunrise_world::chunk::BlockState| state_id(ids, &by_name, state).unwrap_or(-1);
     (0..registry.len())
         .flat_map(|i| {
             let Some(state) = registry.state(BlockStateId(i as u32)) else {
@@ -1350,18 +2032,21 @@ pub(in crate::game) mod terrain_source_tests {
             "block.31=fixture:signal:lit=false\nblock.47=fixture:signal:lit=true\nblock.59=minecraft:water:level=0\nblock.61=minecraft:water:level=1\nblock.73=minecraft:lava\n",
         );
         assert_eq!(
-            terrain_state_ids(&registry, &ids),
+            terrain_state_ids(&registry, &ids, &TagMembers::new()),
             [-1, -1, 31, -1, 47, 59, 59, 59, 61, 61, 73, 73]
         );
         let changed = parse("block.211=fixture:signal:lit=true\nblock.223=minecraft:water\n");
         assert_eq!(
-            terrain_state_ids(&registry, &changed),
+            terrain_state_ids(&registry, &changed, &TagMembers::new()),
             [-1, -1, -1, -1, 211, 223, 223, 223, 223, 223, -1, -1]
         );
-        assert_eq!(terrain_state_ids(&registry, &BlockIds::default()), [-1; 12]);
+        assert_eq!(
+            terrain_state_ids(&registry, &BlockIds::default(), &TagMembers::new()),
+            [-1; 12]
+        );
 
         let pack = |ids: &BlockIds| PackIds {
-            terrain_states: terrain_state_ids(&registry, ids),
+            terrain_states: terrain_state_ids(&registry, ids, &TagMembers::new()),
             ..Default::default()
         };
         let signal = pack(&ids);
@@ -1376,6 +2061,220 @@ pub(in crate::game) mod terrain_source_tests {
         assert_eq!(signal.block_state_id(usize::MAX), None);
         assert_eq!(pack(&BlockIds::default()).block_state_id(1), None);
         assert_eq!(PackIds::default().block_state_id(1), None);
+    }
+
+    /// The fixture of `terrain_source_cpu_state_filters_fluid_owners_and_pack_reload`: air, a
+    /// signal unlit and lit (waterlogged), water at levels 0 and 1, lava.
+    fn signal_registry() -> sunrise_world::registry::BlockRegistry {
+        let rows = serde_json::json!({"defaults":{"minecraft:air":0,"fixture:signal":1,"minecraft:water":3,"minecraft:lava":5},"states":[
+            ["",true,false,"","minecraft:air"],
+            ["",false,false,"",{"id":"fixture:signal","properties":{"lit":"false","waterlogged":"false"}}],
+            ["",false,true,"",{"id":"fixture:signal","properties":{"lit":"true","waterlogged":"true"}}],
+            ["",false,true,"",{"id":"minecraft:water","properties":{"level":"0"}}],
+            ["",false,true,"",{"id":"minecraft:water","properties":{"level":"1"}}],
+            ["",false,true,"",{"id":"minecraft:lava","properties":{"level":"0"}}]
+        ]});
+        sunrise_world::registry::BlockRegistry::from_facts_json(rows.to_string().as_bytes())
+            .unwrap()
+    }
+
+    fn tags(rows: &[(&str, &[&str])]) -> HashMap<String, Vec<String>> {
+        rows.iter()
+            .map(|(tag, members)| {
+                let members = members.iter().map(|m| (*m).to_owned()).collect();
+                ((*tag).to_owned(), members)
+            })
+            .collect()
+    }
+
+    /// The issue's case on the terrain: `block.<id>=%<tag>` gives the tag's members the id, the
+    /// model's and, through a tag naming the fluid, the fluid's; a rule naming the block wins.
+    #[test]
+    fn terrain_ids_reach_a_tags_members() {
+        let registry = signal_registry();
+        let ids = BlockIds::parse(&Properties::parse(
+            "block.42=%fixture:signals\nblock.43=fixture:signal:lit=true\nblock.59=%water\n",
+            &Macros::standard(),
+        ));
+        let members = |rows: &[(&str, &[&str])]| -> TagMembers {
+            tags(rows)
+                .into_iter()
+                .map(|(tag, m)| (tag, m.into_iter().collect()))
+                .collect()
+        };
+        let world = members(&[
+            ("fixture:signals", &["fixture:signal"]),
+            ("minecraft:water", &["minecraft:water"]),
+        ]);
+        assert_eq!(
+            terrain_state_ids(&registry, &ids, &world),
+            [-1, -1, 42, -1, 43, 59, 59, 59, 59, 59, -1, -1]
+        );
+        // Without those tags only the named state has an id.
+        assert_eq!(
+            terrain_state_ids(&registry, &ids, &TagMembers::new()),
+            [-1, -1, -1, -1, 43, -1, -1, -1, -1, -1, -1, -1]
+        );
+    }
+
+    /// `PackIds::resolve` reads the world's block, item and entity type tags, and the tags it
+    /// read hold until one of them is bound again; a pack whose entries name no tag keeps none.
+    #[test]
+    fn pack_ids_follow_the_worlds_tags() {
+        use sunrise_items::items::TagRegistry;
+        let registry = signal_registry();
+        let facts = sunrise_items::blocks::BlockFacts {
+            states: Vec::new(),
+            air: sunrise_world::registry::BlockStateId(0),
+            woods: HashMap::new(),
+            sign_texts: HashMap::new(),
+        };
+        let parse = |text: &str, kind: &str| {
+            BlockIds::parse_kind(&Properties::parse(text, &Macros::standard()), kind)
+        };
+        let mut pack = PackIds {
+            blocks: parse("block.42=%fixture:signals\n", "block"),
+            item_rules: Some(parse(
+                "item.10=%minecraft:swords\nitem.11=minecraft:iron_sword\n",
+                "item",
+            )),
+            entity_rules: Some(parse("entity.20=%skeletons\n", "entity")),
+            ..Default::default()
+        };
+        let mut items = Items::empty();
+        items.set_tags(
+            TagRegistry::Block,
+            tags(&[("fixture:signals", &["fixture:signal"])]),
+        );
+        items.set_tags(
+            TagRegistry::Item,
+            tags(&[(
+                "minecraft:swords",
+                &["minecraft:iron_sword", "minecraft:golden_sword"],
+            )]),
+        );
+        items.set_tags(
+            TagRegistry::EntityType,
+            tags(&[("minecraft:skeletons", &["minecraft:skeleton"])]),
+        );
+        pack.block_states.get_mut().insert(1, 99);
+        let resolve = |pack: &mut PackIds, items: &Items| {
+            let (tags, bound) = pack_tags(None, None, items, pack.names_tags());
+            pack.resolve(&registry, &facts, &tags, bound);
+        };
+        resolve(&mut pack, &items);
+        assert_eq!(
+            pack.terrain_states,
+            [-1, -1, 42, -1, 42, -1, -1, -1, -1, -1, -1, -1]
+        );
+        assert_eq!(
+            pack.named.items,
+            HashMap::from([
+                ("minecraft:iron_sword".to_owned(), 11),
+                ("minecraft:golden_sword".to_owned(), 10),
+            ])
+        );
+        assert_eq!(
+            pack.named.entities,
+            HashMap::from([("minecraft:skeleton".to_owned(), 20)])
+        );
+        assert!(
+            pack.block_states.get_mut().is_empty(),
+            "drawn ids forgotten"
+        );
+        let held = pack.tags.as_ref().expect("its entries name tags");
+        assert!(held.hold(None, &items));
+        assert!(
+            held.hold(None, &items.clone()),
+            "a copy holds the same tags"
+        );
+
+        // Each kind bound again, even to the same members, is other tags.
+        let mut blocks = items.clone();
+        blocks.set_tags(
+            TagRegistry::Block,
+            tags(&[("fixture:signals", &["fixture:signal"])]),
+        );
+        let mut swords = items.clone();
+        swords.set_tags(
+            TagRegistry::Item,
+            tags(&[("minecraft:swords", &["minecraft:iron_sword"])]),
+        );
+        let mut skeletons = items.clone();
+        skeletons.set_tags(
+            TagRegistry::EntityType,
+            tags(&[("minecraft:skeletons", &["minecraft:stray"])]),
+        );
+        for (name, other) in [
+            ("block", &blocks),
+            ("item", &swords),
+            ("entity", &skeletons),
+        ] {
+            assert!(!held.hold(None, other), "{name} tags bound again");
+        }
+
+        // Resolved against the new tags: the stray is a skeleton now, the golden sword no
+        // sword, and the signals keep their id.
+        let mut changed = skeletons.clone();
+        changed.set_tags(
+            TagRegistry::Item,
+            tags(&[("minecraft:swords", &["minecraft:iron_sword"])]),
+        );
+        resolve(&mut pack, &changed);
+        assert_eq!(
+            pack.named.items,
+            HashMap::from([("minecraft:iron_sword".to_owned(), 11)])
+        );
+        assert_eq!(
+            pack.named.entities,
+            HashMap::from([("minecraft:stray".to_owned(), 20)])
+        );
+        assert!(pack.tags.as_ref().unwrap().hold(None, &changed));
+
+        // Entries naming no tag: nothing to follow.
+        let mut named = PackIds {
+            item_rules: Some(parse("item.11=minecraft:iron_sword\n", "item")),
+            ..Default::default()
+        };
+        resolve(&mut named, &items);
+        assert!(named.tags.is_none());
+        assert_eq!(
+            named.named.items,
+            HashMap::from([("minecraft:iron_sword".to_owned(), 11)])
+        );
+        // Nothing is kept for a later resolve: the rules are dropped, and no index is built.
+        assert!(named.item_rules.is_none() && named.entity_rules.is_none());
+        assert!(named.block_rules.is_none());
+
+        // A pack whose item entries alone name a tag keeps those, and drops its entity
+        // entries, which give the same ids every time.
+        let mut items_only = PackIds {
+            blocks: parse("block.42=fixture:signal\n", "block"),
+            item_rules: Some(parse("item.10=%minecraft:swords\n", "item")),
+            entity_rules: Some(parse("entity.21=minecraft:stray\n", "entity")),
+            ..Default::default()
+        };
+        resolve(&mut items_only, &items);
+        assert!(items_only.tags.is_some());
+        assert!(items_only.item_rules.is_some() && items_only.entity_rules.is_none());
+        assert!(
+            items_only.block_rules.is_none(),
+            "its block entries name no tag"
+        );
+        assert_eq!(
+            items_only.named.entities,
+            HashMap::from([("minecraft:stray".to_owned(), 21)])
+        );
+        resolve(&mut items_only, &changed);
+        assert_eq!(
+            items_only.named.entities,
+            HashMap::from([("minecraft:stray".to_owned(), 21)]),
+            "the dropped entries' ids stay"
+        );
+        assert_eq!(
+            items_only.named.items,
+            HashMap::from([("minecraft:iron_sword".to_owned(), 10)])
+        );
     }
 
     #[test]
@@ -1426,8 +2325,10 @@ pub(in crate::game) mod rendered_item_tests {
 #[cfg(test)]
 pub(in crate::game) mod native_pack_tests {
     use super::{
-        PickHdr, active_pack, loaded_properties, pack_shape, reconcile_pack_hdr, startup_pack_shape,
+        PickHdr, active_pack, loaded_properties, pack_shape, read_id_files, reconcile_pack_hdr,
+        startup_pack_shape,
     };
+    use sunrise_client_render::graphics::IrisCompat;
     use sunrise_mod_package::mod_list::{Installed, ModList, NativePage};
     use sunrise_shaders::Tonemap;
 
@@ -1455,14 +2356,14 @@ pub(in crate::game) mod native_pack_tests {
         let shape = startup_pack_shape(&settings, &mut PickHdr::default());
         assert!(shape.draws_flat && shape.starts_wide);
         assert!(!shape.hdr_float);
-        remember(&path, fingerprint(&path), true);
+        remember(&path, fingerprint(&path), IrisCompat::Auto, true);
         assert!(!startup_pack_shape(&settings, &mut PickHdr::default()).hdr_float);
         // Refused, the frame is the one no pack asks for.
-        remember(&path, fingerprint(&path), false);
+        remember(&path, fingerprint(&path), IrisCompat::Auto, false);
         let shape = startup_pack_shape(&settings, &mut PickHdr::default());
         assert_eq!(shape.draws_flat, !switch);
         assert_eq!(shape.hdr_float, switch);
-        remember(&path, fingerprint(&path), true);
+        remember(&path, fingerprint(&path), IrisCompat::Auto, true);
         // Its mod off, it does not run.
         settings.mods.disabled.insert("frame_owner".into());
         let shape = startup_pack_shape(&settings, &mut PickHdr::default());
@@ -1533,6 +2434,366 @@ pub(in crate::game) mod native_pack_tests {
         std::fs::write(asks.join("shaders/shaders.properties"), "x=1\n").unwrap();
         assert_eq!(shape(&asks, true), (true, Some(Tonemap::Pack)));
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The pick's HDR read before the frame is made and the Shader Options page read
+    /// `shaders.properties` as the load does: what a flag the pack lists guards (spec 3.2,
+    /// decision D-7) is read; what an unlisted flag guards is not.
+    #[test]
+    fn the_hdr_read_and_the_options_page_see_the_features_the_pack_lists() {
+        let root = std::env::temp_dir().join(format!("sunrise-hdr-feature-{}", std::process::id()));
+        let guarded = "#ifdef IRIS_FEATURE_SSBO\nsunrise.hdr = true\nsliders = LEVEL\n#endif\n";
+        let lists = hdr_pack(
+            &root,
+            "lists",
+            &format!("iris.features.optional = SSBO\n{guarded}"),
+        );
+        let unlisted = hdr_pack(&root, "unlisted", guarded);
+        for path in [&lists, &unlisted] {
+            std::fs::write(
+                path.join("shaders/options.glsl"),
+                "#define LEVEL 2 // [1 2]\n",
+            )
+            .unwrap();
+        }
+        let mut settings = hdr_settings();
+        let mut state = PickHdr::default();
+        assert_eq!(
+            shape_of(&mut settings, &mut state, &lists, true),
+            (true, Some(Tonemap::Pack))
+        );
+        assert_eq!(
+            shape_of(&mut settings, &mut state, &unlisted, true),
+            (false, None)
+        );
+        let sliders = |path: &std::path::Path| {
+            let name = path.to_string_lossy();
+            let options = super::read_shader_options(
+                &name,
+                "en_us",
+                &sunrise_shaders::Macros::standard(),
+                IrisCompat::Auto,
+            );
+            options
+                .unwrap()
+                .screens
+                .sliders
+                .into_iter()
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(sliders(&lists), ["LEVEL"]);
+        assert!(sliders(&unlisted).is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Iris compatibility (decision D-8) as the title screen's and the game's Shader Options page
+    /// and the HDR read before the frame see it: on Auto a pack whose program tests `IS_IRIS`
+    /// gets the identity macros, in its `shaders.properties` too, and one that doesn't gets none;
+    /// On and Off decide for the pack they are chosen for, by its name, and Off holds after the
+    /// pack is replaced under that name. A check only a saved option reaches asks once it is
+    /// saved, and one the pack's files drop no longer does.
+    #[test]
+    fn iris_compatibility_follows_the_switch_for_the_options_page_and_the_hdr_read() {
+        let root = std::env::temp_dir().join(format!("sunrise-iris-compat-{}", std::process::id()));
+        let guarded = "#ifdef IS_IRIS\n#if IRIS_VERSION == 11103\nsunrise.hdr = true\n\
+                       sliders = LEVEL\n#endif\n#endif\n";
+        let asks = hdr_pack(&root, "asks", guarded);
+        let plain = hdr_pack(&root, "plain", guarded);
+        let program = |path: &std::path::Path, fsh: &str| {
+            std::fs::write(
+                path.join("shaders/options.glsl"),
+                "#define LEVEL 2 // [1 2]\n",
+            )
+            .unwrap();
+            std::fs::write(path.join("shaders/final.fsh"), fsh).unwrap();
+            std::fs::write(path.join("shaders/final.vsh"), "void main() {}\n").unwrap();
+        };
+        program(
+            &asks,
+            "#include \"/options.glsl\"\n#ifndef IS_IRIS\n#endif\n",
+        );
+        program(&plain, "#include \"/options.glsl\"\nvoid main() {}\n");
+        let read = |settings: &sunrise_client::settings::Settings, path: &std::path::Path| {
+            let name = path.to_string_lossy();
+            let mode = settings.sunrise.iris_compat_of(&name);
+            let options = super::read_shader_options(
+                &name,
+                "en_us",
+                &sunrise_shaders::Macros::standard(),
+                mode,
+            )
+            .unwrap();
+            let sliders: Vec<String> = options.screens.sliders.iter().cloned().collect();
+            let mut settings = settings.clone();
+            let hdr = shape_of(&mut settings, &mut PickHdr::default(), path, true).1;
+            (options.iris_compat, sliders, hdr)
+        };
+        let on = (true, vec!["LEVEL".to_owned()], Some(Tonemap::Pack));
+        let off = (false, Vec::new(), None);
+        let mut settings = hdr_settings();
+        assert_eq!(read(&settings, &asks), on, "Auto, asks");
+        assert_eq!(read(&settings, &plain), off, "Auto, doesn't ask");
+        let name = |path: &std::path::Path| path.to_string_lossy().into_owned();
+        settings
+            .sunrise
+            .set_iris_compat(&name(&asks), IrisCompat::Off);
+        settings
+            .sunrise
+            .set_iris_compat(&name(&plain), IrisCompat::On);
+        assert_eq!(read(&settings, &asks), off, "Off");
+        assert_eq!(read(&settings, &plain), on, "On");
+        // The game's kept HDR request is read again when the switch changes.
+        let mut kept = PickHdr::default();
+        settings
+            .sunrise
+            .set_iris_compat(&name(&asks), IrisCompat::Auto);
+        let hdr = |settings: &sunrise_client::settings::Settings, kept: &mut PickHdr| {
+            shape_of(&mut settings.clone(), kept, &asks, true).1
+        };
+        assert_eq!(hdr(&settings, &mut kept), Some(Tonemap::Pack));
+        settings
+            .sunrise
+            .set_iris_compat(&name(&asks), IrisCompat::Off);
+        assert_eq!(hdr(&settings, &mut kept), None, "kept, switched off");
+        // Replaced under its name, the pack keeps Off.
+        std::fs::remove_dir_all(&asks).unwrap();
+        let asks = hdr_pack(&root, "asks", guarded);
+        program(
+            &asks,
+            "#include \"/options.glsl\"\n#if IRIS_VERSION > 1\n#endif\n",
+        );
+        assert_eq!(read(&settings, &asks), off, "Off, replaced");
+        settings
+            .sunrise
+            .set_iris_compat(&name(&asks), IrisCompat::Auto);
+        assert_eq!(read(&settings, &asks), on, "Auto again");
+        // A check behind an option asks once the option is saved on.
+        let behind = hdr_pack(&root, "behind", guarded);
+        program(
+            &behind,
+            "//#define COLORED\n#ifdef COLORED\n#ifdef IS_IRIS\n#endif\n#endif\n",
+        );
+        assert_eq!(read(&settings, &behind), off, "option off");
+        let chosen = behind.with_extension("txt");
+        std::fs::write(&chosen, "COLORED=true\n").unwrap();
+        assert_eq!(read(&settings, &behind), on, "option saved on");
+        // The pack's files drop the check: it no longer asks.
+        program(
+            &behind,
+            "//#define COLORED\n#ifdef COLORED\nfloat x;\n#endif\n// files changed\n",
+        );
+        assert_eq!(read(&settings, &behind), off, "files changed");
+        std::fs::remove_file(chosen).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The frame never runs the identity scan (D-8) nor waits for it. With nothing kept, the HDR
+    /// read before the frame (`pack_shape`) starts the scan on a thread of its own and reads the
+    /// request without the identity macros meanwhile, and so does the load's answer (`identity`
+    /// without waiting), which is `None` until the scan lands; once it has, the next frame's
+    /// read takes its answer, and so does the load. A scan kept answers at once, and none runs
+    /// on this thread throughout.
+    #[test]
+    fn the_frame_never_runs_a_cold_identity_scan() {
+        let root = std::env::temp_dir().join(format!("sunrise-iris-frame-{}", std::process::id()));
+        let guarded = "#ifdef IS_IRIS\nsunrise.hdr = true\n#endif\n";
+        let [hdr, load] = ["hdr", "load"].map(|name| {
+            let path = hdr_pack(&root, name, guarded);
+            std::fs::write(path.join("shaders/final.fsh"), "#ifdef IS_IRIS\n#endif\n").unwrap();
+            std::fs::write(path.join("shaders/final.vsh"), "void main() {}\n").unwrap();
+            path
+        });
+        let here = || super::SCANS_RUN_HERE.with(std::cell::Cell::get);
+        let mut settings = hdr_settings();
+        let mut kept = PickHdr::default();
+        assert_eq!(
+            shape_of(&mut settings, &mut kept, &hdr, true).1,
+            None,
+            "scan running"
+        );
+        let name = load.to_string_lossy().into_owned();
+        assert_eq!(super::identity(IrisCompat::Auto, &load, &name, false), None);
+        super::await_identity_scans();
+        assert_eq!(
+            shape_of(&mut settings, &mut kept, &hdr, true).1,
+            Some(Tonemap::Pack),
+            "read again once the scan landed"
+        );
+        let answer = super::identity(IrisCompat::Auto, &load, &name, false);
+        assert_eq!(
+            answer,
+            Some(Some("its programs test them (final.fsh:1)".into()))
+        );
+        let mut fresh = PickHdr::default();
+        assert_eq!(
+            shape_of(&mut settings, &mut fresh, &hdr, true).1,
+            Some(Tonemap::Pack),
+            "kept"
+        );
+        assert_eq!(here(), 0, "scans run on this thread");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A pack loaded with one Iris compatibility switch and answer is stale once the pick's
+    /// switch is another, or once the pick's answer read again differs (the pack replaced under
+    /// its name), so the game drops it before its poll can install it; once dropped, or with the
+    /// same switch and answer, it isn't. Nothing loaded is never stale.
+    #[test]
+    fn a_load_from_other_inputs_than_the_picks_is_dropped() {
+        let mut shaders = crate::game::native_shaders::NativeShaders::default();
+        assert!(!shaders.stale_identity(IrisCompat::Off));
+        shaders.identity_build = Some((IrisCompat::Auto, true));
+        shaders.identity_seen = Some(true);
+        assert!(!shaders.stale_identity(IrisCompat::Auto));
+        assert!(shaders.stale_identity(IrisCompat::Off));
+        assert_eq!(shaders.identity_build, None);
+        assert!(!shaders.stale_identity(IrisCompat::Off));
+        shaders.identity_build = Some((IrisCompat::On, true));
+        assert!(shaders.stale_identity(IrisCompat::Auto));
+        shaders.identity_build = Some((IrisCompat::Auto, true));
+        shaders.identity_seen = Some(false);
+        assert!(
+            shaders.stale_identity(IrisCompat::Auto),
+            "answered otherwise"
+        );
+    }
+
+    /// A pack replaced under its name whose new files no longer ask, with the same HDR request:
+    /// the pick's answer read again (`pick_identity`, as the pack list and Shader Options read
+    /// it) differs from the one its build ran with, so the build is stale and loads again.
+    #[test]
+    fn a_pack_replaced_under_its_name_with_another_answer_loads_again() {
+        let root =
+            std::env::temp_dir().join(format!("sunrise-iris-replaced-{}", std::process::id()));
+        let path = hdr_pack(&root, "replaced", "sunrise.hdr = true\n");
+        std::fs::write(path.join("shaders/final.fsh"), "#ifdef IS_IRIS\n#endif\n").unwrap();
+        std::fs::write(path.join("shaders/final.vsh"), "void main() {}\n").unwrap();
+        let name = path.to_string_lossy().into_owned();
+        let mut shaders = crate::game::native_shaders::NativeShaders::default();
+        let seen = super::pick_identity(&name, IrisCompat::Auto, true);
+        assert_eq!(seen, Some(true));
+        shaders.identity_build = Some((IrisCompat::Auto, true));
+        shaders.identity_seen = seen;
+        assert!(!shaders.stale_identity(IrisCompat::Auto));
+        // Replaced: the same name and HDR request, a program that no longer asks.
+        std::fs::remove_dir_all(&path).unwrap();
+        let path = hdr_pack(&root, "replaced", "sunrise.hdr = true\n");
+        std::fs::write(path.join("shaders/final.fsh"), "void main() {}\n").unwrap();
+        std::fs::write(path.join("shaders/final.vsh"), "void main() {}\n").unwrap();
+        let (mut a, mut b) = (super::PickHdr::default(), super::PickHdr::default());
+        assert_eq!(
+            a.answer(&name, &path, IrisCompat::Auto),
+            Some(Tonemap::Pack)
+        );
+        shaders.identity_seen = super::pick_identity(&name, IrisCompat::Auto, true);
+        assert_eq!(shaders.identity_seen, Some(false));
+        assert!(shaders.stale_identity(IrisCompat::Auto));
+        assert_eq!(
+            b.answer(&name, &path, IrisCompat::Auto),
+            Some(Tonemap::Pack)
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A pack whose fingerprint can't be taken (a dangling link among its files) is scanned
+    /// again at every read: an edit that drops its check is seen, though the fingerprint fails
+    /// the same way before and after.
+    #[cfg(unix)]
+    #[test]
+    fn a_pack_without_a_fingerprint_is_scanned_every_time() {
+        let root =
+            std::env::temp_dir().join(format!("sunrise-iris-dangling-{}", std::process::id()));
+        let path = hdr_pack(&root, "dangling", "");
+        std::os::unix::fs::symlink(root.join("gone"), path.join("shaders/gone.glsl")).unwrap();
+        assert_eq!(crate::game::native_shaders::fingerprint(&path), None);
+        let name = path.to_string_lossy().into_owned();
+        std::fs::write(path.join("shaders/final.fsh"), "#ifdef IS_IRIS\n#endif\n").unwrap();
+        std::fs::write(path.join("shaders/final.vsh"), "void main() {}\n").unwrap();
+        assert_eq!(
+            super::pick_identity(&name, IrisCompat::Auto, true),
+            Some(true)
+        );
+        std::fs::write(path.join("shaders/final.fsh"), "void main() {}\n").unwrap();
+        std::fs::write(path.join("shaders/final.vsh"), "void main() {}\n").unwrap();
+        assert_eq!(
+            super::pick_identity(&name, IrisCompat::Auto, true),
+            Some(false)
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Refused with the frame switch's refusal cache under On, the same files run again once
+    /// the player picks Off: the frame no longer counts the pack as refused (`pack_shape`).
+    #[test]
+    fn a_refusal_under_one_switch_is_tried_again_under_another() {
+        use crate::game::native_shaders::{fingerprint, outcome, remember};
+        let root =
+            std::env::temp_dir().join(format!("sunrise-iris-refused-{}", std::process::id()));
+        let path = hdr_pack(&root, "refused", "");
+        let mut settings = hdr_settings();
+        let name = path.to_string_lossy().into_owned();
+        settings.sunrise.shader_pack = name.clone();
+        settings.sunrise.set_iris_compat(&name, IrisCompat::On);
+        remember(&path, fingerprint(&path), IrisCompat::On, false);
+        assert!(!pack_shape(&settings, true, &mut PickHdr::default()).draws_flat);
+        settings.sunrise.set_iris_compat(&name, IrisCompat::Off);
+        assert_eq!(outcome(&path, IrisCompat::Off), None);
+        assert!(pack_shape(&settings, true, &mut PickHdr::default()).draws_flat);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The load's id files see the answers `read_properties` gives: a mapping guarded by a flag
+    /// the pack lists resolves, one guarded by a flag it doesn't list doesn't, in
+    /// `block.properties`, `entity.properties` and `item.properties` alike.
+    #[test]
+    fn the_loads_id_files_see_the_features_the_pack_lists() {
+        use sunrise_shaders::{Macros, Pack};
+        let root = std::env::temp_dir().join(format!("sunrise-id-features-{}", std::process::id()));
+        let path = hdr_pack(&root, "ids", "iris.features.optional = SSBO\n");
+        let guarded = |kind: &str, listed: &str, unlisted: &str| {
+            format!(
+                "#ifdef IRIS_FEATURE_SSBO\n{kind}.10 = {listed}\n#endif\n\
+                 #ifdef IRIS_FEATURE_CUSTOM_IMAGES\n{kind}.11 = {unlisted}\n#endif\n"
+            )
+        };
+        for (file, text) in [
+            (
+                "block",
+                guarded("block", "minecraft:stone", "minecraft:dirt"),
+            ),
+            (
+                "entity",
+                guarded("entity", "minecraft:pig", "minecraft:cow"),
+            ),
+            (
+                "item",
+                guarded("item", "minecraft:stick", "minecraft:apple"),
+            ),
+        ] {
+            std::fs::write(path.join(format!("shaders/{file}.properties")), text).unwrap();
+        }
+        let pack = Pack::open(&path).unwrap();
+        let mut macros = Macros::standard();
+        macros.define_renderer(4);
+        sunrise_shaders::read_properties(&pack, &mut macros);
+        let ids = read_id_files(&pack, &macros);
+        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            ids.blocks.id("minecraft:stone", |_| None, |_| false),
+            Some(10)
+        );
+        assert_eq!(ids.blocks.id("minecraft:dirt", |_| None, |_| false), None);
+        let entities = &ids.named.entities;
+        assert_eq!(
+            (entities.get("minecraft:pig"), entities.get("minecraft:cow")),
+            (Some(&10), None)
+        );
+        let items = &ids.named.items;
+        assert_eq!(
+            (items.get("minecraft:stick"), items.get("minecraft:apple")),
+            (Some(&10), None)
+        );
+        assert!(ids.named.item_file);
     }
 
     /// The kept request is read again when the pick changes and at each boundary that can
@@ -1610,9 +2871,44 @@ pub(in crate::game) mod native_pack_tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    /// The load names the answer Sunrise serves the pack, which a frame kept after a failed
+    /// rebuild doesn't decide: served nothing, a pack that asks says it is served `None`.
+    #[test]
+    fn the_load_names_the_served_answer() {
+        use super::served_hdr;
+        use sunrise_shaders::{Macros, Pack};
+        let root = std::env::temp_dir().join(format!("sunrise-hdr-served-{}", std::process::id()));
+        let asks = hdr_pack(&root, "asks", "sunrise.hdr = true\n");
+        let pack = Pack::open(&asks).unwrap();
+        // The frame was kept for another pick's request.
+        let served = served_hdr(
+            true,
+            ("other", Some(Tonemap::Pack)),
+            ("asks", Some(Tonemap::Pack)),
+        );
+        let name = asks.to_string_lossy();
+        let (_, log) = loaded_properties(
+            &pack,
+            &mut Macros::standard(),
+            true,
+            served,
+            &name,
+            IrisCompat::Auto,
+            &mut PickHdr::default(),
+        );
+        assert_eq!(
+            log,
+            [
+                "shaders.properties asks for Sunrise's HDR as Some(Pack) with the renderer's \
+                 macros, but it is served None: the served answer counts"
+            ]
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     /// The loader's read of the properties (`loaded_properties`, what a load logs), with the
     /// renderer's macros, after the frame was made for the pick's request. Where a renderer
-    /// macro changes the request it says the frame's answer counts; an unknown value only the
+    /// macro changes the request it says the served answer counts; an unknown value only the
     /// renderer's macros reach is noted once, with its line, key and value, and one the frame's
     /// read already noted is not noted again. Without the switch it logs what the file's own
     /// notes are, as before. The load reads the pack's files again at the next frame.
@@ -1638,7 +2934,16 @@ pub(in crate::game) mod native_pack_tests {
             let mut macros = Macros::standard();
             macros.define_renderer(4);
             let name = path.to_string_lossy();
-            loaded_properties(&pack, &mut macros, switch, frame, &name, state).1
+            loaded_properties(
+                &pack,
+                &mut macros,
+                switch,
+                frame,
+                &name,
+                IrisCompat::Auto,
+                state,
+            )
+            .1
         };
         let names_value = |line: &str, at: u32, key: &str, value: &str| {
             line.starts_with(&format!("shaders.properties:{at}: "))
@@ -1654,7 +2959,7 @@ pub(in crate::game) mod native_pack_tests {
             warned,
             [
                 "shaders.properties asks for Sunrise's HDR as Some(Sunrise) with the renderer's \
-                 macros, but the frame was made for Some(Pack): the frame's answer counts"
+                 macros, but it is served Some(Pack): the served answer counts"
             ]
         );
         assert!(load(&mut state, &renderer_curve, false, frame).is_empty());
@@ -1685,13 +2990,17 @@ pub(in crate::game) mod native_pack_tests {
             "iris.features.required = SSBO NO_SUCH_FEATURE\nnot a pair\n\
              sunrise.hdr = maybe\n",
         );
-        let expected = [
-            "the pack requires `NO_SUCH_FEATURE`, which is not supported yet",
-            "shaders.properties:2: not a key=value line",
-        ];
-        assert_eq!(load(&mut state, &others, false, None), expected);
+        // The first names the flag, the second the file and line: not the English of either.
+        let order_of = |logged: &[String]| {
+            let flag = logged[0].split('`').nth(1).map(str::to_owned);
+            (flag, logged[1].starts_with("shaders.properties:2:"))
+        };
+        let expected = (Some("NO_SUCH_FEATURE".to_owned()), true);
+        let without_switch = load(&mut state, &others, false, None);
+        assert_eq!(without_switch.len(), 2, "{without_switch:?}");
+        assert_eq!(order_of(&without_switch), expected);
         let with_switch = load(&mut state, &others, true, None);
-        assert_eq!(with_switch[..2], expected);
+        assert_eq!(order_of(&with_switch), expected);
         assert_eq!(with_switch.len(), 3, "{with_switch:?}");
         assert!(names_value(&with_switch[2], 3, "sunrise.hdr", "maybe"));
 
@@ -1716,27 +3025,99 @@ pub(in crate::game) mod native_pack_tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    /// Sunrise's HDR is served only under the switch, as the renderer's frame was made: then
+    /// the pack's programs see `SUNRISE_HDR` 1, `SUNRISE_HDR_TONEMAP_PACK` with the pack's
+    /// curve, and its `final` is translated for linear light; otherwise nothing changes.
+    #[test]
+    fn hdr_is_served_only_under_the_switch_as_the_frame_was_made() {
+        use super::{serve_hdr, served_hdr};
+        use sunrise_shaders::{GameInputs, Macros};
+        let served = |switch, frame| {
+            let mut macros = Macros::standard();
+            let mut inputs = GameInputs::default();
+            let hdr = served_hdr(switch, ("p", frame), ("p", frame));
+            serve_hdr(hdr, &mut macros, &mut inputs);
+            (
+                macros.get("SUNRISE_HDR").map(str::to_owned),
+                macros.is_defined("SUNRISE_HDR_TONEMAP_PACK"),
+                inputs.hdr,
+                macros == Macros::standard(),
+            )
+        };
+        for frame in [None, Some(Tonemap::Pack), Some(Tonemap::Sunrise)] {
+            assert_eq!(served(false, frame), (None, false, None, true), "{frame:?}");
+        }
+        assert_eq!(served(true, None), (None, false, None, true));
+        assert_eq!(
+            served(true, Some(Tonemap::Pack)),
+            (Some("1".into()), true, Some(Tonemap::Pack), false)
+        );
+        assert_eq!(
+            served(true, Some(Tonemap::Sunrise)),
+            (Some("1".into()), false, Some(Tonemap::Sunrise), false)
+        );
+    }
+
     /// A frame that keeps serving takes the pick's new request; one made again keeps the one
     /// it was made for until the new one is made (`build_renderer` sets it then).
     #[test]
     fn a_kept_frame_takes_the_new_request_and_a_rebuild_keeps_the_old() {
-        let mut installed = None;
+        let (mut pick, mut installed) = (String::new(), None);
+        let mut reconcile =
+            |follows, picked| reconcile_pack_hdr(follows, (&mut pick, &mut installed), picked);
+        assert!(!reconcile(true, ("a", Some(Tonemap::Pack))));
+        assert!(!reconcile(true, ("a", Some(Tonemap::Sunrise))));
+        assert!(reconcile(false, ("b", None)));
+        assert_eq!((pick.as_str(), installed), ("a", Some(Tonemap::Sunrise)));
         assert!(!reconcile_pack_hdr(
             true,
-            &mut installed,
+            (&mut pick, &mut installed),
+            ("b", None)
+        ));
+        assert_eq!((pick.as_str(), installed), ("b", None));
+    }
+
+    /// A frame kept after its rebuild failed (`reconcile_pack_hdr`: the frame doesn't follow)
+    /// keeps the answer it was made for, but the loader serves it only to the pick it was made
+    /// for, with that request: another pick that doesn't ask, the same pick replaced under its
+    /// name by one that doesn't, or asks for the other curve, get nothing. Without the switch,
+    /// nothing either.
+    #[test]
+    fn a_frame_kept_after_a_failed_rebuild_serves_only_the_pick_it_was_made_for() {
+        use super::served_hdr;
+        let (mut pick, mut installed) = (String::new(), None);
+        assert!(!reconcile_pack_hdr(
+            true,
+            (&mut pick, &mut installed),
+            ("opted", Some(Tonemap::Pack))
+        ));
+        let served = |pick: &str, installed, current| served_hdr(true, (pick, installed), current);
+        assert_eq!(
+            served(&pick, installed, ("opted", Some(Tonemap::Pack))),
             Some(Tonemap::Pack)
+        );
+        // Replaced by a pack that doesn't ask: its frame is to be made again, and that fails.
+        assert!(reconcile_pack_hdr(
+            false,
+            (&mut pick, &mut installed),
+            ("plain", None)
         ));
         assert_eq!(installed, Some(Tonemap::Pack));
-        assert!(!reconcile_pack_hdr(
-            true,
-            &mut installed,
-            Some(Tonemap::Sunrise)
-        ));
-        assert_eq!(installed, Some(Tonemap::Sunrise));
-        assert!(reconcile_pack_hdr(false, &mut installed, None));
-        assert_eq!(installed, Some(Tonemap::Sunrise));
-        assert!(!reconcile_pack_hdr(true, &mut installed, None));
-        assert_eq!(installed, None);
+        assert_eq!(served(&pick, installed, ("plain", None)), None);
+        // An opted pack of another name, or this one asking otherwise now.
+        assert_eq!(
+            served(&pick, installed, ("other", Some(Tonemap::Pack))),
+            None
+        );
+        assert_eq!(served(&pick, installed, ("opted", None)), None);
+        assert_eq!(
+            served(&pick, installed, ("opted", Some(Tonemap::Sunrise))),
+            None
+        );
+        assert_eq!(
+            served_hdr(false, (&pick, installed), ("opted", Some(Tonemap::Pack))),
+            None
+        );
     }
 
     #[test]
@@ -1903,3 +3284,100 @@ pub(in crate::game) mod toggle_tests {
 use sunrise_gameplay_common::game::weather::WeatherGameExt as _;
 
 use sunrise_gameplay_common::game::player_identity::PlayerIdentityGameExt1 as _;
+
+#[cfg(test)]
+pub(in crate::game) mod named_id_tests {
+    use super::NamedIds;
+    use sunrise_shaders::{Macros, Pack};
+
+    /// The ids of a pack folder `name` whose `shaders/` holds `files` (path, text), read as the
+    /// loader reads them.
+    fn named_ids_of(name: &str, files: &[(&str, &str)]) -> NamedIds {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join(name);
+        std::fs::create_dir_all(root.join("shaders")).unwrap();
+        std::fs::write(root.join("shaders/shaders.properties"), "").unwrap();
+        for (path, text) in files {
+            std::fs::write(root.join("shaders").join(path), text).unwrap();
+        }
+        NamedIds::read(&Pack::open(&root).unwrap(), &Macros::standard()).0
+    }
+
+    /// 5.3: an entity `entity.properties` lacks reads 65535, and 0 when the pack has no
+    /// `entity.properties`, whatever `item.properties` holds; held items follow their own file.
+    #[test]
+    fn the_missing_entity_id_follows_entity_properties_alone() {
+        let entity_only = named_ids_of(
+            "entity-only",
+            &[("entity.properties", "entity.37=minecraft:zombie\n")],
+        );
+        assert_eq!(entity_only.entity_id("minecraft:zombie"), 37);
+        assert_eq!(entity_only.entity_id("minecraft:creeper"), 65535);
+        assert!(!entity_only.item_file);
+        assert_eq!(entity_only.missing_item, 0);
+
+        let item_only = named_ids_of(
+            "item-only",
+            &[("item.properties", "item.53=minecraft:stick\n")],
+        );
+        assert_eq!(item_only.entity_id("minecraft:creeper"), 0);
+        assert_eq!(item_only.items.get("minecraft:stick"), Some(&53));
+        assert!(item_only.item_file);
+        assert_eq!(item_only.missing_item, -1);
+
+        // An empty file is still the pack's file.
+        let empty_entity = named_ids_of("empty-entity", &[("entity.properties", "")]);
+        assert_eq!(empty_entity.entity_id("minecraft:creeper"), 65535);
+
+        let both = named_ids_of(
+            "both",
+            &[
+                ("entity.properties", "entity.37=minecraft:zombie\n"),
+                ("item.properties", "item.53=minecraft:stick\n"),
+            ],
+        );
+        assert_eq!(both.entity_id("minecraft:zombie"), 37);
+        assert_eq!(both.entity_id("minecraft:creeper"), 65535);
+        assert_eq!(both.missing_item, -1);
+
+        let neither = named_ids_of("neither", &[]);
+        assert_eq!(neither.entity_id("minecraft:creeper"), 0);
+        assert!(!neither.item_file);
+        assert_eq!(neither.missing_item, 0);
+    }
+
+    /// A zipped `entity.properties` or `item.properties` past the pack's 64 MiB read cap
+    /// (`MAX_FILE` in `sunrise-shaders`' `pack.rs`) gives no ids, but the pack still has the
+    /// file: an entity it lacks reads 65535 and a held item −1 (5.3).
+    #[test]
+    fn a_file_past_the_read_cap_still_counts_as_the_packs() {
+        use std::io::Write;
+        let oversized = |file: &str| {
+            let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            w.start_file("shaders/shaders.properties", options).unwrap();
+            w.start_file(format!("shaders/{file}"), options).unwrap();
+            let mut text = b"entity.37=minecraft:zombie\nitem.53=minecraft:stick\n".to_vec();
+            text.resize((64 << 20) + 1, b' ');
+            w.write_all(&text).unwrap();
+            let bytes = w.finish().unwrap().into_inner();
+            NamedIds::read(
+                &Pack::from_zip_bytes("P.zip", bytes).unwrap(),
+                &Macros::standard(),
+            )
+            .0
+        };
+        let entity = oversized("entity.properties");
+        assert_eq!(entity.entity_id("minecraft:zombie"), 65535);
+        assert_eq!(entity.entity_id("minecraft:creeper"), 65535);
+        assert!(!entity.item_file);
+        assert_eq!(entity.missing_item, 0);
+
+        let item = oversized("item.properties");
+        assert_eq!(item.entity_id("minecraft:creeper"), 0);
+        assert!(item.items.is_empty());
+        assert!(item.item_file);
+        assert_eq!(item.missing_item, -1);
+    }
+}

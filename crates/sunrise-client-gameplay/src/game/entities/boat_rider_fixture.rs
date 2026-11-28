@@ -33,7 +33,7 @@ impl crate::game::ClientGame<'_> {
         self.common.player = Some(PlayerMotion::new(
             self.common.motion,
             Vec3::new(0.0, 100.0, 0.0),
-        )?);
+        ));
         self.spawn_entity(2, "minecraft:marker", [0.0, 100.0, 0.0], [0.0; 3]);
         self.spawn_entity(3, "minecraft:oak_boat", [0.0, 100.0, 0.0], [0.0; 3]);
 

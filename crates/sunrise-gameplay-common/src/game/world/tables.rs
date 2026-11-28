@@ -9,16 +9,14 @@ use sunrise_core::nbt::Tag;
 use sunrise_sim::{menu::Env, neoforge_mob_maps::NeoForgeMobMaps};
 use sunrise_world::level::data::BlockSet;
 
-/// [`Game::level_suffocation`] from the fields it reads, for a caller that holds other fields: the
-/// world's own tables (its datapacks' `causes_suffocation`), else the built-in ones.
-#[allow(dead_code)]
+/// [`GameItems::level_suffocation`] from the fields it reads, for a caller that holds other
+/// fields (a level view being built): the world's own tables (its datapacks'
+/// `causes_suffocation`), else the built-in ones.
 pub fn level_suffocation_of<'a>(
-    world_tables: &'a Option<WorldTables>,
+    world_tables: Option<&'a WorldTables>,
     res: &'a Resources,
 ) -> &'a sunrise_world::suffocation::SuffocationRegistry<'static> {
-    world_tables
-        .as_ref()
-        .map_or_else(|| res.suffocation(), |t| &t.suffocation)
+    world_tables.map_or_else(|| res.suffocation(), |t| &t.suffocation)
 }
 
 fn loaded_data_maps(
@@ -63,8 +61,7 @@ pub trait GameItems<'__sg>: crate::game::SideGame<'__sg> {
     where
         '__sg: 's,
     {
-        self.side_world_tables()
-            .map_or_else(|| self.res.suffocation(), |t| &t.suffocation)
+        level_suffocation_of(self.side_world_tables(), &self.res)
     }
 
     fn recipes<'s>(&'s self) -> &'s Recipes

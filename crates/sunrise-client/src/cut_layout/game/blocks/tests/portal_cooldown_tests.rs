@@ -98,18 +98,21 @@ pub(crate) fn run_portal_contact_and_waiting_handoff_match_vanilla_counters() {
     // Direct handler calls do not refresh the headless world's chunk tickets.
     // Frozen entities retain their counters across every group/phase pass.
     game.server
+        .chunk_ticking
         .tickets
-        .0
         .update(Some(sunrise_sim::ticket_levels::Sources::default()));
     game.handle_vehicle_portals();
     game.handle_entity_portals();
     game.handle_portals(false, true);
     for id in &ids {
-        assert_eq!(game.server.portals.entities.get(id).unwrap().cooldown, 5);
+        assert_eq!(
+            game.server.portals.level.entities.get(id).unwrap().cooldown,
+            5
+        );
     }
     game.server
+        .chunk_ticking
         .tickets
-        .0
         .update(Some(sunrise_sim::ticket_levels::Sources {
             forced: vec![(0, 0)],
             ..Default::default()
@@ -133,6 +136,7 @@ pub(crate) fn run_portal_contact_and_waiting_handoff_match_vanilla_counters() {
                 .map(|id| {
                     game.server
                         .portals
+                        .level
                         .entities
                         .get(id)
                         .map_or(0, |state| state.cooldown)
@@ -151,6 +155,7 @@ pub(crate) fn run_portal_contact_and_waiting_handoff_match_vanilla_counters() {
     for id in &ids {
         game.server
             .portals
+            .level
             .entities
             .insert(*id, PortalState::default());
     }
@@ -178,6 +183,7 @@ pub(crate) fn run_portal_contact_and_waiting_handoff_match_vanilla_counters() {
         assert_eq!(
             game.server
                 .portals
+                .level
                 .entities
                 .get(&id)
                 .map_or(0, |s| s.cooldown),

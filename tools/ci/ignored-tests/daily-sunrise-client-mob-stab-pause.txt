@@ -1,0 +1,2 @@
+sunrise-client cut_layout::game::server_side::creatures_server::borrowed_tick::stab_pause_tests::a_mob_stab_slows_the_attacker_before_it_moves lib daily child-process
+sunrise-client cut_layout::game::server_side::creatures_server::borrowed_tick::stab_pause_tests::a_mob_discarded_while_its_stab_is_settled_does_not_travel lib daily child-process

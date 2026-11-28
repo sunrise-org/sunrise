@@ -23,7 +23,7 @@ WorldSelectionList.WorldListEntry.doDeleteWorld	port	crates/sunrise-client/src/t
 WorldSelectionList.WorldListEntry.editWorld	port	crates/sunrise-client/src/title.rs::Title::click_action	gap: minor: no data-read screen and no access-failure toast
 WorldSelectionList.WorldListEntry.recreateWorld	port	crates/sunrise-client/src/title.rs::Title::click_action	gap: player: Re-Create takes the name, seed, mode and options into Create; no old-customized-world confirm, no datapack copy, and an unreadable world does nothing instead of showing an alert
 WorldSelectionList.WorldListEntry.loadIcon	port	crates/sunrise-client/src/title.rs::Title::icon	icon.png is decoded at draw time and cached by modification time; gap: minor: no symlink check
-PlayerMenuItem.extractIcon	port	crates/sunrise-client/src/spectator_menu.rs::icon	Item::Player arm: face at 2,2 size 12; vanilla ignores brightness, but only enabled players are listed, so no difference
+PlayerMenuItem.extractIcon	port	crates/sunrise-client/src/spectator_menu.rs::icon	Item::Player arm: face at 2,2 size 12, tinted ARGB.white(alpha); vanilla ignores brightness
 SpectatorMenu.getItems	inline	crates/sunrise-client/src/spectator_menu.rs::SpectatorGui::hotbar	the nine-slot loop; each slot is read through SpectatorMenu::item
 SpectatorPage.getItem	inline	crates/sunrise-client/src/spectator_menu.rs::SpectatorMenu::item	the page bounds check and the empty-slot fallback are folded into item
 TeleportToPlayerMenuCategory.extractIcon	port	crates/sunrise-client/src/spectator_menu.rs::icon	Item::TeleportToPlayer arm: teleport_to_player sprite at 16x16 with brightness and alpha tint

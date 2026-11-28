@@ -96,7 +96,7 @@ fn save_requested_during_pickup_keeps_lifted_items_on_disk() {
             refuses!(rockets);
             refuses!(tridents);
             game.with_entity_held_out(999, |game| assert!(game.save_game().is_err()));
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.0, 64.0, 2.0)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.0, 64.0, 2.0)));
             game.level.player_uuid = Some([0, 0, 0, 99]);
             game.spawn_item(
                 ItemStack::new("minecraft:diamond", 7),

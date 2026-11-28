@@ -24,7 +24,7 @@ use sunrise_sim::motion::PlayerMotion;
 fn the_death_screen_receives_the_signed_player_score() {
     let mut resources = None;
     let mut game = client(&mut resources);
-    game.common.player = Some(PlayerMotion::new(game.common.motion, Vec3::ZERO).unwrap());
+    game.common.player = Some(PlayerMotion::new(game.common.motion, Vec3::ZERO));
     let (mut guest, received) = guest(7, 42, [0.0; 3]);
     guest.score = -1;
     guest.sync_score();

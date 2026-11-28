@@ -2348,7 +2348,7 @@ impl Hub {
                 Some(ParticleData::GeyserBase(water_blocks, burst_impulse_base))
             }
             T::Vibration => {
-                use mod_api::client::particles::PositionSource;
+                use mod_api::PositionSource;
                 use sunrise_protocol::entity_data::PositionSource as NetworkPositionSource;
                 let (source, _, ticks) = options.vibration.as_ref()?;
                 let source = match source {
@@ -2453,7 +2453,7 @@ impl Hub {
             ) => Some(ParticleData::GeyserBase(*water_blocks, *burst_impulse_base)),
             (T::GeyserBase | T::GeyserPoof, _) => return None,
             (T::Vibration, D::Vibration { source, ticks }) => {
-                use mod_api::client::particles::PositionSource;
+                use mod_api::PositionSource;
                 use sunrise_protocol::entity_data::PositionSource as NetworkPositionSource;
                 let source = match source {
                     PositionSource::Block(pos) => NetworkPositionSource::Block(*pos),
@@ -2685,6 +2685,7 @@ impl Hub {
             &crate::fast_hash::FxHashMap<u32, sunrise_mod_runtime::attachments::Attachments>,
         >,
     ) {
+        let prepare_span = crate::spans::guard("lan_track_prepare");
         let mut all: Vec<EntityState> = Vec::with_capacity(ctx.entities.len() + self.guests.len());
         let modified_particles =
             mod_api::__private::listened(mod_api::HookId::EffectParticleModification);
@@ -2767,11 +2768,13 @@ impl Hub {
             self.sync_attachments.then_some(&attachment_lookup);
         level.range_percent = Some(self.entity_range_percent);
         let (types, sync) = (&mut self.entity_types, &self.sync);
+        drop(prepare_span);
         level.tick(&entities, &self.riding, &mut viewers, attachments, |kind| {
             entity_type(types, sync, kind)
         });
         drop(viewers);
         drop(player_attachments);
+        let send_span = crate::spans::guard("lan_track_send");
         // While a mod listens, a player's output that started or stopped tracking waits for the
         // game to tell the mods at each pairing's packet (`tracking_pass`).
         let hold = tracking_pass::tracking_listened();
@@ -2799,6 +2802,7 @@ impl Hub {
         }
         self.entity_out = outs;
         self.send_view_entities(views);
+        drop(send_span);
         self.entities.insert(self.config.dimension.clone(), level);
     }
 
@@ -3112,7 +3116,9 @@ impl Hub {
         self.native_reload_pending = false;
         let sync = self.sync.clone();
         // broadcastAll(ClientboundUpdateTagsPacket).
-        self.broadcast(&C::UpdateTags(sync.tags.clone()));
+        for guest in self.online_players() {
+            guest.send(&C::UpdateTags(sync.tags_for_brand(&guest.brand)));
+        }
         // For each player: ClientboundUpdateRecipesPacket, then sendInitialRecipeBook.
         for i in 0..self.guests.len() {
             if !self.guests[i].placed {
@@ -3597,7 +3603,7 @@ fn equipment_source(g: &Guest, index: usize) -> Option<&ItemStack> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     mod carried_check_tests;
     mod cave_air_tests;
     mod collision_exclusion_tests;
@@ -4473,8 +4479,10 @@ mod tests {
         assert!(Arc::ptr_eq(&registry, &hub.rule_registry));
     }
 
-    /// [`hub_with_a_guest`] over a sync the test built.
-    fn hub_with_sync(sync: SyncData) -> (Hub, std::sync::mpsc::Receiver<crate::lan::Out>) {
+    /// A hub with one placed guest, no network listener, and the test's registries.
+    pub(in crate::lan) fn hub_with_sync(
+        sync: SyncData,
+    ) -> (Hub, std::sync::mpsc::Receiver<crate::lan::Out>) {
         hub_with_net(
             sync,
             crate::lan::NetConfig {
@@ -5812,8 +5820,7 @@ mod tests {
         let assets = crate::assets::Assets::load(&root).unwrap();
         let resources = crate::motion::MotionResources::load(&root, &assets).unwrap();
         let mut body =
-            crate::motion::PlayerMotion::new(&resources, sunrise_core::geometry::Vec3::ZERO)
-                .unwrap();
+            crate::motion::PlayerMotion::new(&resources, sunrise_core::geometry::Vec3::ZERO);
         body.ticks_frozen = 140;
         let (mut hub, rx) = hub_with_a_guest();
         {

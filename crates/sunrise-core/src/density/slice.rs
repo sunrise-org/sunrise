@@ -19,10 +19,6 @@ impl SliceAxes {
     }
 }
 
-/// A y-fixed slice's plane: the slice node, the plane's corner (y fixed),
-/// its x/z sizes and steps (`SamplerContext::with_planes`).
-pub(super) type PlaneKey = (usize, [i32; 3], [usize; 2], [i32; 2]);
-
 #[derive(Clone, Debug)]
 pub struct SliceSampler {
     pub input: Arc<dyn DensitySampler>,
@@ -68,28 +64,9 @@ impl DensitySampler for SliceSampler {
         if reduced == volume {
             return self.input.sample_volume(context, buffer, volume);
         }
-        let plane = (fixed[1].is_some() && context.planes.is_some()).then(|| {
-            let [rx, _, rz] = reduced.sizes();
-            let [step_x, _, step_z] = volume.steps();
-            (
-                self as *const Self as usize,
-                reduced.minimum(),
-                [rx, rz],
-                [step_x, step_z],
-            )
-        });
-        if let Some(key) = &plane
-            && let Some(samples) = context.planes.as_ref().and_then(|p| p.get(key))
-        {
-            spread(fixed, volume, reduced, samples, buffer);
-            return Ok(());
-        }
         context.with_buffer(reduced.size(), |context, samples| {
             self.input.sample_volume(context, samples, reduced)?;
             spread(fixed, volume, reduced, samples, buffer);
-            if let (Some(key), Some(planes)) = (plane, &mut context.planes) {
-                planes.insert(key, samples[..reduced.size()].to_vec());
-            }
             Ok(())
         })
     }

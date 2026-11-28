@@ -7,6 +7,7 @@ mod arrays_too_large;
 mod atomic_member_reads;
 mod callable_macro_boundary;
 mod global_constant_division;
+mod hdr_extension_fixture;
 mod layout_values_past_u32;
 mod legacy_texture_size;
 mod length_array_sizes;

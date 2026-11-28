@@ -389,7 +389,7 @@ pub mod tests {
         };
         use sunrise_sim::motion::PlayerMotion;
         super::super::native_entity_refs::tests::with_game(|game| {
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             game.yaw = 10.0;
             game.boats
                 .push(Boat::new(60, "oak".into(), Vec3::ZERO, 45.0));
@@ -732,7 +732,7 @@ pub mod tests {
             let hub = &mut game.side.lan.as_mut().unwrap().hub;
             hub.guests.push(guest);
             for conn in [1, 2] {
-                let motion = PlayerMotion::new(game.motion, at).unwrap();
+                let motion = PlayerMotion::new(game.motion, at);
                 let hub = &mut game.side.lan.as_mut().unwrap().hub;
                 hub.update_guest(conn, |g| g.motion = Some(Box::new(motion)))
                     .unwrap();
@@ -943,7 +943,7 @@ pub mod tests {
 
             // Neither does `Entity.dropAllLeashConnections`, which calls it for a player's mobs.
             let player = super::super::native_player_death::tests::add_guest(game).entity();
-            let motion = PlayerMotion::new(game.motion, at).unwrap();
+            let motion = PlayerMotion::new(game.motion, at);
             let hub = &mut game.side.lan.as_mut().unwrap().hub;
             hub.update_guest(1, |g| {
                 g.motion = Some(Box::new(motion));
@@ -1040,7 +1040,7 @@ pub mod tests {
             lay_floor(game);
             let at = Vec3::new(0.5, 64.0, 0.5);
             let player = super::super::native_player_death::tests::add_guest(game).entity();
-            let motion = PlayerMotion::new(game.motion, at).unwrap();
+            let motion = PlayerMotion::new(game.motion, at);
             let hub = &mut game.side.lan.as_mut().unwrap().hub;
             hub.update_guest(1, |g| g.motion = Some(Box::new(motion)))
                 .unwrap();
@@ -1083,7 +1083,7 @@ pub mod tests {
             lay_floor(game);
             let at = Vec3::new(0.5, 64.0, 0.5);
             let player = super::super::native_player_death::tests::add_guest(game).entity();
-            let motion = PlayerMotion::new(game.motion, at).unwrap();
+            let motion = PlayerMotion::new(game.motion, at);
             let hub = &mut game.side.lan.as_mut().unwrap().hub;
             hub.update_guest(1, |g| {
                 g.motion = Some(Box::new(motion));
@@ -1242,7 +1242,7 @@ pub mod tests {
                 assert_eq!(cow.leash_holder(game), Some(LeashHolder::Entity(player)));
                 assert!(!player.leash_to(game, cow));
                 assert_eq!(player.leash_holder(game), None);
-                let motion = PlayerMotion::new(game.motion, at).unwrap();
+                let motion = PlayerMotion::new(game.motion, at);
                 let hub = &mut game.side.lan.as_mut().unwrap().hub;
                 hub.update_guest(1, |g| g.motion = Some(Box::new(motion)))
                     .unwrap();

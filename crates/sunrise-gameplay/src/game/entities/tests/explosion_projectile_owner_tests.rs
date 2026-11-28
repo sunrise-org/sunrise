@@ -11,7 +11,7 @@ use sunrise_sim::{
 /// The host body, id 1 and UUID `[0, 0, 0, 7]`, six blocks above a blast at
 /// `[8.5, 64, 8.5]`: near enough for no player, far enough for no hurt.
 fn host_above_the_blast(game: &mut crate::game::ServerGame<'_>) {
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 70.0, 8.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 70.0, 8.5)));
     crate::game::native_entity_refs::tests::bind_local_player(game, 1, 7);
 }
 

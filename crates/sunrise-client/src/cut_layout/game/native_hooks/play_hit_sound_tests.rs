@@ -41,8 +41,7 @@ fn play_hit_sound_helper_and_eight_mining_ticks() {
                 game.world
                     .chunks
                     .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
-                game.player =
-                    Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 62.0, 4.5)).unwrap());
+                game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 62.0, 4.5)));
                 game.player.as_mut().unwrap().ground.on_ground = true;
                 game.creative = false;
                 game.client.screen = Screen::Playing;

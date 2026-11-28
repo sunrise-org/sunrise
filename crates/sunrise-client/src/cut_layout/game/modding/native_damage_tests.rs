@@ -404,7 +404,7 @@ fn mob_and_dragon_post_records_fresh_hit_decision() {
 }
 
 fn survival_player(game: &mut sunrise_gameplay::game::ServerGame<'_>, id: u32) {
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
     bind_local_player(game, id, u128::from(id));
     game.set_game_mode(GameMode::Survival);
 }
@@ -766,7 +766,7 @@ fn a_sweep_finishes_its_lethal_hit_before_the_next_hit() {
             game.world
                 .chunks
                 .insert((0, 0), Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)));
-            let mut player = PlayerMotion::new(game.motion, Vec3::ZERO).unwrap();
+            let mut player = PlayerMotion::new(game.motion, Vec3::ZERO);
             player.entity_id = 7;
             game.player = Some(player);
             game.common.inventory[game.common.selected] =
@@ -1733,7 +1733,7 @@ fn guest_burning_hit_posts_before_the_void_hurt_in_the_same_tick() {
                 .chunks
                 .insert((0, 0), Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)));
             let at = Vec3::new(1.0, game.world.below_world_y() - 1.0, 1.0);
-            let mut body = PlayerMotion::new(game.motion, at).unwrap();
+            let mut body = PlayerMotion::new(game.motion, at);
             body.fire_ticks = 20;
             game.server
                 .lan
@@ -2086,7 +2086,7 @@ fn a_dolphin_goal_move_posts_before_the_next_goal() {
                 boat.velocity.x = 0.2;
                 game.riding = Some(boat.id);
                 game.boats.push(boat);
-                game.player = Some(PlayerMotion::new(game.motion, at).unwrap());
+                game.player = Some(PlayerMotion::new(game.motion, at));
             }
 
             let kind = if target {
@@ -2253,7 +2253,7 @@ fn guest_landing_posts_before_its_ground_hit() {
             let landing = Vec3::new(15.5, 78.9375, 1.5);
             let start = Vec3::new(landing.x, landing.y + 0.25, landing.z);
             let next = [16.5, landing.y, landing.z];
-            let mut body = PlayerMotion::new(game.motion, start).unwrap();
+            let mut body = PlayerMotion::new(game.motion, start);
             body.fall_distance = 10.0;
             game.server
                 .lan
@@ -2357,7 +2357,7 @@ fn ordinary_guest_move_settles_fall_before_resuming() {
             game.world.set(1, 78, 1, honey).unwrap();
             let start = Vec3::new(1.5, 79.25, 1.5);
             let landing = Vec3::new(1.5, 78.9375, 1.5);
-            let mut body = PlayerMotion::new(game.motion, start).unwrap();
+            let mut body = PlayerMotion::new(game.motion, start);
             body.fall_distance = 10.0;
             game.server
                 .lan
@@ -2402,7 +2402,7 @@ fn ordinary_guest_move_settles_fall_before_resuming() {
 #[ignore = "daily"]
 fn player_pre_keeps_live_damage_when_resistance_does_not_record_a_reduction() {
     let heard = heard(|game| {
-        let mut player = PlayerMotion::new(game.motion, Vec3::ZERO).unwrap();
+        let mut player = PlayerMotion::new(game.motion, Vec3::ZERO);
         player.entity_id = 225033;
         player.status.resistance = Some(4);
         game.player = Some(player);
@@ -2455,7 +2455,7 @@ fn a_game_built_level_has_every_damage_hook() {
 #[ignore = "daily"]
 fn player_melee_hit_preserves_the_attackers_position_and_direct_entity() {
     let heard = heard(|game| {
-        let mut player = PlayerMotion::new(game.motion, Vec3::ZERO).unwrap();
+        let mut player = PlayerMotion::new(game.motion, Vec3::ZERO);
         player.entity_id = 225020;
         game.player = Some(player);
         game.set_game_mode(GameMode::Survival);
@@ -2512,7 +2512,7 @@ fn arrow_hits_name_the_projectile_on_players_mobs_and_the_dragon() {
         (Who::Mob(43), Some(Who::Mob(42)), true, 43, 42),
     ] {
         let heard = heard(|game| {
-            let mut player = PlayerMotion::new(game.motion, Vec3::ZERO).unwrap();
+            let mut player = PlayerMotion::new(game.motion, Vec3::ZERO);
             player.entity_id = 7;
             game.player = Some(player);
             game.set_game_mode(GameMode::Survival);
@@ -2730,7 +2730,7 @@ fn snapshot_crosses_the_real_damage_hook_with_reductions() {
 #[ignore = "daily"]
 fn a_player_blast_names_its_direct_entity_and_centre() {
     let heard = heard(|game| {
-        let mut player = PlayerMotion::new(game.motion, Vec3::ZERO).unwrap();
+        let mut player = PlayerMotion::new(game.motion, Vec3::ZERO);
         player.entity_id = 225020;
         game.player = Some(player);
         game.set_game_mode(GameMode::Survival);
@@ -2849,7 +2849,7 @@ fn lingering_and_splash_potions_name_themselves_as_the_direct_entity() {
     );
 
     let cloud_player = heard(|game| {
-        let mut player = PlayerMotion::new(game.motion, Vec3::ZERO).unwrap();
+        let mut player = PlayerMotion::new(game.motion, Vec3::ZERO);
         player.entity_id = 225020;
         game.player = Some(player);
         game.set_game_mode(GameMode::Survival);
@@ -2913,7 +2913,7 @@ fn lingering_and_splash_potions_name_themselves_as_the_direct_entity() {
     );
 
     let splash_player = heard(|game| {
-        let mut player = PlayerMotion::new(game.motion, Vec3::ZERO).unwrap();
+        let mut player = PlayerMotion::new(game.motion, Vec3::ZERO);
         player.entity_id = 225020;
         game.player = Some(player);
         game.set_game_mode(GameMode::Survival);
@@ -2959,7 +2959,7 @@ fn damage_by_a_non_mob_cause_keeps_the_causing_entity() {
     use sunrise_gameplay_common::game::commands_common::Target;
 
     let heard = heard(|game| {
-        let mut player = PlayerMotion::new(game.motion, Vec3::ZERO).unwrap();
+        let mut player = PlayerMotion::new(game.motion, Vec3::ZERO);
         player.entity_id = 225020;
         game.player = Some(player);
         game.set_game_mode(GameMode::Survival);
@@ -2996,7 +2996,7 @@ fn an_ownerless_wither_skull_has_no_causing_entity() {
     use sunrise_sim::projectiles::{Hit, Projectile, ProjectileKind};
 
     let heard = heard(|game| {
-        let mut player = PlayerMotion::new(game.motion, Vec3::ZERO).unwrap();
+        let mut player = PlayerMotion::new(game.motion, Vec3::ZERO);
         player.entity_id = 225020;
         game.player = Some(player);
         game.set_game_mode(GameMode::Survival);

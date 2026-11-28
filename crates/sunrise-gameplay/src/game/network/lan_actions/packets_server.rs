@@ -1198,9 +1198,6 @@ impl crate::game::ServerGame<'_> {
             S::CustomPayload(p) if p.channel == sunrise_sim::perf_net::CHANNEL => {
                 self.guest_perf(conn, &p.data)
             }
-            S::CustomPayload(p) if p.channel == sunrise_sim::lod_net::CHANNEL => {
-                self.guest_far_terrain(conn, &p.data)
-            }
             S::ChatCommandSigned(p) => self.guest_signed_command(conn, p),
             // ServerCommonPacketListenerImpl.handleCustomClickAction: the server only logs
             // the click, so a mod's cancel leaves nothing else to skip.

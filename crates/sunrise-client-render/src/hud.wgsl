@@ -1,8 +1,7 @@
 struct Hud {
     size: vec4<f32>,
     // Blend::EndPortal: atlas rects (u0, v0, width, height) of end_sky.png and
-    // end_portal.png, then vanilla's GameTime in x and PvP & HUD's glint colour in yzw
-    // (y below 0: vanilla's).
+    // end_portal.png, then vanilla's GameTime in x.
     end_portal: array<vec4<f32>, 3>,
 }
 @group(0) @binding(0) var<uniform> hud: Hud;
@@ -50,11 +49,7 @@ struct Out {
         let item_sample = textureSample(glint_tex, glint_sampler, in.glint_uv);
         let armor_sample = textureSample(glint_armor_tex, glint_sampler, in.glint_uv);
         if mask < 0.1 { discard; }
-        var glint = hud.size.w * select(item_sample, armor_sample, armor);
-        let tint = hud.end_portal[2].yzw;
-        if tint.x >= 0.0 {
-            glint = vec4(max(glint.r, max(glint.g, glint.b)) * tint, glint.a);
-        }
+        let glint = hud.size.w * select(item_sample, armor_sample, armor);
         // The vertex colour multiplies the glint as it does the item under it: white (every
         // glint the game draws) leaves it; a mod's tinted item (`GuiCanvas::item_tinted`) fades
         // and colours it with the item.

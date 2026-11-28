@@ -35,7 +35,7 @@ fn stopping_a_retained_client_dig_aborts_only_once() {
             game.connect_local(client, "MiningTest").unwrap();
             let pos = [0, 64, 0];
             game.set_local_mode(sunrise_command::args::GameMode::Survival);
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 3.5)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 3.5)));
             game.world
                 .chunks
                 .insert((0, 0), Arc::new(Chunk::empty(0, 0)));

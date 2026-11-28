@@ -12,7 +12,7 @@ import tempfile
 import time
 import unittest
 
-from tests import git_history
+from tests.git_fixture import isolated_git_env
 from tests.os_support import BASH, POSIX_BASH, needs_command, needs_gnu_timeout, needs_runner_shell, needs_symlinks
 from tests.test_ci_concurrency import expression_value
 from tests.test_launcher_mirrors_check import MirrorCheckout
@@ -881,10 +881,10 @@ class LauncherMirrorsStepTests(unittest.TestCase):
                                   encoding="utf-8", newline="\n")
         (stubs / "gh").chmod(0o755)
         self.temp.mkdir()
-        self.env = git_history.clean_env(PATH=f"{stubs}{os.pathsep}{os.environ['PATH']}", GH_CALLS=str(self.calls),
-                                         GH_TOKEN="token-value", RUNNER_TEMP=str(self.temp),
-                                         GITHUB_REPOSITORY="sunrise-org/sunrise", BASE_SHA=self.checkout.base,
-                                         PR_NUMBER="42")
+        self.env = isolated_git_env(PATH=f"{stubs}{os.pathsep}{os.environ['PATH']}", GH_CALLS=str(self.calls),
+                                       GH_TOKEN="token-value", RUNNER_TEMP=str(self.temp),
+                                       GITHUB_REPOSITORY="sunrise-org/sunrise", BASE_SHA=self.checkout.base,
+                                       PR_NUMBER="42")
 
     def run_step(self, live=None, event=None, gh_exit=0, **env):
         """The step's script on a pull request. `live` is gh's answer, `event` the body the event file kept."""

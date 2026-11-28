@@ -321,6 +321,7 @@ impl crate::game::ServerGame<'_> {
                     || self.common.res.shared_items(),
                     |tables| tables.items.clone(),
                 ),
+                tables.tables.as_ref().map(|tables| &tables.pack_tags),
                 tables
                     .tables
                     .as_ref()
@@ -1935,7 +1936,7 @@ mod tests {
         use sunrise_sim::motion::PlayerMotion;
         with_game(|game| {
             game.options.dedicated = None;
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 202.0, 4.5)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 202.0, 4.5)));
             game.creative = true;
             // Supply the synthetic chunk before forceload's synchronous load barrier.
             game.world.chunks.insert(
@@ -2245,7 +2246,7 @@ mod tests {
         use sunrise_sim::motion::PlayerMotion;
         with_game(|game| {
             game.options.dedicated = None;
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 202.0, 4.5)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 202.0, 4.5)));
             game.creative = true;
             // Supply the synthetic chunk before forceload's synchronous load barrier.
             game.world.chunks.insert(

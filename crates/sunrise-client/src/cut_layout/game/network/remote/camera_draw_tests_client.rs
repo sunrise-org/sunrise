@@ -40,7 +40,7 @@ pub(in crate::game) fn run_local_player_and_camera_entity_draw_like_the_real_cli
         let remote = game.client.remote.as_mut().unwrap();
         remote.logged_in = true;
         remote.entity_id = 7;
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
         let villager = game
             .client
             .remote

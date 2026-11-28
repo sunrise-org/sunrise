@@ -250,12 +250,24 @@ impl Ticks {
         };
         self.blocks.schedule(tick)
     }
+    /// `scheduleTick(pos, fluid, delay)`: [`Self::schedule_fluid_with_priority`] at `NORMAL`.
     pub fn schedule_fluid(
         &mut self,
         game_time: i64,
         pos: BlockPos,
         fluid: FluidKind,
         delay: i32,
+    ) -> ScheduleResult {
+        self.schedule_fluid_with_priority(game_time, pos, fluid, delay, TickPriority::Normal)
+    }
+    /// `scheduleTick(pos, fluid, delay, priority)`.
+    pub fn schedule_fluid_with_priority(
+        &mut self,
+        game_time: i64,
+        pos: BlockPos,
+        fluid: FluidKind,
+        delay: i32,
+        priority: TickPriority,
     ) -> ScheduleResult {
         if let Some(captured) = &mut self.capture {
             captured.push(CapturedTick {
@@ -270,7 +282,7 @@ impl Ticks {
             kind: TickTypeId(fluid.tick_id()),
             pos,
             trigger_tick: game_time.wrapping_add(i64::from(delay)),
-            priority: TickPriority::Normal,
+            priority,
             sub_tick_order: self.next_sub_tick(),
         };
         self.fluids.schedule(tick)

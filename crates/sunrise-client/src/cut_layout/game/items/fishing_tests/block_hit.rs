@@ -57,7 +57,7 @@ fn game<'a>(
     for command in ["forceload add 0 0", "fill 0 63 0 15 63 15 stone"] {
         assert!(game.run_command(command), "{command}");
     }
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 8.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 8.5)));
     game.selected = 0;
     game.set_mode_id(0);
     game.inventory[0] = Some(ItemStack::new("minecraft:fishing_rod", 1));

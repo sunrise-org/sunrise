@@ -63,6 +63,7 @@ impl crate::game::ClientGame<'_> {
                 std::mem::take(out),
             )
             .track_normal_pose()
+            .in_first_person()
             .with_quad_budget(
                 self.entity_quad_capacity(),
                 self.entity_batch_reserved_quads(),

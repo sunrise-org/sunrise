@@ -1,0 +1,4 @@
+# realms.rs was split in #5844; the churn report watches the monolith's growth.
+path = "crates/sunrise-client/src/realms.rs"
+split = "#5844"
+landing = "1d45b322c6e60dc6638dfb8789fd8fcd4654f585"

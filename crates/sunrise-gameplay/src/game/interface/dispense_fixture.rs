@@ -542,7 +542,7 @@ impl crate::game::ServerGame<'_> {
         let mut player = PlayerMotion::new(
             self.common.motion,
             sunrise_core::geometry::Vec3::new(0.0, 0.0, 0.0),
-        )?;
+        );
         // A creative player is invulnerable (`GameType.updatePlayerAbilities`): the
         // arrow's hurt is refused before the shield is reached.
         player.invulnerable = self.common.creative;
@@ -682,7 +682,7 @@ impl crate::game::ServerGame<'_> {
                 f64::from(pos.y) + 1.0,
                 f64::from(pos.z) + 0.5 + distance,
             ),
-        )?;
+        );
         if let Some(r) = op["respawn"].as_array() {
             let p = |i: usize| r.get(i).and_then(Value::as_i64).unwrap_or(0) as i32;
             self.server.respawn_config = Some(super::respawn_anchor::RespawnConfig {
@@ -809,7 +809,7 @@ impl crate::game::ServerGame<'_> {
         self.common.player = Some(PlayerMotion::new(
             self.common.motion,
             sunrise_core::geometry::Vec3::new(0.0, 64.0, 0.0),
-        )?);
+        ));
         if !self.raise_shield(self.common.selected) || self.common.using.is_none() {
             return Err("could not raise blocking stack".into());
         }
@@ -860,7 +860,7 @@ impl crate::game::ServerGame<'_> {
         };
         // A new player: no combat of an earlier case's.
         self.server.combat.0 = Default::default();
-        let mut player = PlayerMotion::new(self.common.motion, v3(&op["player"]))?;
+        let mut player = PlayerMotion::new(self.common.motion, v3(&op["player"]));
         player.velocity = v3(&op["motion"]);
         player.fall_distance = op["fall"].as_f64().unwrap_or(0.0);
         player.fall_flying = op["fall_flying"].as_bool().unwrap_or(false);
@@ -1199,7 +1199,7 @@ impl crate::game::ServerGame<'_> {
                 f64::from(pos.y) + 1.0,
                 f64::from(pos.z) + 3.5,
             ),
-        )?);
+        ));
         self.common.yaw = 0.0;
         self.common.pitch = 90.0;
         self.server_clear_acting_input();
@@ -1385,7 +1385,7 @@ impl crate::game::ServerGame<'_> {
         // on its attributes, which the hit's absorption reads.
         if equip.is_some_and(|equip| !equip.is_empty()) {
             crate::game::living_attributes::collect_equipment(
-                &self.common.motion.attributes,
+                self.common.motion.attributes(),
                 self.items(),
                 &mut mob,
             );

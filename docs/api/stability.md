@@ -102,5 +102,6 @@ Deprecations and breaking changes are in bold. The release notes of the game rel
 | `sunrise-prepare needs`, `missing-extras` and `extras` with `--json` ([prepare-extras.md](prepare-extras.md)) | experimental | `"format": 1` |
 | Benchmark report | stable | `"version": 1` |
 | `sunrise-graphics.txt`, `sunrise-extras.txt`, `sunrise-mods.txt` | preview | none |
+| Shader packs' HDR extension: `sunrise.hdr`, `SUNRISE_HDR`, the `sunrise*` display uniforms, under `SUNRISE_HDR_FRAME=float` ([shaders.md](../shaders.md#sunrise-extensions-hdr)) | experimental | `SUNRISE_HDR` 1 |
 | `SHA256SUMS` and `SHA256SUMS.sig` | stable | |
 | `sunrise-release.json` ([release-file.md](release-file.md)) | experimental | `"contract": 1` |

@@ -55,9 +55,10 @@ fn a_ridden_hopper_cart_takes_one_item_a_tick() {
     let empty = Minecart::new(2, CartKind::Hopper, Vec3::new(12.5, 64.0625, 8.5));
     game.carts.push(ridden);
     game.carts.push(empty);
-    game.player = Some(
-        sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(8.5, 64.5, 8.5)).unwrap(),
-    );
+    game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+        game.motion,
+        Vec3::new(8.5, 64.5, 8.5),
+    ));
     // A hopper cart's interact opens its menu (`AbstractMinecartContainer.interact`),
     // so a player only gets in with `/ride`, whose `RideCommand.mount` forces
     // `startRiding` past `isRideable`. `tick_carts` then leaves that cart to

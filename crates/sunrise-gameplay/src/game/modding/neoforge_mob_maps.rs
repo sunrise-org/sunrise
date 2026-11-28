@@ -1,5 +1,6 @@
 //! Build a complete immutable builtin generation alongside its common-store values.
 use crate::game::ServerGame;
+use indexmap::IndexSet;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -9,11 +10,27 @@ use sunrise_sim::neoforge_mob_maps::{self as builtin, BuiltinMap, Kind, MAPS, Ne
 
 type Tags = HashMap<String, HashSet<String>>;
 
+/// A registry's bound tags, read as each tag's member ids: the items' own tag sets and the
+/// world packs' ordered ones both serve a built-in data map.
+pub(in crate::game::server_side) trait TagMembers {
+    fn members<'s>(&'s self, tag: &str) -> Box<dyn Iterator<Item = &'s String> + 's>;
+}
+impl TagMembers for Tags {
+    fn members<'s>(&'s self, tag: &str) -> Box<dyn Iterator<Item = &'s String> + 's> {
+        Box::new(self.get(tag).into_iter().flatten())
+    }
+}
+impl TagMembers for HashMap<String, IndexSet<String>> {
+    fn members<'s>(&'s self, tag: &str) -> Box<dyn Iterator<Item = &'s String> + 's> {
+        Box::new(self.get(tag).into_iter().flatten())
+    }
+}
+
 struct Loader<'a, 'p> {
     definition: BuiltinMap,
     id: Identifier,
     overlay: &'a sunrise_world::loot::PackOverlay<'p>,
-    tags: &'a Tags,
+    tags: &'a dyn TagMembers,
     known: &'a dyn Fn(&str, &str) -> bool,
     snapshot: &'a mut NeoForgeMobMaps,
 }
@@ -56,7 +73,7 @@ impl Loader<'_, '_> {
             definition.registry,
             base,
             self.overlay,
-            move |tag| tags.get(tag).into_iter().flatten(),
+            move |tag| tags.members(tag),
             |raw| codec(super::data_map_files::entry_value(raw)?),
             |id| (self.known)(definition.registry, id),
         );
@@ -86,7 +103,7 @@ impl Loader<'_, '_> {
             definition.registry,
             base,
             self.overlay,
-            move |tag| tags.get(tag).into_iter().flatten(),
+            move |tag| tags.members(tag),
             super::data_map_files::NumberCodec {
                 field,
                 decode: codec,
@@ -98,7 +115,7 @@ impl Loader<'_, '_> {
 }
 pub(in crate::game::server_side) fn load<'a>(
     overlay: &sunrise_world::loot::PackOverlay<'_>,
-    tags: impl Fn(&str) -> Option<&'a Tags>,
+    tags: impl Fn(&str) -> Option<&'a dyn TagMembers>,
     known: impl Fn(&str, &str) -> bool,
 ) -> Result<Loaded, String> {
     let none = Tags::new();

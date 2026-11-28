@@ -28,11 +28,10 @@ The reply is built in `crates/sunrise-gameplay-common/src/game/runtime/memory_co
 | `players` | The server's players: `count`, `total_mb` (queues, chunk lists, tracked sets), and for the 50 biggest by name `send_queue` as `[name, packets, mb]` rows (packets and bytes waiting for the network thread), `chunks_waiting`, `chunks_sent` and `tracked_entities` as `[name, count]` rows |
 | `chunk_send` | What the hub keeps to send chunks: `sections` (encoded sections), `heightmaps` and `frames` (compressed packets shared by every connection), each with `entries` and `size_mb`, and `total_mb` |
 | `light_queue`, `generation_queue` | Chunks being lit, and jobs queued or generating, with `len` and the `size_mb` of their bookkeeping tables (the data they point at is in `server_generation`) |
-| `far_tiles` | Far terrain tiles: `active` and `cached`, and the tiles `kept` for a return with their `kept_mb` |
-| `renderer.section_arenas_mb`, `section_vertices_mb` | The GPU buffers of the section vertex arenas, and the vertices that resident sections and far tiles hold in them |
-| `renderer.cpu` | The renderer's CPU-side bookkeeping: `resident_sections_mb`, `far_tiles_mb`, `block_entities_mb`, `light_sources_mb` |
+| `renderer.section_arenas_mb`, `section_vertices_mb` | The GPU buffers of the section vertex arenas, and the vertices that resident sections hold in them |
+| `renderer.cpu` | The renderer's CPU-side bookkeeping: `resident_sections_mb`, `block_entities_mb`, `light_sources_mb` |
 | `renderer.gpu` | The GPU allocator's `allocated_mb` and `reserved_mb`, and the 40 largest resources as `["label", mb]` rows in `by_label_mb`; `null` without Vulkan or DirectX 12 |
-| `named_mb`, `unattributed_mb` | `named_mb` adds up the columns (a section both the window and its server thread hold once), `server_generation`, `entities`, `players`, `chunk_send`, the two queues, `renderer.cpu` and the far tiles' `kept_mb`. `unattributed_mb` is `process.resident_mb` less that; it can be negative where a census overlaps another, and `null` where the resident set is not read |
+| `named_mb`, `unattributed_mb` | `named_mb` adds up the columns (a section both the window and its server thread hold once), `server_generation`, `entities`, `players`, `chunk_send`, the two queues, and `renderer.cpu`. `unattributed_mb` is `process.resident_mb` less that; it can be negative where a census overlaps another, and `null` where the resident set is not read |
 | `heap_by_tag_mb` | Only in an `alloc-census` build, otherwise `null`: see [the heap census](#who-allocated-it-the-heap-census) |
 
 Which number answers which question:

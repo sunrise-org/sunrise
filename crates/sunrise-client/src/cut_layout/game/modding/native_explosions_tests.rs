@@ -160,7 +160,7 @@ impl Hooks for Deathwatch {
 fn credit_arena(game: &mut sunrise_gameplay::game::ServerGame<'_>) {
     floor(game);
     assert!(game.run_command("difficulty normal"));
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(14.5, 80.0, 14.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(14.5, 80.0, 14.5)));
     bind_local_player(game, 11, 123);
     game.set_mode_id(0);
     game.server.next_entity = 100;

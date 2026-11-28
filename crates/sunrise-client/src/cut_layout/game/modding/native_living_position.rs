@@ -255,7 +255,6 @@ pub(crate) mod tests {
             let net = NetConfig {
                 listen: false,
                 announce: false,
-                lod_distance: 0,
                 ..NetConfig::lan(0, String::new(), 2)
             };
             let config = HubConfig {
@@ -294,8 +293,7 @@ pub(crate) mod tests {
             );
             guest.placed = true;
             let motion =
-                sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(3.0, 64.0, 5.0))
-                    .unwrap();
+                sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(3.0, 64.0, 5.0));
             guest.motion = Some(Box::new(motion));
             game.server.lan.as_mut().unwrap().hub.guests.push(guest);
             let living = game.living(game.entity(12).unwrap()).unwrap();

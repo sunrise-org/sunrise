@@ -11,7 +11,7 @@ use sunrise_sim::mobs::{Mob, sniffer};
 
 fn game(test: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>)) {
     sculk_game(|game| {
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 100.0, 8.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 100.0, 8.5)));
         game.mobs.clear();
         test(game);
     });
@@ -94,7 +94,7 @@ fn a_silent_sniffer_still_plays_the_local_searching_and_hit_sounds() {
                 game.world.set(x, 99, z, stone).unwrap();
             }
         }
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 100.0, 8.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 100.0, 8.5)));
         game.mobs.clear();
         let _ = digging_sniffer(game);
         game.mobs[0].silent = true;

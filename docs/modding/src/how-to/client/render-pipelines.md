@@ -311,6 +311,12 @@ read-write storage in `read_write_storage`, and `float32_filterable` says whethe
 target can be sampled with `SamplerFilter::Linear`; where it cannot, the target is read with nearest filtering. A device refusal of the allocation itself is
 `RenderTargetError::Device`.
 
+The sizes every GPU call is checked against are the device's own, and `host.render_capabilities().limits`
+(`RenderLimits`) reads them: `max_buffer_size`, `max_storage_buffer_binding_size`,
+`max_uniform_buffer_binding_size`, `max_compute_workgroups_per_dimension` and
+`max_texture_dimension_2d`. Size buffers, dispatches and targets from these instead of trying an
+allocation and reading the refusal.
+
 Free the target with `target.release(host)`. See `RenderTargetRef` for the lifetime of a target
 and its contents.
 
@@ -373,13 +379,19 @@ and `Particles` resolves `gbuffers_particles -> gbuffers_textured_lit -> gbuffer
 Pipelines that need pack-defined programs, preprocessor defines, an auxiliary depth target, or
 per-frame pack uniforms attach an optional `.pack_binding(PackBinding::new()...)`. Startup refuses
 invalid GLSL identifiers, reserved Iris/OptiFine sampler/image/uniform names, and cross-mod or
-namespace collisions across samplers, uniforms, defines, and depth-target IDs.
+namespace collisions across samplers, uniforms, defines, and depth-target IDs. A pack binding also
+cannot declare `SUNRISE_HDR` or `SUNRISE_HDR_TONEMAP_PACK`, which the engine defines itself, even
+when HDR is not served.
 
 During a world draw hook, feed declared per-frame pack uniforms with
 `ctx.set_pack_uniform(name, PackUniformValue::...)` (returns `false` without panicking when `name`
 or its `PackUniformType` is not registered; any `previous_name` declared on the uniform is tracked
-automatically across frames). To inspect whether an active shader pack bound a specific pipeline to
-one of its translated programs (`PackOverrideState::Bound`), left it on the mod's own fallback
+automatically across frames). If a pack program declares either name with an incompatible GLSL
+type, that uniform reads zero instead of receiving a converted value. The engine logs the uniform
+name, both types, and the program once per program and uniform. The pipeline stays bound.
+
+To inspect whether an active shader pack bound a specific pipeline to one of its translated
+programs (`PackOverrideState::Bound`), left it on the mod's own fallback
 shader (`PackOverrideState::UnboundPack`), or no pack is active (`PackOverrideState::NoPack`), call
 `ctx.pack_override_state(pipeline)`. To check generally whether a shader pack is currently loaded
 and rendering the world (always `false` on the title screen, matching `IrisApi.isShaderPackInUse()`),

@@ -83,13 +83,10 @@ pub(crate) fn access<'a, 'g>(
 }
 
 pub(crate) fn enable_block_ticks(game: &mut sunrise_gameplay::game::ServerGame<'_>) {
-    game.player = Some(
-        sunrise_sim::motion::PlayerMotion::new(
-            game.motion,
-            sunrise_core::geometry::Vec3::new(8.5, 65.0, 8.5),
-        )
-        .unwrap(),
-    );
+    game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+        game.motion,
+        sunrise_core::geometry::Vec3::new(8.5, 65.0, 8.5),
+    ));
     game.update_chunk_tickets();
 }
 
@@ -444,7 +441,7 @@ pub(crate) fn check_edit_then_replace(commit: bool, observer: Option<ModEntry>) 
             panic!("expected a mod container");
         };
         row.items = vec![Some(taken.clone()), Some(left.clone())];
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
         bind_local_player(game, 20, 123);
         let player = game.player(123).unwrap();
         game.selected = 0;

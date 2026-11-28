@@ -25,9 +25,10 @@ use sunrise_client::{
     },
     world::World,
 };
+use sunrise_core::prepared_test_support::STREAMING_INPUTS;
 use sunrise_world::registry::BlockStateId;
-#[path = "../src/test_resources.rs"]
-mod test_resources;
+#[path = "../../sunrise-core/src/prepared_test_root.rs"]
+mod prepared_test_root;
 
 /// A column under generation, and whether it has its features.
 struct Column {
@@ -78,7 +79,7 @@ impl ChunkGenerator for Plain {
 #[test]
 #[ignore = "daily"]
 fn forced_chunks_reach_vanillas_rings() {
-    let root = test_resources::prepared_root(&[test_resources::STREAMING_INPUTS]);
+    let root = prepared_test_root::prepared_root(&[STREAMING_INPUTS]);
     let assets = Arc::new(Assets::load(&root).unwrap());
     let render = Arc::new(
         sunrise_client::assets::RenderAssets::load(

@@ -458,7 +458,7 @@ mod below_world_tests {
         let resources = MotionResources::load(&root, &assets).unwrap();
         let mut scene = World::test_scene_with_placements(&assets, &[], 1).unwrap();
         scene.shape = shape;
-        let mut player = PlayerMotion::new(&resources, Vec3::new(0.5, y, 0.5)).unwrap();
+        let mut player = PlayerMotion::new(&resources, Vec3::new(0.5, y, 0.5));
         MotionWorld {
             side: crate::motion::dry_side(),
             tag_items: None,

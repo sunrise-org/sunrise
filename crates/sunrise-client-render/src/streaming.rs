@@ -18,9 +18,8 @@ use sunrise_level::chunk_streamer::{
 
 pub use sunrise_level::chunk_streamer::{
     Band, ChunkGenerator, ChunkState, ChunkStreamer, ChunkWorkerContext, FinalWrites, FullColumn,
-    IDLE_RELEASE, LodDetail, LodSampler, LodSource, Proto, ProtoCensus, ProtoSave, QueueCensus,
-    SaveStep, ViewArrival, chunk_pos_is_valid, full_column_ready, in_view_distance, job_stats,
-    take_resent_column,
+    IDLE_RELEASE, Proto, ProtoCensus, ProtoSave, QueueCensus, SaveStep, ViewArrival,
+    chunk_pos_is_valid, full_column_ready, in_view_distance, job_stats, take_resent_column,
 };
 
 /// Render-side resources needed by section meshing workers.
@@ -566,8 +565,7 @@ impl MeshStreamer {
     /// or sections meshing for the first time. Each of those is counted from
     /// when its job is queued, so queued jobs need no separate count.
     /// Remeshing sections already drawn (block, light and fluid updates) is
-    /// not loading: it kept small machines' far terrain held back
-    /// (`Lod::set_near_loading`) for as long as anything nearby changed.
+    /// not loading.
     pub fn terrain_loading(&self) -> bool {
         self.chunks.chunks_in_flight()
             || self

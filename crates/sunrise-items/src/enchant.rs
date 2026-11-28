@@ -13,10 +13,7 @@ use serde_json::Value;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     path::Path,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::Arc,
 };
 use sunrise_core::nbt::Tag;
 use sunrise_core::random::{LegacyRandom, RandomSource};
@@ -210,13 +207,6 @@ impl BoundEffects {
         }
         Ok(bound)
     }
-}
-
-/// Levels as numbers in enchantment names ("Sharpness 5"): Sunrise's PvP & HUD option, off by
-/// default (vanilla's numerals).
-static NUMERIC_LEVELS: AtomicBool = AtomicBool::new(false);
-pub fn set_numeric_levels(on: bool) {
-    NUMERIC_LEVELS.store(on, Ordering::Relaxed);
 }
 
 /// `Enchantment.Cost`: base + per_level_above_first * (level - 1).
@@ -874,26 +864,12 @@ impl Enchantments {
         id: &str,
         level: u32,
     ) -> (String, bool) {
-        let numeric = NUMERIC_LEVELS.load(Ordering::Relaxed);
-        self.full_name_with(language, id, level, numeric)
-    }
-    /// [`Enchantments::full_name_in`] with the level as a number when `numeric`.
-    fn full_name_with(
-        &self,
-        language: Option<&sunrise_game_data::lang::Language>,
-        id: &str,
-        level: u32,
-        numeric: bool,
-    ) -> (String, bool) {
         let tr = |key: &str| language.and_then(|l| l.get(key).map(str::to_owned));
         let Some(e) = self.get(id) else {
             return (format!("{id} {}", level_name(level)), false);
         };
         let description = tr(&e.description_key).unwrap_or_else(|| e.description.clone());
         let name = format_full_name(description, level, e.max_level, |level| {
-            if numeric {
-                return level.to_string();
-            }
             let key = format!("enchantment.level.{level}");
             tr(&key)
                 .or_else(|| self.lang.get(&key).cloned())
@@ -2529,12 +2505,6 @@ pub mod tests {
         let e = sample();
         assert_eq!(e.full_name("minecraft:mending", 1).0, "mending");
         assert_eq!(e.full_name("minecraft:sharpness", 1).0, "sharpness I");
-        // PvP & HUD's numbers: any level, past vanilla's numerals too; a one-level
-        // enchantment still has none.
-        let number = |id, level| e.full_name_with(None, id, level, true).0;
-        assert_eq!(number("minecraft:sharpness", 5), "sharpness 5");
-        assert_eq!(number("minecraft:sharpness", 255), "sharpness 255");
-        assert_eq!(number("minecraft:mending", 1), "mending");
         let levels = vec![
             (Arc::from("minecraft:unbreaking"), 3),
             (Arc::from("minecraft:mending"), 1),

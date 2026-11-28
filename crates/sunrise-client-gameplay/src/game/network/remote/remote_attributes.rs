@@ -20,7 +20,7 @@ impl ClientGame<'_> {
         }
         self.common
             .motion
-            .attributes
+            .attributes()
             .default_base(&tracked.kind, attribute)
     }
 
@@ -41,14 +41,14 @@ impl ClientGame<'_> {
         name: &str,
         values: &[play::AttributeSnapshot],
     ) -> Option<f64> {
-        let attribute = self.common.motion.attributes.id(name)?;
+        let attribute = self.common.motion.attributes().id(name)?;
         let snapshot = values
             .iter()
             .find(|snapshot| snapshot.attribute == attribute.registry_id())?;
         Some(
             self.common
                 .motion
-                .attributes
+                .attributes()
                 .attribute(attribute)
                 .definition
                 .sanitize(snapshot_value(snapshot)),
@@ -86,13 +86,13 @@ impl ClientGame<'_> {
                 if let Some((attr, reg)) = self
                     .common
                     .motion
-                    .attributes
+                    .attributes()
                     .attributes()
                     .find(|(attr, _)| attr.registry_id() == snapshot.attribute)
                     && self
                         .common
                         .motion
-                        .attributes
+                        .attributes()
                         .default_base(&kind, attr)
                         .is_some()
                 {

@@ -60,7 +60,7 @@ fn game_events_ask_client_level_before_playback() {
     mod_platform::testing::with_mods(mods, || {
         with_client_game(|game| {
             let _server = logged_client(game);
-            let mut player = PlayerMotion::new(game.motion, Vec3::new(1.0, 64.0, 1.0)).unwrap();
+            let mut player = PlayerMotion::new(game.motion, Vec3::new(1.0, 64.0, 1.0));
             player.dimensions.eye_height = 1.25;
             game.player = Some(player);
             for (event, param) in [(6, 1.0), (9, 1.0), (10, 1.4)] {
@@ -134,7 +134,7 @@ fn local_level_requests_can_mute_sound_without_undoing_prediction() {
     mod_platform::testing::with_mods(mods, || {
         with_client_game(|game| {
             let _server = logged_client(game);
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(1.0, 64.0, 1.0)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(1.0, 64.0, 1.0)));
             game.client
                 .streaming
                 .insert_remote(&mut game.common.world, Chunk::empty(0, 0));

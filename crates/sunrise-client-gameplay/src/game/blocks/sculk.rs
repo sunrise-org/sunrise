@@ -90,12 +90,9 @@ impl ClientGame<'_> {
     pub fn night_vision_intensity(&self, partial: f32) -> f32 {
         use mod_api::client::fog::FogType;
         if let Some(e) = self.common.potions.effects.get("night_vision") {
-            // MobEffectInstance.endsWithin(200); -1 is infinite.
-            return if e.duration < 0 || e.duration > 200 {
-                1.0
-            } else {
-                0.7 + ((e.duration as f32 - partial) * std::f32::consts::PI * 0.2).sin() * 0.3
-            };
+            // `GameRenderer.nightVisionScale`: the one shared computation, so this
+            // path and a shader pack read the same value.
+            return night_vision_scale(e.duration, partial);
         }
         if self.common.potions.effects.get("conduit_power").is_some()
             && let Some(eye) = self.common.eye_position()

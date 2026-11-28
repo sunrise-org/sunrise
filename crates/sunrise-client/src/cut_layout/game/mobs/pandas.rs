@@ -67,7 +67,7 @@ pub(crate) mod pickup_tests {
         let mut resources = None;
         let mut game = server_game(&mut resources);
         game.options.dedicated = None;
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 100.0, 4.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 100.0, 4.5)));
         game.level.player_uuid = Some(THROWER);
         game.level.health = 20.0;
         game.creative = false;

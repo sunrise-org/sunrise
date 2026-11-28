@@ -6,7 +6,8 @@
 //! solid (`gbuffers_terrain`'s solid part), cutout (its cutout part), a fluid in the translucent
 //! list (`gbuffers_water`), a block `block.properties` does not list, and a block past every
 //! listed state; and its `shadow` program writes them into `shadowcolor0`, which its `final`
-//! shows, for a solid, a cutout and a water quad. Asset-free; run with throwaway SUNRISE_HOME, SUNRISE_LAUNCHER_HOME,
+//! shows, for a solid, a cutout and a water quad. And a build the game no longer wants (its Iris
+//! compatibility changed while it built, #6054) is dropped by the poll, never installed. Asset-free; run with throwaway SUNRISE_HOME, SUNRISE_LAUNCHER_HOME,
 //! XDG_DATA_HOME and XDG_CONFIG_HOME (AGENTS.md):
 //! `cargo test -p sunrise-client-render --test pack_terrain_ids -- --ignored`
 //! (under `python3 tools/ci/with_xvfb.py` without a display) gives each its own. On a Wayland
@@ -33,6 +34,19 @@ use winit::{
 #[ignore = "daily"]
 fn pack_terrain_ids() {
     run_daily("pack_terrain_ids", &[], fixture);
+}
+
+/// A pack built on the loading thread and waiting for its poll when the game finds it stale
+/// (`poll_shader_pack_unless`, as the game calls it once the player turns Iris compatibility off)
+/// is dropped and never installed; the pack the game loads next is the one that runs.
+#[test]
+#[ignore = "daily"]
+fn a_stale_pack_build_is_never_installed() {
+    run_daily(
+        "a_stale_pack_build_is_never_installed",
+        &[],
+        fixture_stale_build,
+    );
 }
 
 /// Per-section draws that read the pages on a device taken to have no flat draws
@@ -590,6 +604,56 @@ fn fixture(window: Arc<Window>, out: &Path) -> Result<(), Box<dyn std::error::Er
     finish(out, result)
 }
 
+/// `a_stale_pack_build_is_never_installed`: an `old` pack built and waiting, found stale, then a
+/// `new` one loaded and polled.
+fn fixture_stale_build(window: Arc<Window>, out: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    std::fs::create_dir_all(out)?;
+    let mut renderer = renderer(window, (true, true))?;
+    let ids = block_ids(0);
+    let wait = |renderer: &Renderer, started: std::time::Instant| {
+        while !renderer.shader_pack_built() {
+            assert!(started.elapsed().as_secs() < 120, "the pack builds");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    };
+    let old = post(&mut renderer, &out.join("old"), Probe::Entity);
+    let started = std::time::Instant::now();
+    renderer.load_shader_pack(0, old, ids.clone(), "old".into(), started);
+    wait(&renderer, started);
+    assert!(
+        renderer.poll_shader_pack_unless(true).is_none(),
+        "the old build comes back"
+    );
+    assert_eq!(renderer.shader_pack_kind(), None, "the old build runs");
+    assert_eq!(
+        renderer
+            .shader_pack_loaded_for()
+            .map(|(dimension, _)| dimension),
+        None
+    );
+    assert!(
+        renderer.poll_shader_pack_unless(false).is_none(),
+        "nothing is left to poll"
+    );
+    let new = post(&mut renderer, &out.join("new"), Probe::Offset);
+    let started = std::time::Instant::now();
+    renderer.load_shader_pack(0, new, ids, "new".into(), started);
+    wait(&renderer, started);
+    let (dimension, label, _, report) = renderer
+        .poll_shader_pack_unless(false)
+        .expect("the new build comes back");
+    assert_eq!((dimension, label.as_str()), (0, "new"));
+    report.unwrap().expect("the new pack runs");
+    assert_eq!(renderer.shader_pack_kind(), Some("iris"));
+    assert_eq!(
+        renderer
+            .shader_pack_loaded_for()
+            .map(|(dimension, _)| dimension),
+        Some(0)
+    );
+    Ok(())
+}
+
 /// No flat draws: per-section draws read the pages, whose sources the section arena keeps
 /// while the pack reads them: first a pack loaded as the game loads one (`load_shader_pack`,
 /// the section uploaded while it builds), then the full check with packs run at once.
@@ -826,7 +890,6 @@ fn fixture_frame(hud: &HudBatch) -> Frame<'_> {
         outline: Vec::new(),
         outline_after_terrain: false,
         outline_high_contrast: false,
-        pvp: Default::default(),
         debug_lines: &[],
         debug_lines_on_top: &[],
         debug_crosshair: &[],

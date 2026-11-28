@@ -17,7 +17,7 @@ impl Mob {
     pub(super) fn attacker_allows_damage(&self, source: &Damage) -> bool {
         !source
             .attacker_species
-            .is_some_and(|attacker| wither::shielded_from(self.species(), attacker))
+            .is_some_and(|attacker| wither::shielded_from_id(self.species(), attacker))
     }
 
     /// Observe the complete attempt once; an explicit allow overrides an initial refusal.

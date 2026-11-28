@@ -1,7 +1,7 @@
 //! The first pass over a stage's tokens: what it declares at global scope, which of its
 //! functions take samplers, which outputs and built-ins it uses.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write;
 
 use naga::ShaderStage;
@@ -61,6 +61,9 @@ pub(super) struct Stage<'p> {
     pub(super) frag_outs: Vec<(u32, String)>,
     /// Narrow outputs copied into their vec4 after the pack's `main`.
     pub(super) out_copies: Vec<String>,
+    /// The pack's own fragment outputs declared as they are (not widened): at each location,
+    /// what our `main` names it by (`c`, `c[0]` for an array) and its type.
+    pub(super) named_outs: BTreeMap<u32, (String, String)>,
     /// Locations whose `hz_outN` is ours, filled from the pack's outputs: its vector type and
     /// the components written so far (a bit each).
     pub(super) wide_outs: HashMap<u32, (&'static str, u8)>,
@@ -465,6 +468,7 @@ impl<'p> Stage<'p> {
             attributes: Vec::new(),
             frag_outs: Vec::new(),
             out_copies: Vec::new(),
+            named_outs: BTreeMap::new(),
             wide_outs: HashMap::new(),
             inverse: false,
             gather_offsets: false,
@@ -957,9 +961,15 @@ impl<'p> Stage<'p> {
                             let width = output_kind(&ty).map_or(4, |(_, width, _)| width);
                             self.wide_outs.insert(n, (wide, (1 << width) - 1));
                         }
-                        None => self
-                            .frag_outs
-                            .push((n, format!("layout(location = {n}) out {ty} {name}{array};"))),
+                        None => {
+                            let element = if array.is_empty() { "" } else { "[0]" };
+                            self.named_outs
+                                .insert(n, (format!("{name}{element}"), ty.clone()));
+                            self.frag_outs.push((
+                                n,
+                                format!("layout(location = {n}) out {ty} {name}{array};"),
+                            ));
+                        }
                     }
                 }
                 _ => self.outs.push(Var {
@@ -969,6 +979,23 @@ impl<'p> Stage<'p> {
                     at: ty_at,
                 }),
             }
+        }
+    }
+
+    /// What our `main` names output `n` by when it holds a colour, a `vec4` of floats:
+    /// `gl_FragColor`'s and `gl_FragData[n]`'s `hz_outN`, a widened or assembled float output's
+    /// `hz_outN`, or the pack's own `vec4` (its first element for an array). Nothing when no
+    /// output is at `n`, or it holds integers.
+    pub(super) fn color_output(&self, n: u32) -> Option<String> {
+        if !self.outputs.contains(&n) {
+            return None;
+        }
+        if let Some((wide, _)) = self.wide_outs.get(&n) {
+            return (*wide == "vec4").then(|| format!("hz_out{n}"));
+        }
+        match self.named_outs.get(&n) {
+            Some((name, ty)) => (ty == "vec4").then(|| name.clone()),
+            None => Some(format!("hz_out{n}")),
         }
     }
 

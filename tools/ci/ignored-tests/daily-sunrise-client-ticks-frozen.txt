@@ -1,0 +1,2 @@
+# Frozen ticks on a client (#5693): the synced DATA_TICKS_FROZEN of the local player and a tracked mob; needs a Game with prepared resources.
+sunrise-client cut_layout::game::server_side::native_entity_state::tests::ticks_frozen_reads_the_synced_data_on_a_client lib daily resources

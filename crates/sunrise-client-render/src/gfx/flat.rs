@@ -109,7 +109,7 @@ pub struct Flat {
     pub translucent: wgpu::RenderPipeline,
     pub translucent_mark: wgpu::RenderPipeline,
     /// `solid` and `translucent` as a mirrored world view draws them, culling the front.
-    pub flipped: super::world_views::Flipped,
+    pub(crate) flipped: super::world_views::Flipped,
     flatten: wgpu::ComputePipeline,
     compute_layout: wgpu::BindGroupLayout,
     flatten_seen: wgpu::ComputePipeline,

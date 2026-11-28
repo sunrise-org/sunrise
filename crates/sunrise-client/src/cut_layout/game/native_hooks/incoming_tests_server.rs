@@ -40,7 +40,7 @@ fn held_durability_retains_the_stack_hand_and_explicit_break_slot() {
         crate::game::profile_resolver,
     )
     .unwrap();
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.0, 70.0, 0.0)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.0, 70.0, 0.0)));
     game.set_mode_id(0);
     // Stage an acting guest: break events are queued instead of rendering local crumbs.
     game.server.lan_acting = Some(1);

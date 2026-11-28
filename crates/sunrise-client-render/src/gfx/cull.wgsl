@@ -11,7 +11,7 @@ struct Globals {
     view_proj: mat4x4<f32>,
 }
 
-// One test per section or far tile: its visible index (which names its
+// One test per section: its visible index (which names its
 // origin), then its draws in `phase2` for each solid pass (gfx/cull.rs's
 // `place`): the first pass's first draw, both passes' draw counts (the
 // second's in the high 16 bits), the second pass's first draw. No draws:
@@ -65,7 +65,7 @@ fn corner(origin: vec3<f32>, low: vec3<f32>, high: vec3<f32>, c: u32) -> vec3<f3
     );
 }
 
-// Each tested section's or far tile's geometry box, padded by a block,
+// Each tested section's geometry box, padded by a block,
 // drawn after phase 1 against its depth
 // with back faces culled: a front face fragment that passes the depth test
 // is the box's nearest point on that pixel in front of phase 1's depth, so

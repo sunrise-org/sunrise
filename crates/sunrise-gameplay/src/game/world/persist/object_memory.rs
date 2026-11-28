@@ -642,7 +642,7 @@ impl crate::game::ServerGame<'_> {
                 sunrise_sim::mobs::spawn_rules::Reason::Structure,
             );
         }
-        sunrise_sim::mobs::armor::prepare(&m, &self.common.motion.attributes);
+        sunrise_sim::mobs::armor::prepare(&m, self.common.motion.attributes());
         let id = m.id;
         // Refuse residency, not the already-constructed object or its links.
         // A spawner tree has already run this decision in preorder.

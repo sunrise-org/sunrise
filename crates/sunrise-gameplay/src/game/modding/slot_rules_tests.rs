@@ -516,6 +516,63 @@ fn nested_menu_reads_use_base_slot_rules() {
     );
 }
 
+/// A `can_equip` Part that reads the armour slot it is asked about (`MenuRef::slot_holds` on the
+/// guest's head slot asks `ArmorSlot.mayPlace` again) gets the stack's own data answer for that
+/// nested read instead of being asked again; the outer read still hears the Part.
+#[test]
+#[ignore = "daily"]
+fn a_can_equip_part_reads_its_own_armour_slot_without_recursing() {
+    use mod_api::{CanEquipEvent, ItemPart, MenuRef};
+    use std::cell::Cell;
+    use sunrise_gameplay_common::game::api_values::test_snapshot;
+
+    thread_local! {
+        static MENU: Cell<Option<MenuRef>> = const { Cell::new(None) };
+        static ASKS: Cell<u32> = const { Cell::new(0) };
+        static NESTED: RefCell<Vec<Option<u32>>> = const { RefCell::new(Vec::new()) };
+    }
+    struct ReadsItsSlot;
+    #[mod_api::sunrise_part]
+    impl ItemPart for ReadsItsSlot {
+        fn can_equip(&self, host: &dyn mod_api::Host, event: &mut CanEquipEvent<'_>) {
+            let asks = ASKS.get() + 1;
+            ASKS.set(asks);
+            // Without the guard, make reentry fail the assertions rather than overflow.
+            if asks > 3 {
+                return;
+            }
+            if let Some(menu) = MENU.get() {
+                let nested = menu.slot_holds(host, 5, event.stack);
+                NESTED.with(|nested_all| nested_all.borrow_mut().push(nested));
+            }
+            event.can_equip = false;
+        }
+    }
+    struct ReadsMod;
+    #[mod_api::__subscriptions]
+    impl Hooks for ReadsMod {
+        fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
+            let helmet = r.item_key("minecraft:iron_helmet");
+            r.item_part(helmet, ReadsItsSlot);
+        }
+    }
+
+    with_mods(vec![ModEntry::new("reads", Box::new(ReadsMod))], || {
+        with_guests(|game| {
+            let player = game.player(12).unwrap();
+            let inventory = player.container_menu(game).unwrap();
+            MENU.set(Some(inventory));
+            let helmet = test_snapshot(&ItemStack::new("minecraft:iron_helmet", 1));
+            // The Part refuses the head slot; its own read of that slot is the helmet's
+            // `equippable` answer, one piece.
+            assert_eq!(inventory.slot_holds(game, 5, &helmet), Some(0));
+            assert_eq!(ASKS.get(), 1);
+            assert_eq!(NESTED.with(|nested| nested.take()), [Some(1)]);
+            MENU.set(None);
+        });
+    });
+}
+
 struct LiveSiblingPart;
 #[mod_api::sunrise_part]
 impl MenuPart for LiveSiblingPart {

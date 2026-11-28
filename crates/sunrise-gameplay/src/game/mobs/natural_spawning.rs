@@ -1309,6 +1309,46 @@ impl<'a> crate::game::ServerGame<'a> {
             .get(entity)
             .copied()
     }
+
+    /// `SpawnPlacements.checkSpawnRules` for the entity type `kind` at `at`, then the
+    /// `mob_spawn_placement_check` hook, as natural spawning asks it, once per entry of
+    /// `lights` in order until one passes: `None` reads the level's light, `Some(n)` makes
+    /// every sky and block light the rule reads `n` (`FixedLight`). The hook's `level` handle
+    /// still reads the real light. The level is built once for every try.
+    ///
+    /// A type with no placement entry (a non-mob) is checked as a spawner checks it
+    /// (`SpawnerTypeFacts::placement_type`): its vanilla rule passes, and registered
+    /// predicates and the hook still answer. None for an id that names no entity type.
+    ///
+    /// The tries draw in turn from one copy of the level random (`LevelRandom::clone`, never
+    /// written back): the level's stream does not move, so a call at an unchanged state
+    /// replays the same rolls, and each try draws after the one before it. It reads
+    /// `world.random` as it is: the caller refuses while the engine holds the live stream out
+    /// of it (`LevelRandomLent`).
+    #[inline(always)]
+    pub(in crate::game) fn check_spawn_rules_with_light(
+        &self,
+        kind: &str,
+        reason: Reason,
+        at: [i32; 3],
+        lights: &[Option<i32>],
+    ) -> Option<bool> {
+        use sunrise_sim::mobs::spawn_rules::{FixedLight, check_spawn_rules};
+        let facts = self.res.rest().spawner_types.get(kind).copied()?;
+        let level = self.natural_level();
+        let mut random: LevelRandom = self.world.random.clone();
+        Some(lights.iter().any(|&light| match light {
+            None => check_spawn_rules(facts.placement_type(kind), &level, reason, &mut random, at),
+            Some(light) => check_spawn_rules(
+                facts.placement_type(kind),
+                &FixedLight(&level, light),
+                reason,
+                &mut random,
+                at,
+            ),
+        }))
+    }
+
     pub fn natural_level(&self) -> GameLevel<'_, 'a> {
         let mut search = SearchPlayers::default();
         search.refresh(self);
@@ -1506,7 +1546,7 @@ impl<'a> crate::game::ServerGame<'a> {
     /// holds (`getNaturalSpawnChunkCount`).
     pub fn spawning_chunks(&self, players: &[LevelPlayer], scratch: &mut SpawnScratch) -> i32 {
         let tickets = self.server.streaming.mod_tickets();
-        let levels = self.server.tickets.0.levels();
+        let levels = self.server.chunk_ticking.tickets.levels();
         scratch.collect(
             players,
             |chunk| tickets.forces_natural_spawning(chunk),
@@ -1556,11 +1596,17 @@ impl<'a> crate::game::ServerGame<'a> {
             return;
         }
         let from = self.lan_synced_from();
-        sunrise_level::spans::time("spawn_raids", || self.tick_raids());
+        sunrise_level::spans::time("spawn_raids", || {
+            crate::rng_count::in_consumer(crate::rng_count::Consumer::Raids, || self.tick_raids())
+        });
         // `ServerChunkCache.tickChunks` skips the entire chunk-spawning phase
         // (natural spawning and custom spawners) in debug worlds.
         if !self.server.world_debug {
-            sunrise_level::spans::time("spawn_natural", || self.spawn_natural());
+            sunrise_level::spans::time("spawn_natural", || {
+                crate::rng_count::in_consumer(crate::rng_count::Consumer::NaturalSpawning, || {
+                    self.spawn_natural()
+                })
+            });
             // ServerChunkCache.tickChunks: the custom spawners tick only with spawn_mobs.
             if self
                 .common
@@ -1568,7 +1614,12 @@ impl<'a> crate::game::ServerGame<'a> {
                 .rules
                 .bool_at(sunrise_game_data::gamerules::vanilla::SPAWN_MOBS)
             {
-                sunrise_level::spans::time("spawn_custom", || self.tick_custom_spawners());
+                sunrise_level::spans::time("spawn_custom", || {
+                    crate::rng_count::in_consumer(
+                        crate::rng_count::Consumer::CustomSpawners,
+                        || self.tick_custom_spawners(),
+                    )
+                });
             }
         }
         self.lan_synced_since(from);
@@ -1609,8 +1660,9 @@ impl<'a> crate::game::ServerGame<'a> {
         laps.lap("sn_inhabited");
         let mut random = std::mem::replace(
             &mut self.common.world.random,
-            sunrise_core::random::LevelRandom::for_level(LegacyRandom::new(0)),
+            crate::rng_count::placeholder_level(LegacyRandom::new(0)),
         );
+        let lent = crate::game::server_side::native_level_spawning::LevelRandomLent::start();
         scratch.pass.players.refresh(self);
         scratch.pass.costed.clear();
         for kind in world_biomes!(self)
@@ -1685,6 +1737,7 @@ impl<'a> crate::game::ServerGame<'a> {
         sunrise_threads::work::clear_work();
         spawn_selection::attempt_counters(true);
         laps.lap("sn_attempts");
+        drop(lent);
         self.common.world.random = random;
         self.server.spawn_counts.insert(self.common.dim, last_state);
         scratch.spawn_buffers = state.into_parts().1;
@@ -2625,6 +2678,106 @@ mod tests {
         });
     }
 
+    /// `check_spawn_rules_with_light` (#6042): the rule reads the light it is given, the
+    /// level's random stays where it was, a non-mob type passes as `SpawnPlacements` passes a
+    /// type with no entry, and `mob_spawn_placement_check` still answers after it, whatever
+    /// light was asked.
+    #[test]
+    #[ignore = "daily"]
+    fn a_light_override_runs_the_rule_then_the_placement_hook() {
+        use crate::game::native_entity_refs::tests::with_game;
+        with_game(|game| {
+            game.world.chunks.insert(
+                (0, 0),
+                std::sync::Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)),
+            );
+            let dirt = game
+                .pack
+                .assets
+                .registry
+                .default_state("minecraft:dirt")
+                .unwrap();
+            game.world.set(8, 63, 8, dirt).unwrap();
+            game.world.health_rules.difficulty = sunrise_world::food::Difficulty::Normal;
+            let before = <(u64, Option<f64>)>::from(&*game.world.random);
+            let ask = |game: &crate::game::ServerGame<'_>, light: i32| {
+                game.check_spawn_rules_with_light(
+                    "minecraft:zombie",
+                    Reason::Natural,
+                    [8, 64, 8],
+                    &[Some(light)],
+                )
+            };
+            assert_eq!(ask(game, 0), Some(true), "a zombie spawns in the dark");
+            assert_eq!(ask(game, 15), Some(false), "and not in full light");
+            assert_eq!(
+                <(u64, Option<f64>)>::from(&*game.world.random),
+                before,
+                "the level random is not moved"
+            );
+            assert_eq!(
+                game.check_spawn_rules_with_light(
+                    "minecraft:no_such_mob",
+                    Reason::Natural,
+                    [8, 64, 8],
+                    &[None]
+                ),
+                None
+            );
+            assert!(game.natural_level().mob_type("minecraft:arrow").is_none());
+            assert_eq!(
+                game.check_spawn_rules_with_light(
+                    "minecraft:arrow",
+                    Reason::Natural,
+                    [8, 64, 8],
+                    &[Some(15)]
+                ),
+                Some(true),
+                "a type with no placement entry passes"
+            );
+            assert_eq!(
+                game.check_spawn_rules_with_light(
+                    "minecraft:zombie",
+                    Reason::Natural,
+                    [8, 64, 8],
+                    &[Some(15), Some(0)]
+                ),
+                Some(true),
+                "one level built, tried at each light in turn"
+            );
+            let with = |game: &crate::game::ServerGame<'_>, answer: SpawnCheck, light: i32| {
+                mod_platform::testing::with_mods(
+                    vec![mod_api::ModEntry::new(
+                        "spawn-checks",
+                        Box::new(ChecksMod(answer)),
+                    )]
+                    .into(),
+                    || ask(game, light),
+                )
+            };
+            assert_eq!(with(game, SpawnCheck::Fail, 0), Some(false));
+            assert_eq!(with(game, SpawnCheck::Succeed, 15), Some(true));
+            assert_eq!(with(game, SpawnCheck::Default, 15), Some(false));
+            assert_eq!(
+                mod_platform::testing::with_mods(
+                    vec![mod_api::ModEntry::new(
+                        "spawn-checks",
+                        Box::new(ChecksMod(SpawnCheck::Fail)),
+                    )]
+                    .into(),
+                    || game.check_spawn_rules_with_light(
+                        "minecraft:arrow",
+                        Reason::Natural,
+                        [8, 64, 8],
+                        &[None]
+                    ),
+                ),
+                Some(false),
+                "the hook answers for a non-mob too"
+            );
+        });
+    }
+
     /// What a spawn-check listener heard: the hook, the kind, the level and the spawner, and on
     /// the position check what the lent mob read (kind, position, whether its head slot is
     /// empty).
@@ -2712,7 +2865,7 @@ mod tests {
     fn spawn_check_world(game: &mut crate::game::ServerGame<'_>, at: Vec3) {
         use std::sync::Arc;
         use sunrise_level::chunk::Chunk;
-        game.player = Some(sunrise_sim::motion::PlayerMotion::new(game.motion, at).unwrap());
+        game.player = Some(sunrise_sim::motion::PlayerMotion::new(game.motion, at));
         for cx in -2..=4 {
             for cz in -2..=4 {
                 let mut chunk = Chunk::empty(cx, cz);
@@ -2982,7 +3135,7 @@ mod tests {
         use sunrise_sim::ticket_levels::{Sources, ViewedTicket};
         with_game(|game| {
             spawn_check_world(game, Vec3::new(0.5, 70.0, 0.5));
-            game.server.tickets.0.update(Some(Sources {
+            game.server.chunk_ticking.tickets.update(Some(Sources {
                 viewed: vec![ViewedTicket {
                     center: (0, 0),
                     radius: 0,

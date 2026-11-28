@@ -345,6 +345,56 @@ pub fn set_block_states(states: usize) {
     forget_shared();
 }
 
+/// Helpers for fixtures that temporarily load resource registries in-process.
+#[cfg(feature = "test-support")]
+pub mod test_support {
+    use std::sync::{Mutex, MutexGuard};
+
+    static PALETTE_SCOPE: Mutex<()> = Mutex::new(());
+
+    /// Captures the process-wide palette and restores it when dropped.
+    ///
+    /// Keep this scope alive until every game and worker using the temporary
+    /// registry has been dropped. Scopes serialize with each other.
+    pub struct BlockStatePaletteScope {
+        previous: (u8, u32, u64),
+        lock: Option<MutexGuard<'static, ()>>,
+    }
+
+    impl BlockStatePaletteScope {
+        pub fn new() -> Self {
+            let lock = PALETTE_SCOPE.lock().unwrap_or_else(|e| e.into_inner());
+            let previous = (
+                crate::assets::block_palette_bits(),
+                crate::assets::block_states_count(),
+                crate::assets::block_states_generation(),
+            );
+            Self {
+                previous,
+                lock: Some(lock),
+            }
+        }
+    }
+
+    impl Default for BlockStatePaletteScope {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl Drop for BlockStatePaletteScope {
+        fn drop(&mut self) {
+            crate::assets::restore_block_state_palette(
+                self.previous.0,
+                self.previous.1,
+                self.previous.2,
+            );
+            super::forget_shared();
+            self.lock.take();
+        }
+    }
+}
+
 /// One allocation per kind of uniform section (a single block, a single
 /// biome and one light value), shared by every column that has it, keyed by
 /// (block, biome, light). A tall column is mostly such sections: air with

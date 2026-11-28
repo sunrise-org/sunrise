@@ -1,5 +1,5 @@
 //! Engine particle provider options, independent of API registry keys.
-use mod_api::client::particles::PositionSource;
+use mod_api::PositionSource;
 use std::{collections::BTreeMap, sync::Arc};
 use sunrise_core::{
     geometry::{Vec3, trig},

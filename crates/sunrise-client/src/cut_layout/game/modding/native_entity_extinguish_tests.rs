@@ -71,7 +71,7 @@ fn extinguish_fire_uses_mob_kind_immunity_and_own_random_unlike_silent_clear() {
 fn extinguish_fire_preserves_player_guest_stand_and_item_sound_routes() {
     with_resident_guests(|game| {
         let at = Vec3::new(3.0, 64.0, 5.0);
-        let mut body = PlayerMotion::new(game.motion, at).unwrap();
+        let mut body = PlayerMotion::new(game.motion, at);
         body.entity_id = 7;
         game.player = Some(body);
         game.bind_local_player_residency();

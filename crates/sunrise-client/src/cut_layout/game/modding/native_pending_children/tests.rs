@@ -31,7 +31,7 @@ fn initial(game: &ServerGame<'_>, id: u32, breeding: bool) -> PendingMob {
         origin_reservation: None,
         dimension: game.dim,
         resources: game.res.clone(),
-        attributes: game.motion.attributes.clone(),
+        attributes: game.motion.attributes().clone(),
     }
 }
 
@@ -98,7 +98,7 @@ fn direct_edits_and_raii_drop_preserve_actual_mob_without_publishing() {
                 action: 0,
                 children: &mut pending,
                 resources: game.res.clone(),
-                attributes: game.motion.attributes.clone(),
+                attributes: game.motion.attributes().clone(),
                 dimension: game.dim,
             };
             let mut list = MobSplitChildren::new(&mut list_backing);
@@ -180,7 +180,7 @@ fn split_child_list_grows_unbounded_past_sixty_four_and_supports_list_ops() {
             action: 0,
             children: &mut pending,
             resources: game.res.clone(),
-            attributes: game.motion.attributes.clone(),
+            attributes: game.motion.attributes().clone(),
             dimension: game.dim,
         };
         let mut list = MobSplitChildren::new(&mut list_backing);
@@ -229,7 +229,7 @@ fn invalid_spec_and_edits_refuse_without_mutating_slot_or_list() {
                 action: 0,
                 slot: &mut slot,
                 resources: game.res.clone(),
-                attributes: game.motion.attributes.clone(),
+                attributes: game.motion.attributes().clone(),
                 dimension: game.dim,
                 constraint: ChildConstraint::BreedingAgeable,
             };
@@ -289,7 +289,7 @@ fn invalid_spec_and_edits_refuse_without_mutating_slot_or_list() {
                     action: 0,
                     children: &mut split_tmp,
                     resources: game.res.clone(),
-                    attributes: game.motion.attributes.clone(),
+                    attributes: game.motion.attributes().clone(),
                     dimension: game.dim,
                 };
                 MobSplitChildren::new(&mut list_backing)
@@ -332,7 +332,7 @@ fn invalid_spec_and_edits_refuse_without_mutating_slot_or_list() {
                 action: 0,
                 slot: &mut fox_slot,
                 resources: game.res.clone(),
-                attributes: game.motion.attributes.clone(),
+                attributes: game.motion.attributes().clone(),
                 dimension: game.dim,
                 constraint: ChildConstraint::BreedingFox,
             };
@@ -374,7 +374,7 @@ fn invalid_spec_and_edits_refuse_without_mutating_slot_or_list() {
                 action: 0,
                 children: &mut pending,
                 resources: game.res.clone(),
-                attributes: game.motion.attributes.clone(),
+                attributes: game.motion.attributes().clone(),
                 dimension: game.dim,
             };
             let mut list = MobSplitChildren::new(&mut list_backing);
@@ -432,14 +432,14 @@ fn scoped_editors_coexist_with_mutable_server_host() {
                 action: 0,
                 children: &mut pending,
                 resources: game.res.clone(),
-                attributes: game.motion.attributes.clone(),
+                attributes: game.motion.attributes().clone(),
                 dimension: game.dim,
             };
             let mut baby_backing = BabyChildSlot {
                 action: 0,
                 slot: &mut slot,
                 resources: game.res.clone(),
-                attributes: game.motion.attributes.clone(),
+                attributes: game.motion.attributes().clone(),
                 dimension: game.dim,
                 constraint: ChildConstraint::BreedingAgeable,
             };
@@ -465,7 +465,7 @@ fn nested_pending_editors_use_independent_stack_frames() {
                 action: 0,
                 children: &mut outer_children,
                 resources: game.res.clone(),
-                attributes: game.motion.attributes.clone(),
+                attributes: game.motion.attributes().clone(),
                 dimension: game.dim,
             };
             let mut outer = MobSplitChildren::new(&mut outer_backing);
@@ -478,7 +478,7 @@ fn nested_pending_editors_use_independent_stack_frames() {
                     action: 0,
                     slot: &mut inner_slot,
                     resources: game.res.clone(),
-                    attributes: game.motion.attributes.clone(),
+                    attributes: game.motion.attributes().clone(),
                     dimension: game.dim,
                     constraint: ChildConstraint::BreedingAgeable,
                 };

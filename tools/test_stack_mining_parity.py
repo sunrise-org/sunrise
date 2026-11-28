@@ -37,6 +37,28 @@ def corpus():
         yield dict(item=item, count=0, block='minecraft:stone')
 
 
+# A world data pack that binds `#minecraft:mineable/pickaxe` to dirt alone: the oracle binds it
+# through `ReloadableServerRegistries` (ParityData.init(pack)), the probe builds the item table
+# the server's world items come from with it.
+PACK_TAGS = {'data/minecraft/tags/block/mineable/pickaxe.json': '{"replace":true,"values":["minecraft:dirt"]}'}
+
+
+def pack_corpus():
+    tools = ['', '[minecraft:tool={rules:[{blocks:"#minecraft:mineable/pickaxe",speed:6.0f,correct_for_drops:true}]}]']
+    for item in ['stick', 'iron_pickaxe', 'diamond_pickaxe', 'iron_shovel']:
+        for tool in tools:
+            for block in ['stone', 'dirt', 'cobweb']:
+                yield dict(item='minecraft:' + item + tool, block='minecraft:' + block)
+
+
+def write_pack(path):
+    path.mkdir(parents=True, exist_ok=True)
+    (path / 'pack.mcmeta').write_text('{"pack":{"description":"stack mining parity pack"}}', encoding='utf-8')
+    for name, text in PACK_TAGS.items():
+        (path / name).parent.mkdir(parents=True, exist_ok=True)
+        (path / name).write_text(text, encoding='utf-8')
+
+
 def main():
     lock, jars, _ = base.verify_artifacts()
     build = lab.LOCAL / 'rust-stack-mining-parity'
@@ -55,28 +77,40 @@ def main():
     rows = list(corpus())
     inputs.write_text(''.join(json.dumps(row) + '\n' for row in rows), encoding='utf-8')
     input_hash = lab.digest(inputs, 'sha256')
+    pack = build / 'pack'
+    write_pack(pack)
+    pack_inputs = build / 'pack-inputs.jsonl'
+    pack_rows = list(pack_corpus())
+    pack_inputs.write_text(''.join(json.dumps(row) + '\n' for row in pack_rows), encoding='utf-8')
+    pack_hash = lab.digest(pack_inputs, 'sha256')
     classes, dependencies, _ = harness.compile_oracle(build, 'VanillaStackMiningOracle', jars, baking.client_libraries(), lock['minecraft']['java_major'])
     harness.java_run(build, classes, dependencies, 'VanillaStackMiningOracle', [inputs, build / 'vanilla.txt'], 'java')
+    harness.java_run(build, classes, dependencies, 'VanillaStackMiningOracle',
+                     [pack_inputs, build / 'vanilla-pack.txt', pack], 'java-pack')
     harness.run_logged(['cargo', 'build', '--locked', '-p', 'sunrise-client-lib', '--example', 'client_probe'], build, 'rust-build', env=dict(os.environ, CARGO_BUILD_JOBS='2'))
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--locked', '--no-deps', '--format-version', '1'], cwd=lab.ROOT))
     binary = Path(metadata['target_directory']) / 'debug/examples' / ('client_probe.exe' if os.name == 'nt' else 'client_probe')
     resources = Path(os.environ.get('SUNRISE_TEST_RESOURCES', lab.RESOURCES))
     harness.run_logged([binary, 'stack_mining_probe', inputs, build / 'rust.txt', resources], build, 'rust', env=lab.game_env())
     harness.compare(build / 'vanilla.txt', build / 'rust.txt', len(rows))
+    harness.run_logged([binary, 'stack_mining_probe', pack_inputs, build / 'rust-pack.txt', resources, pack],
+                       build, 'rust-pack', env=lab.game_env())
+    harness.compare(build / 'vanilla-pack.txt', build / 'rust-pack.txt', len(pack_rows))
     base.ensure_sources_unchanged(sources, tested)
-    if input_hash != lab.digest(inputs, 'sha256'):
+    if input_hash != lab.digest(inputs, 'sha256') or pack_hash != lab.digest(pack_inputs, 'sha256'):
         raise RuntimeError('Input fixtures changed during validation')
-    lab.write_json(report, dict(schema=1, minecraft=lab.VERSION, units=len(rows),
-        sources_sha256=tested, inputs_sha256=input_hash,
+    lab.write_json(report, dict(schema=1, minecraft=lab.VERSION, units=len(rows) + len(pack_rows),
+        sources_sha256=tested, inputs_sha256=input_hash, pack_inputs_sha256=pack_hash,
         client_jar_sha256=lab.digest(jars['client'], 'sha256'),
         oracle_class_sha256=lab.digest(classes / 'dev/sunriselab/parity/VanillaStackMiningOracle.class', 'sha256'),
         rust_binary_sha256=lab.digest(binary, 'sha256'),
         output_sha256=lab.digest(build / 'rust.txt', 'sha256'),
         scope='Actual Java item-command admission, TOOL mining speed/drop/wear amount and damageable-stack '
               'capacity queries before/after saved-stack round trips, including custom durability on non-durable '
-              'prototypes. Eye immersion is covered separately by source-derived Game regressions; '
+              'prototypes, and isCorrectToolForDrops with a world data pack that rebinds #minecraft:mineable/pickaxe '
+              '(the item table the server builds for its world items). Eye immersion is covered separately by source-derived Game regressions; '
               'this differential does not execute block destruction, durability mutation or statistics.'))
-    print(f'{len(rows)} stack mining command/save cases match pinned vanilla {lab.VERSION}')
+    print(f'{len(rows) + len(pack_rows)} stack mining command/save cases match pinned vanilla {lab.VERSION}')
 
 
 if __name__ == '__main__':

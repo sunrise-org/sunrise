@@ -8,16 +8,6 @@ use sunrise_sim::server_perf::MemoryCost;
 
 impl ClientGame<'_> {
     pub(in crate::game) fn client_memory_inputs(&self) -> MemoryInputs {
-        let far = self.client.lod.0.as_ref().map(|lod| {
-            let ((active, cached), (kept, kept_bytes)) = (lod.stats(), lod.kept());
-            let tiles = FarTiles {
-                active,
-                cached,
-                kept,
-                kept_mb: mb(kept_bytes),
-            };
-            (tiles, kept_bytes)
-        });
         MemoryInputs {
             render_distance: self.client.streaming.radius,
             client: self
@@ -26,7 +16,6 @@ impl ClientGame<'_> {
                 .dedicated
                 .is_none()
                 .then(|| self.common.world.chunks.values().cloned().collect()),
-            far,
         }
     }
 

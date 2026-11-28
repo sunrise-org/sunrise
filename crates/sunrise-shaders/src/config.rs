@@ -278,7 +278,7 @@ impl Config {
             let place = line(at);
             self.constant(&place, ty, name, value, [formats, shadow, others]);
         }
-        for (origin, comment) in &pp.comments {
+        for (origin, comment) in pp.comments() {
             for (at, ty, name, value) in constants(comment, true) {
                 let place = format!("{}:{}", pp.file_of(*origin), origin.line);
                 // Our probes' Iris 1.11.7 values fit this (a fit, not a rule Iris states): a
@@ -477,7 +477,7 @@ impl Config {
 /// of its live code, or `None` without one (then the program loader decides). 6.1.4.
 pub fn draw_buffers(pp: &Preprocessed) -> Option<Vec<u32>> {
     let mut found = None;
-    for (_, comment) in &pp.comments {
+    for (_, comment) in pp.comments() {
         let text = comment.trim();
         if let Some(digits) = text.strip_prefix("DRAWBUFFERS:") {
             let list: Option<Vec<u32>> = digits.trim().chars().map(|c| c.to_digit(10)).collect();

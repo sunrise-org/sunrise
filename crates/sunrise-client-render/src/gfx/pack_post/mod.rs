@@ -23,7 +23,7 @@ use crate::gfx::Frame;
 use crate::gfx::entity_skin::SkinFrame;
 use crate::gfx::pack_draw::EntitySpan;
 use sunrise_render_core::{SkyView, UniformFrameView};
-use sunrise_render_shaderpack::pack_uniforms::PackInputs;
+use sunrise_render_shaderpack::pack_uniforms::{Display, PackInputs};
 
 pub(crate) use super::external::ShadowView;
 
@@ -53,7 +53,8 @@ pub trait PackPostExt: Sized {
     fn resolve_entity_textures(&mut self, resolve: impl FnMut(u64) -> (wgpu::TextureView, u64));
     /// Runs the pack over the world drawn into `world` (colour) and `world_depth`, then draws
     /// the result onto `screen`. Notifies after the sky if the frame assigned the stage to this
-    /// pack, and after the last pack world pass, before composition. Fails once the device is lost (`lost`).
+    /// pack, and after the last pack world pass, before composition. `display`: the display the
+    /// frame is shown on (`EffectiveOutput::display`). Fails once the device is lost (`lost`).
     #[allow(clippy::too_many_arguments)]
     fn run(
         &mut self,
@@ -65,6 +66,7 @@ pub trait PackPostExt: Sized {
         screen: &wgpu::TextureView,
         frame: &Frame,
         inputs: &PackInputs,
+        display: Display,
         size: [u32; 2],
         window: [u32; 2],
         pages: &[TerrainPage],
@@ -204,6 +206,7 @@ impl PackPostExt for PackPost {
         screen: &wgpu::TextureView,
         frame: &Frame,
         inputs: &PackInputs,
+        display: Display,
         size: [u32; 2],
         window: [u32; 2],
         pages: &[TerrainPage],
@@ -252,6 +255,7 @@ impl PackPostExt for PackPost {
             &sky,
             &hand,
             inputs,
+            display,
             size,
             window,
             pages,
@@ -397,6 +401,12 @@ mod depth_test;
 
 #[cfg(test)]
 mod destination_tests;
+
+#[cfg(test)]
+mod hdr_extension_tests;
+
+#[cfg(test)]
+mod display_uniform_tests;
 
 #[cfg(test)]
 #[path = "../pack_material_tests.rs"]

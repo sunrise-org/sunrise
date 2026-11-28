@@ -59,7 +59,7 @@ pub(crate) mod tests {
         ));
         std::fs::create_dir_all(&scratch).unwrap();
         game.server.world_root = scratch.clone();
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(10.5, 64.0, 0.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(10.5, 64.0, 0.5)));
         let original = game.player.as_ref().unwrap().bounds();
         let net = NetConfig {
             announce: false,

@@ -21,7 +21,7 @@ mod tests {
         let mut resources = None;
         let mut game = server_game(&mut resources);
         let feet = sunrise_core::geometry::Vec3::new(8.5, 70.0, 8.5);
-        game.player = Some(sunrise_sim::motion::PlayerMotion::new(game.motion, feet).unwrap());
+        game.player = Some(sunrise_sim::motion::PlayerMotion::new(game.motion, feet));
         // `ChunkMap.prepareEntityTickingChunk`: the chunks within 2 are loaded too.
         for x in -2..=2 {
             for z in -2..=2 {

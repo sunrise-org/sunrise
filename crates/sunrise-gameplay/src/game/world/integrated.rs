@@ -47,7 +47,7 @@ use sunrise_gameplay_common::game::{
 use sunrise_level::level_loading::{STATUS_RADIUS, Stage};
 use sunrise_level::sim_settings::SimSettings;
 use sunrise_level::spans::startup;
-use sunrise_protocol::{connection::Pipe, text::translatable};
+use sunrise_protocol::text::translatable;
 use sunrise_sim::{
     chunk_io::Reports,
     lan::{Lan, MAX_PLAYERS, NetConfig, hub::HubConfig},
@@ -222,14 +222,24 @@ impl crate::game::ServerGame<'_> {
         ready: &Sender<Ready>,
         opening: Opening,
     ) -> Result<super::server_lifecycle::ServerRunOutcome> {
-        let (pipe, world_name) = self.integrated_open(&launch, &flags, tasks, opening)?;
+        let world_name = self.integrated_open(&launch, &flags, tasks, opening)?;
         // IntegratedServer.initServer ends with `ServerStartingEvent`, right before
         // `MinecraftServer.runServer` fires `ServerStartedEvent`.
         self.native_server_starting(false);
         // The server thread's `server_started` site, before the tick loop.
         self.native_lifecycle_world_ready();
-        // Hand the local connection pipe to the client only after `server_started`,
-        // so a failed or panicking startup never hands out a live pipe.
+        // `Minecraft.doWorldLoad` waits for the server before `startMemoryChannel` and
+        // `connectToLocalServer`: the memory connection (and its login timeout) starts only
+        // now, so a slow `server_starting` listener cannot run the owner's login out. A failed
+        // or panicking startup never hands out a live pipe.
+        let pipe = self
+            .server
+            .lan
+            .as_ref()
+            .ok_or("the integrated server did not start")?
+            .hub
+            .lan
+            .connect_local()?;
         let _ = ready.send(Ok((
             pipe,
             world_name,
@@ -391,7 +401,7 @@ impl crate::game::ServerGame<'_> {
         flags: &Arc<Flags>,
         tasks: Receiver<OwnerRequest>,
         opening: Opening,
-    ) -> Result<(Pipe, String)> {
+    ) -> Result<String> {
         if let Ok(dir) = std::env::current_dir() {
             let (cache, warnings) =
                 sunrise_server_files::user_cache::UserCache::load(dir.join("usercache.json"));
@@ -481,7 +491,7 @@ impl crate::game::ServerGame<'_> {
             sunrise_sim::lan::hub::effective_view_distance(view_distance);
         self.server.streaming.radius = self.server.settings.render_distance;
         let commands = self.common.allow_commands();
-        let pipe = {
+        {
             let host = self
                 .server
                 .lan
@@ -495,8 +505,7 @@ impl crate::game::ServerGame<'_> {
                 uuid: owner,
                 saved: Some(saved),
             });
-            host.hub.lan.connect_local()?
-        };
+        }
         self.server.serving = Some(Serving {
             flags: flags.clone(),
             tasks,
@@ -518,7 +527,7 @@ impl crate::game::ServerGame<'_> {
             }
             self.save_world_after_players(false)
         })?;
-        Ok((pipe, self.common.level.name.clone()))
+        Ok(self.common.level.name.clone())
     }
 
     /// `MinecraftServer.stopServer`: the players are saved and sent away,

@@ -5,6 +5,8 @@ use crate::game::GameGameExt1 as _;
 /// Side-specific inputs supplied to [`Game::mob_world_base_with`] by server or client.
 pub struct MobWorldSideParams<'s> {
     pub side: &'s dyn sunrise_sim::motion::SideLevel,
+    /// The world's frozen variant registries; a side with none passes none.
+    pub variant_tables: Option<&'s sunrise_sim::mobs::variants::VariantTables>,
     pub trading_players: Option<&'s dyn sunrise_sim::mobs::villager_brain::TradingPlayers>,
     pub player: Option<PlayerView>,
     pub player_identity: Option<([i32; 4], u32)>,
@@ -39,6 +41,7 @@ pub trait WorldViewExt<'__sg>: crate::game::SideGame<'__sg> {
             .map(|p| p.position);
         MobWorld {
             side: params.side,
+            variant_tables: params.variant_tables,
             mob_maps: self.mob_maps(),
             section_writer: None,
             trading_players: params.trading_players,
@@ -48,7 +51,7 @@ pub trait WorldViewExt<'__sg>: crate::game::SideGame<'__sg> {
             registry: self.pack.assets.registry,
             facts: self.res.facts(),
             fluid_tables: &self.motion.fluids,
-            attributes: &self.motion.attributes,
+            attributes: self.motion.attributes(),
             movement: &self.motion.blocks,
             collision: self.collision,
             suffocation: self.level_suffocation(),

@@ -21,8 +21,12 @@ pub trait EntityFireFrostBackend {
     /// The ticks the entity burns for (`Entity.getRemainingFireTicks`), for every kind of
     /// entity. `None` for a stale handle, or a kind that keeps no entity data.
     fn entity_fire_ticks(&self, entity: EntityRef) -> Option<i32>;
-    /// Side: server.
-    /// Returns the entity's frozen ticks (`Entity.getTicksFrozen`).
+    /// Side: both.
+    /// Returns the entity's frozen ticks (`Entity.getTicksFrozen`): players and mobs. On a
+    /// client, the count the server synced (`DATA_TICKS_FROZEN`) for the local player and the
+    /// mobs it tracks, as the frost overlay and the frozen hearts read it. A mod derives
+    /// `isFullyFrozen` (at least 140, `Entity.BASE_TICKS_REQUIRED_TO_FREEZE`) and
+    /// `getPercentFrozen` from it. None for other kinds or stale handles.
     fn entity_ticks_frozen(&self, entity: EntityRef) -> Option<i32>;
 }
 /// The handles' writes of the `entity_fire_frost` area, implemented by the game and reached through [`BackendMut`].

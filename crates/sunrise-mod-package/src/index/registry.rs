@@ -1,6 +1,6 @@
 //! The registry repository (`sunrise-org/sunrise-mods`, docs/modding/src/reference/registry-index.md):
-//! one `mods/<id>.toml` per project, written by the submission form or by
-//! hand and reviewed in a pull request, plus `revoked.toml`. Its CI turns
+//! one `mods/<id>.toml` per project, written by hand
+//! and reviewed in a pull request, plus `revoked.toml`. Its CI turns
 //! them into `index.json` with [`build`], reading every listed file, and
 //! checks a pull request's changes with [`review`].
 //!
@@ -1070,7 +1070,7 @@ pub fn page(entry: &Entry, text: &str) -> Result<Page, String> {
 }
 
 impl Entry {
-    /// The entry as `mods/<id>.toml` holds it (the submission form writes it).
+    /// The entry as `mods/<id>.toml` holds it.
     pub fn to_toml(&self) -> Result<String, String> {
         toml::to_string(self).map_err(|e| e.to_string())
     }

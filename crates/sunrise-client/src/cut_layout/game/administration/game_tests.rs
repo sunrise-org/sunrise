@@ -249,7 +249,7 @@ mod completed_test_coordinate_feedback_tests {
                 "minecraft:stone"
             );
         }
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 200.0, 8.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 200.0, 8.5)));
         assert_eq!(game.dim, Dim::Nether);
         let definition = game.test_def("minecraft:always_pass").unwrap();
         assert_eq!(definition.dimension, "minecraft:overworld");

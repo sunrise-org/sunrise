@@ -37,7 +37,8 @@ fn help_lists_the_everyday_commands_and_each_command_says_its_usage() {
     assert!(output.status.success());
     let text = String::from_utf8(output.stdout).unwrap();
     assert!(
-        text.starts_with("usage: cargo sunrise-mod build [--update-lock]"),
+        text.starts_with("usage: cargo sunrise-mod build [--update-lock]")
+            && text.contains("[--timings] [--verbose | -v]"),
         "{text}"
     );
     let output = run(&["help", "all"]);

@@ -48,12 +48,14 @@ fn a_blaze_and_a_vex_keep_their_extra_no_action_time_in_the_dark() {
         // 32 blocks inside which `checkDespawn` resets the count.
         let dark = MobWorld {
             side: crate::motion::dry_side(),
+            variant_tables: None,
             daylight: false,
             nearest_player: Some(Vec3::new(40.5, 64.0, 0.5)),
             ..w.clone()
         };
         let lit = MobWorld {
             side: crate::motion::dry_side(),
+            variant_tables: None,
             daylight: true,
             ..dark.clone()
         };

@@ -215,10 +215,10 @@ pub(crate) mod tnt_impact_tests {
         // player.
         game.server.settings.simulation_distance = 4;
         game.server.settings.render_distance = 12;
-        game.player = Some(
-            sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(8.5, 70.0, 12.5))
-                .unwrap(),
-        );
+        game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+            game.motion,
+            Vec3::new(8.5, 70.0, 12.5),
+        ));
         for cx in -2..=2 {
             for cz in -2..=2 {
                 if (cx, cz) != (0, 0) {
@@ -877,10 +877,10 @@ pub(crate) mod cart_cost_bench {
         let mut game = server_game(&mut resources);
         game.server.settings.simulation_distance = 6;
         game.server.settings.render_distance = 12;
-        game.player = Some(
-            sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(8.5, 80.0, 12.5))
-                .unwrap(),
-        );
+        game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+            game.motion,
+            Vec3::new(8.5, 80.0, 12.5),
+        ));
         for cx in -3..=3 {
             for cz in -3..=3 {
                 if (cx, cz) != (0, 0) {

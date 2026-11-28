@@ -242,8 +242,7 @@ pub(in crate::game::client_side) fn with_effects(
                 game.world
                     .chunks
                     .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
-                game.player =
-                    Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 63.0, 4.5)).unwrap());
+                game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 63.0, 4.5)));
                 game.side.audio.0.capture = Some(Vec::new());
                 test(game, &calls);
             },

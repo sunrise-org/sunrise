@@ -50,7 +50,7 @@ fn arms(mob: &Mob, models: &sunrise_client::mobs_render::ClientMobModels) -> [[f
 #[ignore = "daily"]
 fn registered_angles_reach_local_remote_and_humanoid_before_species_animation() {
     with_client_game(|game| {
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
         game.common.inventory[game.common.selected] = Some(ItemStack::new("minecraft:stick", 1));
         game.tick_player_model();
         for (id, kind) in [
@@ -178,7 +178,7 @@ fn suppressed_custom_offhand_never_calls_its_transformer() {
         }
     }
     with_client_game(|game| {
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
         game.common.inventory[game.common.selected] = Some(ItemStack::new("minecraft:stick", 1));
         game.offhand = Some(ItemStack::new("minecraft:stick", 1));
         let calls = Arc::new(Mutex::new(Vec::new()));
@@ -229,7 +229,7 @@ fn held_arm_pose_reads_the_active_swing_on_every_draw() {
         }
     }
     with_client_game(|game| {
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
         game.common.inventory[game.common.selected] = Some(ItemStack::new("minecraft:stick", 1));
         game.offhand = Some(ItemStack::new("minecraft:stick", 1));
         game.tick_player_model();

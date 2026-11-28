@@ -30,6 +30,11 @@ Sessions, each a fresh game and world (seed 7) per build:
 - world_pack: a shader pack in the `shaders/` format with its own sky, sun and moon, weather and terrain programs and a
   composite pass (tools/fixtures/shaderpacks/frame_identity_world), on the float frame in SDR: day over water, the
   sun, the night sky, rain by day and by night, and the End's sky.
+- hdr_extension, hdr_extension_curve, hdr_extension_sdr, hdr_extension_off: a shader pack that asks for Sunrise's
+  HDR extension (tools/fixtures/shaderpacks/hdr_extension, docs/shaders.md), its final writing a ramp up to 8 times
+  paper white and the display uniforms over the world: served on the float frame with HDR on and a black level,
+  owning the tone curve and (its option SUNRISE_CURVE on) giving it to Sunrise; served in SDR; and not served, the
+  switch off, on its SDR path; day over water and night with light sources.
 
 Shader packs are read from the change's tree for both builds (tools/fixtures/shaderpacks), so a base from before a
 fixture was added draws it too.
@@ -42,7 +47,8 @@ Both builds draw on the same adapter: Mesa's lavapipe where its Vulkan driver is
 default. When the base and the change differ only in files no game binary is built from (tools/, tests/, .github/,
 Markdown outside crates/), the base reuses the change's binaries: the comparison is then of two runs of one build.
 Each session also checks, in each build, that it drew what it is for (the pack changes the picture, HDR shots have
-their -hdr.png, the visibility buffer's line is in the session's whole log), so a pack that
+their -hdr.png, the visibility buffer's line is in the session's whole log, the pack asking for Sunrise's HDR draws
+its ramp and display at the values it is served, or its SDR path where it isn't: extension_gates), so a pack that
 fails to load, or HDR that stays off, in both builds doesn't pass as identical, and a change that stops one doesn't
 either.
 --build-base builds it anyway. The base builds in a worktree and target folder of its own under .local/frame-identity/,
@@ -507,7 +513,19 @@ SESSIONS = {
     'world_plain': ('', {'SUNRISE_HDR_FRAME': 'float'}, ['night_sky', 'end_sky', 'rain_day', 'rain_night'], False),
     'world_pack': ('', {'SUNRISE_SHADER_PACK': 'frame_identity_world', 'SUNRISE_HDR_FRAME': 'float'},
                    ['day_water', 'sun', 'night_sky', 'end_sky', 'rain_day', 'rain_night'], False),
+    # 🤖 Agent: Sunrise's HDR extension (extension_gates): served with HDR on, the pack owning the tone curve and giving
+    # it to Sunrise (CHOSEN), both at a black level of 0.1 nits; served in SDR; and the switch off, where it isn't.
+    'hdr_extension': ('hdr:true\nhdrBlackLevel:10\n', {'SUNRISE_SHADER_PACK': 'hdr_extension',
+                      'SUNRISE_HDR_FRAME': 'float', 'SUNRISE_HDR_OUTPUT': 'pq'}, ['day_water', 'night_lights'], False),
+    'hdr_extension_curve': ('hdr:true\nhdrBlackLevel:10\n', {'SUNRISE_SHADER_PACK': 'hdr_extension',
+                            'SUNRISE_HDR_FRAME': 'float', 'SUNRISE_HDR_OUTPUT': 'pq'}, ['day_water', 'night_lights'],
+                            False),
+    'hdr_extension_sdr': ('', {'SUNRISE_SHADER_PACK': 'hdr_extension', 'SUNRISE_HDR_FRAME': 'float'},
+                          ['day_water', 'night_lights'], False),
+    'hdr_extension_off': ('', {'SUNRISE_SHADER_PACK': 'hdr_extension'}, ['day_water', 'night_lights'], False),
 }
+# 🤖 Agent: The options a session picks in its pack (shaderpacks/<pack>.txt, as Shader Options saves them).
+CHOSEN = {'hdr_extension_curve': 'SUNRISE_CURVE=true\n'}
 # 🤖 Agent: The session a pack's pictures are held against in scenes the usual one (session_checks) doesn't shoot.
 PLAIN = 'world_plain'
 # 🤖 Agent: Where shader packs are found: the harness's fixtures.
@@ -566,6 +584,8 @@ def run_session(name, label, bin_dir, out, env_base, args):
     (folder / 'options.txt').write_text(options)
     if pack:
         shutil.copytree(PACK_DIR / pack, folder / 'shaderpacks' / pack)
+    if name in CHOSEN:
+        (folder / 'shaderpacks' / f'{pack}.txt').write_text(CHOSEN[name])
     env = lab.game_env(env_base, SUNRISE_STILL='1', **extra)
     out.mkdir(parents=True, exist_ok=True)
     game = Game(bin_dir, folder, env, args)
@@ -827,10 +847,150 @@ def hdr_gates(shots, sessions):
     return problems
 
 
+# 🤖 Agent: The pack that asks for Sunrise's HDR extension (tools/fixtures/shaderpacks/hdr_extension): its ramp, 16
+# bands of 0.5, 1.0, ... 8.0 times paper white across the top tenth of the picture, and its display strip in the next
+# tenth, seven parts: sunriseHdr, sunriseHeadroom / 8, sunrisePaperWhite / 203, sunrisePeak / 1000,
+# sunriseBlackLevel / 0.2, green where the tone curve's owner is the one its option asked for, and 6 times paper white
+# past the pack's own hold. Not served, the SDR path: the ramp clipped at white, the strip black, the last part white.
+EXTENSION = 'hdr_extension'
+RAMP = [0.5 * (k + 1) for k in range(16)]
+GREEN = (0.0, 1.0, 0.0)
+OVER_WHITE = 6.0
+STRIP = 7
+# 🤖 Agent: The black level of the HDR sessions, in hundredths of a nit (sunrise-graphics.txt's hdrBlackLevel): 0.1 nits.
+BLACK = 10
+
+
+def extension_points(width, height):
+    """The centre pixels, (x, y), of the ramp's bands and of the display strip's parts."""
+    return ([((2 * k + 1) * width // 32, height // 20) for k in range(len(RAMP))],
+            [((2 * p + 1) * width // (2 * STRIP), 3 * height // 20) for p in range(STRIP)])
+
+
+def half(x, rounding):
+    """`x` (at least 0) as a half float holds it: the nearest, or the one below or above (`rounding` 'down', 'up'),
+    10 bits of mantissa. The frame stores the 2.2 power of light so (Rgba16Float), and a GPU may round either way."""
+    if x <= 0:
+        return 0.0
+    step = 2.0 ** (math.floor(math.log2(x)) - 10)
+    return {'down': math.floor, 'up': math.ceil}.get(rounding, round)(x / step) * step
+
+
+def unpq_signal(e):
+    """The nits of PQ signal `e`: ST 2084's EOTF."""
+    m1, m2, c1, c2, c3 = ST2084
+    p = min(max(e, 0.0), 1.0) ** (1 / m2)
+    return 10000 * (max(p - c1, 0) / (c2 - c3 * p)) ** (1 / m1)
+
+
+def eased(top, paper, headroom):
+    """The scale Sunrise's tone curve gives light whose brightest channel is `top` (× paper white `paper` nits) on a
+    display of `headroom`, where Sunrise lit nothing, in f64: ITU-R BT.2390's EETF in PQ, its source following the
+    display (3 × the peak's signal less 2 × the knee's, the knee at 60% of the headroom and at least white). The same
+    reference as shader_pack_hdr_tests.rs's `curved`, apart from the shader."""
+    knee = max(0.6 * headroom, 1.0)
+    if top <= knee:
+        return 1.0
+    peak = pq(headroom * paper)
+    source = min(3 * peak - 2 * pq(knee * paper), 1.0)
+    e, top_lum = pq(top * paper) / source, peak / source
+    ks = max(1.5 * top_lum - 0.5, 0.0)
+    if e >= 1:
+        return headroom / top
+    t = (e - ks) / (1 - ks)
+    spline = ((2 * t ** 3 - 3 * t ** 2 + 1) * ks + (t ** 3 - 2 * t ** 2 + t) * (1 - ks)
+              + (3 * t ** 2 - 2 * t ** 3) * top_lum)
+    return unpq_signal(spline * source) / paper / top
+
+
+def shown(light, paper, peak, black, curve, rounding):
+    """The HDR10 codes, unrounded, of linear BT.709 `light` written by a served `final` on the float frame: stored as
+    half floats in the 2.2 power, through Sunrise's tone curve once if `curve` (stored again), held at the peak, then
+    BT.2020 and PQ, each channel's signal lifted to the black level `black` nits (ITU-R BT.2390's black level lift,
+    E + b (1 - E)^4, over the source range 0 to the display's peak)."""
+    headroom = peak / paper
+    stored = [half(max(c, 0.0) ** (1 / 2.2), rounding) for c in light]
+    if curve:
+        scale = eased(max(stored) ** 2.2, paper, headroom)
+        if scale != 1.0:
+            stored = [half(c * scale ** (1 / 2.2), rounding) for c in stored]
+    held = [min(c ** 2.2, headroom) for c in stored]
+    top, lift = pq(peak), pq(black)
+    codes = []
+    for row in BT2020:
+        e = pq(paper * sum(m * c for m, c in zip(row, held)))
+        codes.append(1023 * (e + lift * (1 - min(e / top, 1)) ** 4))
+    return codes
+
+
+def sdr8(light):
+    """The 8-bit values of light clipped at white in the 2.2 power, as an SDR frame stores it."""
+    return [255 * min(max(c, 0.0), 1.0) ** (1 / 2.2) for c in light]
+
+
+def written(session):
+    """The light `final` writes at each sample point in `session`, ramp then strip, and whether it is served."""
+    _, extra, _, _ = SESSIONS[session]
+    served = 'SUNRISE_HDR_FRAME' in extra
+    hdr = 'hdr:true' in SESSIONS[session][0]
+    paper, peak = setting(session, 'hdrPaperWhite'), setting(session, 'hdrPeak')
+    if not served:
+        return [[v] * 3 for v in RAMP] + [[0.0] * 3] * (STRIP - 1) + [[1.0] * 3], False
+    headroom = peak / paper if hdr else 1.0
+    display = ([1.0, headroom / 8, 1.0, 1.0, setting(session, 'hdrBlackLevel', 0) / 100 / 0.2] if hdr
+               else [0.0, 1 / 8, 80 / 203, 80 / 1000, 0.0])
+    light = [[v] * 3 for v in RAMP] + [[d] * 3 for d in display] + [list(GREEN)]
+    if session not in CHOSEN:
+        # 🤖 Agent: the pack owns the curve: it holds what it writes at sunriseHeadroom, the last part aside.
+        light = [[min(c, headroom) for c in each] for each in light]
+    return light + [[OVER_WHITE] * 3], True
+
+
+def extension_gates(shots, sessions):
+    """That the pack asking for Sunrise's HDR drew what it is served, so a base and a change that both stopped serving
+    it (or both served it where they shouldn't) can't pass as identical. With HDR on, each channel of the HDR shot is
+    `shown`'s code for the light the pack writes (`written`), between its two half-float roundings and within a code
+    of HDR10's rounding: held at the headroom where the pack owns the curve, through Sunrise's curve once where it
+    gave it away (hdr_extension_curve), the shadows lifted to the black level. Without HDR, each channel of the
+    screenshot is the 8-bit value of that light clipped at white in the 2.2 power, within a step: served, SDR's
+    display; not served (the switch off), the SDR path's ramp, black strip and white last part. The load must not say
+    the pack was served another answer than it asked for (the served answer counts)."""
+    problems = []
+    for name in sessions:
+        graphics, extra, scenes, _ = SESSIONS[name]
+        if extra.get('SUNRISE_SHADER_PACK') != EXTENSION:
+            continue
+        log = shots / f'{name}.log'
+        if 'the served answer counts' in (log.read_text(encoding='utf-8') if log.exists() else ''):
+            problems.append(f'{name}: the pack was not served the HDR it asked for')
+        hdr = 'hdr:true' in graphics
+        light, served = written(name)
+        paper, peak = setting(name, 'hdrPaperWhite'), setting(name, 'hdrPeak')
+        black = setting(name, 'hdrBlackLevel', 0) / 100
+        for scene in scenes:
+            shot = shots / f'{name}.{scene}{"-hdr" if hdr else ""}.png'
+            if not shot.exists():
+                continue
+            width, picture = pixels(shot)
+            ramp, strip = extension_points(width, len(picture) // width)
+            got = [picture[y * width + x] for x, y in ramp + strip]
+            for i, (g, each) in enumerate(zip(got, light)):
+                if hdr:
+                    bounds = [shown(each, paper, peak, black, name in CHOSEN, r) for r in ('down', 'up')]
+                    ok = all(min(lo, hi) - 1 <= c <= max(lo, hi) + 1 for c, lo, hi in zip(g, *bounds))
+                else:
+                    ok = all(abs(c - w) <= 1 for c, w in zip(g, sdr8(each)))
+                if not ok:
+                    where = f'band {i}' if i < len(RAMP) else f'display part {i - len(RAMP)}'
+                    problems.append(f'{name}.{scene}: {where} is {g}')
+    return problems
+
+
 def build_checks(shots, sessions):
-    """session_checks and hdr_gates in each build's folder, each problem naming its build."""
+    """session_checks, hdr_gates and extension_gates in each build's folder, each problem naming its build."""
     return [f'{label}: {p}' for label in ('base', 'change')
-            for p in session_checks(shots / label, sessions) + hdr_gates(shots / label, sessions)]
+            for p in session_checks(shots / label, sessions) + hdr_gates(shots / label, sessions)
+            + extension_gates(shots / label, sessions)]
 
 
 def main():

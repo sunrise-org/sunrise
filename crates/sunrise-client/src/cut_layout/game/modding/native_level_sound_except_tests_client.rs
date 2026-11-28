@@ -283,13 +283,10 @@ fn entity_sounds_bound_sounds_particles_and_level_events_defer_inside_transactio
             crate::game::integrated_pair::with_integrated_pair(|pair| {
                 let at = [3.0, 64.0, 5.0];
                 let client = &mut *pair.client;
-                client.player = Some(
-                    sunrise_sim::motion::PlayerMotion::new(
-                        client.motion,
-                        sunrise_core::geometry::Vec3::new(at[0], at[1], at[2]),
-                    )
-                    .unwrap(),
-                );
+                client.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                    client.motion,
+                    sunrise_core::geometry::Vec3::new(at[0], at[1], at[2]),
+                ));
                 client
                     .test_audio_mut()
                     .set_listener(at, [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]);
@@ -317,8 +314,7 @@ fn entity_sounds_bound_sounds_particles_and_level_events_defer_inside_transactio
                     sunrise_sim::motion::PlayerMotion::new(
                         game.motion,
                         sunrise_core::geometry::Vec3::new(at[0], at[1], at[2]),
-                    )
-                    .unwrap(),
+                    ),
                 );
                 let mut portal_plays = |game: &mut sunrise_gameplay::game::ServerGame<'_>| {
                     fence(game);
@@ -360,7 +356,7 @@ fn entity_sounds_bound_sounds_particles_and_level_events_defer_inside_transactio
                     game.level_events.clear();
                     game.server.lan_events.clear();
                     game.server.lan_global_events.clear();
-                    game.server.lan_entity_events.clear();
+                    game.server.lan_queues.entity_events.clear();
                     game.server.pending_sounds.clear();
                 };
                 clear_queues(game);
@@ -407,7 +403,7 @@ fn entity_sounds_bound_sounds_particles_and_level_events_defer_inside_transactio
                     assert!(game.server.pending_particles.is_empty());
                     assert!(game.server.lan_events.is_empty());
                     assert!(game.server.lan_global_events.is_empty());
-                    assert!(game.server.lan_entity_events.is_empty());
+                    assert!(game.server.lan_queues.entity_events.is_empty());
                     assert_eq!(portal_plays(game), portal_before_abort);
                     assert!(decode_packets(&rx12).is_empty());
                     assert!(decode_packets(&rx13).is_empty());
@@ -418,7 +414,7 @@ fn entity_sounds_bound_sounds_particles_and_level_events_defer_inside_transactio
                 assert!(game.server.pending_particles.is_empty());
                 assert!(game.server.lan_events.is_empty());
                 assert!(game.server.lan_global_events.is_empty());
-                assert!(game.server.lan_entity_events.is_empty());
+                assert!(game.server.lan_queues.entity_events.is_empty());
                 assert_eq!(
                     portal_plays(game),
                     portal_before_abort,
@@ -501,7 +497,7 @@ fn entity_sounds_bound_sounds_particles_and_level_events_defer_inside_transactio
                     assert!(game.server.pending_particles.is_empty());
                     assert!(game.server.lan_events.is_empty());
                     assert!(game.server.lan_global_events.is_empty());
-                    assert!(game.server.lan_entity_events.is_empty());
+                    assert!(game.server.lan_queues.entity_events.is_empty());
                     assert_eq!(portal_plays(game), portal_before_commit);
                     assert!(decode_packets(&rx12).is_empty());
                     assert!(decode_packets(&rx13).is_empty());
@@ -512,7 +508,7 @@ fn entity_sounds_bound_sounds_particles_and_level_events_defer_inside_transactio
                 // Committed effects deliver directly without waiting for `lan_flush_effects`.
                 assert!(game.server.lan_events.is_empty());
                 assert!(game.server.lan_global_events.is_empty());
-                assert!(game.server.lan_entity_events.is_empty());
+                assert!(game.server.lan_queues.entity_events.is_empty());
 
                 assert_eq!(
                     portal_plays(game),
@@ -680,7 +676,7 @@ fn entity_sounds_bound_sounds_particles_and_level_events_defer_inside_transactio
                 assert_eq!(game.server.pending_particles.len(), 1);
                 assert_eq!(game.server.lan_events.len(), 1);
                 assert_eq!(game.server.lan_global_events.len(), 1);
-                assert_eq!(game.server.lan_entity_events, vec![(entity13_id, 35)]);
+                assert_eq!(game.server.lan_queues.entity_events, vec![(entity13_id, 35)]);
                 let direct13 = decode_packets(&rx13);
                 assert!(direct13.iter().any(|p| matches!(p, C::Sound(_))));
                 assert!(direct13.iter().any(|p| matches!(p, C::StopSound(_))));

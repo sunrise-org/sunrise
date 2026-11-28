@@ -699,6 +699,7 @@ impl mobs::part_goals::GoalHost for ServerGame<'_> {
     fn mob_portal_cooldown(&self, mob: &Mob) -> i32 {
         self.server
             .portals
+            .level
             .entities
             .get(&mob.id)
             .map_or(0, |p| p.cooldown)

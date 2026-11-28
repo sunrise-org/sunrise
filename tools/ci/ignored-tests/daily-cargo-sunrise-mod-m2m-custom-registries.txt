@@ -1,0 +1,3 @@
+# Two-separately-built-mods daily proof test for custom static registries (#5140).
+# Runs in book-quickstart.yml against the branch's own SDK (not in ignored-tests.yml).
+cargo-sunrise-mod two_separately_built_mods_share_custom_static_registry_and_tags test:m2m_custom_registries daily own-sdk

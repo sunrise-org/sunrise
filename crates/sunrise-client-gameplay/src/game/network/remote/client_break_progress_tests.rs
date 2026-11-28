@@ -77,8 +77,7 @@ fn with_client(name: &str, test: impl FnOnce(&mut ClientGame<'_>)) {
             let mut player = sunrise_sim::motion::PlayerMotion::new(
                 game.motion,
                 sunrise_core::geometry::Vec3::new(0.5, 64.0, 3.5),
-            )
-            .unwrap();
+            );
             player.ground.on_ground = true;
             game.player = Some(player);
             game.inventory[0] = Some(ItemStack::new("minecraft:diamond_shovel", 1));

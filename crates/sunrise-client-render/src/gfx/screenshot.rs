@@ -100,10 +100,10 @@ impl Renderer {
         let surface = self.surface.take();
         let hdr = self.hdr.take_if(|_| !layered);
         let offscreen = std::mem::replace(&mut self.offscreen, target);
-        let window_depth = std::mem::replace(&mut self.depth, depth);
+        let window_depth = self.swap_world_depth(depth);
         // The frame's own targets at `size` can run out of memory too.
         let drawn = self.draw_frame(frame, Some(GpuChecks::push(&self.device)), output, hooks);
-        self.depth = window_depth;
+        self.swap_world_depth(window_depth);
         self.offscreen = offscreen;
         match hdr {
             Some(hdr) => self.hdr = Some(hdr),

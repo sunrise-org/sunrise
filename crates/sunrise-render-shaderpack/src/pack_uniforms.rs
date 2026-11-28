@@ -471,9 +471,58 @@ pub const NAMES: &[&str] = &[
     "sunriseWaterPatch29",
     "sunriseWaterPatch30",
     "sunriseWaterPatch31",
+    // Sunrise's own, served only with `SUNRISE_HDR` (#5827): [`DISPLAY`].
+    "sunriseHdr",
+    "sunriseHeadroom",
+    "sunrisePaperWhite",
+    "sunrisePeak",
+    "sunriseBlackLevel",
     "isElytraFlying",
     "cloudHeight",
 ];
+
+/// Sunrise's display uniforms (#5827 step 3), from [`Display`]: a program reads them only in a
+/// pack Sunrise serves its HDR extension to (`SUNRISE_HDR`, [`index_in`]). Elsewhere a program
+/// that declares one gets no value for it, as before the extension, and a custom uniform of
+/// that name binds instead. Custom uniforms' expressions don't read them.
+pub const DISPLAY: [&str; 5] = [
+    "sunriseHdr",
+    "sunriseHeadroom",
+    "sunrisePaperWhite",
+    "sunrisePeak",
+    "sunriseBlackLevel",
+];
+
+/// The display the frame is shown on, as Sunrise's HDR output shows it (#5827 step 3): the
+/// values of [`DISPLAY`]. The renderer fills it each frame (`EffectiveOutput::display`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Display {
+    /// `sunriseHdr`: the frame is shown in HDR (the layered float frame, HDR output on).
+    pub hdr: bool,
+    /// `sunriseHeadroom`: the peak over paper white, at least 1.
+    pub headroom: f32,
+    /// `sunrisePaperWhite`, `sunrisePeak` and `sunriseBlackLevel`, in nits.
+    pub paper_white: f32,
+    pub peak: f32,
+    pub black_level: f32,
+}
+
+impl Display {
+    /// SDR, or a frame that isn't the layered one: paper white is the peak, at 80 nits.
+    pub const SDR: Self = Self {
+        hdr: false,
+        headroom: 1.0,
+        paper_white: 80.0,
+        peak: 80.0,
+        black_level: 0.0,
+    };
+}
+
+impl Default for Display {
+    fn default() -> Self {
+        Self::SDR
+    }
+}
 
 /// What programs that draw the game's geometry (gbuffers, shadow) read as `fogMode`,
 /// `fogShape` and `centerDepthSmooth`: no GLSL name can hold a dot, so no pack reads these
@@ -504,6 +553,8 @@ pub struct FrameUniforms {
     pub shadow: Shadow,
     /// The pack's smoothing half-lives in ticks (`sunrise_shaders::HALF_LIVES`).
     pub half_lives: [Option<f32>; 4],
+    /// This frame's display, for [`DISPLAY`] (`PackPost::run_frame` sets it).
+    pub display: Display,
 }
 
 impl Default for FrameUniforms {
@@ -522,6 +573,7 @@ impl Default for FrameUniforms {
             center_depth: None,
             shadow: Shadow::default(),
             half_lives: [None; 4],
+            display: Display::SDR,
         }
     }
 }
@@ -1036,7 +1088,7 @@ impl FrameUniforms {
                 "viewHeight" => Value::f(&[size[1] as f32]),
                 "aspectRatio" => Value::f(&[aspect]),
                 "near" => Value::f(&[0.05]),
-                // The chunk render distance, not the distant terrain's reach.
+                // The chunk render distance.
                 "far" => Value::f(&[frame.detail_distance]),
                 "rainStrength" => Value::f(&[inputs.rain]),
                 "wetness" => Value::f(&[self.wetness]),
@@ -1105,6 +1157,11 @@ impl FrameUniforms {
                 "bossBattle" => Value::i(&[inputs.boss_battle]),
                 // Iris 1.11.7 gave both the same value in every scene measured.
                 "playerMood" | "constantMood" => Value::f(&[inputs.view.mood]),
+                "sunriseHdr" => Value::i(&[i32::from(self.display.hdr)]),
+                "sunriseHeadroom" => Value::f(&[self.display.headroom]),
+                "sunrisePaperWhite" => Value::f(&[self.display.paper_white]),
+                "sunrisePeak" => Value::f(&[self.display.peak]),
+                "sunriseBlackLevel" => Value::f(&[self.display.black_level]),
                 // renderStage is NONE outside gbuffers draws.
                 _ => status_value(name, inputs).unwrap_or(Value::i(&[0])),
             }
@@ -1146,7 +1203,7 @@ impl FrameUniforms {
         self.values.truncate(NAMES.len());
         let values = &self.values;
         let builtin = |name: &str| {
-            let v = values.get(index(name)?)?;
+            let v = values.get(expression_index(name)?)?;
             let n = components(name);
             Some(match *v {
                 Value::F(f) => sunrise_shaders::Val::vector(&f.map(f64::from)[..n]),
@@ -1263,7 +1320,7 @@ fn components(name: &str) -> usize {
 /// What `name` gives custom uniforms before the first frame: zeros, at its size, so their
 /// shapes check out as on a frame (#9086).
 pub fn zero(name: &str) -> Option<sunrise_shaders::Val> {
-    index(name)?;
+    expression_index(name)?;
     Some(sunrise_shaders::Val::vector(&[0.0; 16][..components(name)]))
 }
 
@@ -1288,12 +1345,20 @@ const EXPRESSION_ONLY: [&str; 8] = [
     "is_wet",
 ];
 
+/// The position in [`NAMES`] of the value custom uniforms' expressions read as `name`: none for
+/// [`DISPLAY`].
+fn expression_index(name: &str) -> Option<usize> {
+    index(name).filter(|_| !DISPLAY.contains(&name))
+}
+
 /// The position in [`NAMES`] of the value a program reads as `name`, none for
-/// [`EXPRESSION_ONLY`]; `geometry`: the program draws the game's geometry (gbuffers, shadow),
-/// which reads its own fog mode and shape and no centre depth.
-pub fn index_in(name: &str, geometry: bool) -> Option<usize> {
+/// [`EXPRESSION_ONLY`], nor for [`DISPLAY`] unless `display` (the pack is served Sunrise's HDR
+/// extension); `geometry`: the program draws the game's geometry (gbuffers, shadow), which reads
+/// its own fog mode and shape and no centre depth.
+pub fn index_in(name: &str, geometry: bool, display: bool) -> Option<usize> {
     match name {
         n if EXPRESSION_ONLY.contains(&n) => None,
+        n if !display && DISPLAY.contains(&n) => None,
         "fogMode" if geometry => index(GBUFFERS_FOG_MODE),
         "fogShape" if geometry => index(GBUFFERS_FOG_SHAPE),
         "centerDepthSmooth" if geometry => index(GBUFFERS_CENTER_DEPTH),
@@ -2387,7 +2452,7 @@ in vec3 result; out vec4 color; void main() { color = vec4(result, 1.0); }",
     fn programs_that_draw_geometry_read_their_own_fog_and_centre_depth() {
         let mut u = FrameUniforms::default();
         u.update(&test_frame(), &PackInputs::default(), [800, 450]);
-        let at = |name, geometry| index_in(name, geometry).unwrap();
+        let at = |name, geometry| index_in(name, geometry, false).unwrap();
         assert_eq!(int(&u, at("fogMode", true)), 9729);
         assert_eq!(int(&u, at("fogShape", true)), 1);
         assert_eq!(int(&u, at("fogMode", false)), 0);
@@ -2597,6 +2662,103 @@ in vec3 result; out vec4 color; void main() { color = vec4(result, 1.0); }",
         }
     }
 
+    /// Sunrise's display uniforms (#5827 step 3) bind only in a pack served Sunrise's HDR
+    /// extension; nothing else a program reads changes with it.
+    #[test]
+    fn display_uniforms_bind_only_where_served() {
+        for geometry in [false, true] {
+            for name in DISPLAY {
+                assert!(index(name).is_some(), "{name} is one of NAMES");
+                assert_eq!(index_in(name, geometry, false), None, "{name} not served");
+                assert_eq!(index_in(name, geometry, true), index(name), "{name} served");
+            }
+            for name in NAMES.iter().filter(|n| !DISPLAY.contains(n)) {
+                assert_eq!(
+                    index_in(name, geometry, true),
+                    index_in(name, geometry, false),
+                    "{name}"
+                );
+            }
+        }
+    }
+
+    /// Each display uniform holds its own field of the frame's `Display`, as the type a program
+    /// declares it with: `sunriseHdr` an int, the others floats.
+    #[test]
+    fn display_uniforms_hold_the_frames_display() {
+        let mut u = FrameUniforms::default();
+        let f = test_frame();
+        let read = |u: &FrameUniforms| {
+            let at = |name| index(name).unwrap();
+            (
+                int(u, at("sunriseHdr")),
+                [
+                    float(u, "sunriseHeadroom")[0],
+                    float(u, "sunrisePaperWhite")[0],
+                    float(u, "sunrisePeak")[0],
+                    float(u, "sunriseBlackLevel")[0],
+                ],
+            )
+        };
+        u.update(&f, &PackInputs::default(), [800, 450]);
+        assert_eq!(read(&u), (0, [1.0, 80.0, 80.0, 0.0]), "SDR until set");
+        u.display = Display {
+            hdr: true,
+            headroom: 4.5,
+            paper_white: 250.0,
+            peak: 1125.0,
+            black_level: 0.25,
+        };
+        u.update(&f, &PackInputs::default(), [800, 450]);
+        assert_eq!(read(&u), (1, [4.5, 250.0, 1125.0, 0.25]));
+        u.display = Display::SDR;
+        u.update(&f, &PackInputs::default(), [800, 450]);
+        assert_eq!(read(&u), (0, [1.0, 80.0, 80.0, 0.0]), "follows each frame");
+        let value = |name| u.values[index(name).unwrap()];
+        for (name, ty, kept) in [
+            ("sunriseHdr", "int", true),
+            ("sunriseHdr", "bool", true),
+            ("sunriseHdr", "float", false),
+            ("sunriseHeadroom", "float", true),
+            ("sunriseHeadroom", "int", false),
+            ("sunrisePeak", "vec2", false),
+        ] {
+            assert_eq!(value(name).read_as(name, ty), kept, "{name} as {ty}");
+        }
+    }
+
+    /// Custom uniforms' expressions read no display uniform, before the first frame or on one:
+    /// one that names it finds no such name, as before the extension.
+    #[test]
+    fn custom_expressions_read_no_display_uniform() {
+        for name in DISPLAY {
+            assert!(zero(name).is_none(), "{name}");
+            let properties = sunrise_shaders::Properties::parse(
+                &format!("uniform.float.a = {name}\nuniform.float.b = frameTime\n"),
+                &sunrise_shaders::Macros::standard(),
+            );
+            let mut custom = sunrise_shaders::Custom::parse(&properties);
+            custom.eval(0.0, &zero);
+            assert_eq!(custom.notes.len(), 1, "{name}: {:?}", custom.notes);
+            let mut u = FrameUniforms {
+                display: Display {
+                    hdr: true,
+                    headroom: 4.5,
+                    paper_white: 250.0,
+                    peak: 1125.0,
+                    black_level: 0.25,
+                },
+                ..Default::default()
+            };
+            u.update(&test_frame(), &PackInputs::default(), [800, 450]);
+            u.eval_custom(&mut custom);
+            assert!(
+                matches!(u.values[NAMES.len()], Value::F(v) if v[0] == 0.0),
+                "{name} reads nothing"
+            );
+        }
+    }
+
     /// Spec 3.4's player booleans: custom uniforms know all fourteen, before the first frame
     /// and on a frame, and each of the eight only they read follows its own field.
     #[test]
@@ -2704,8 +2866,8 @@ in vec3 result; out vec4 color; void main() { color = vec4(result, 1.0); }",
             "is_wet",
         ] {
             assert!(index(name).is_some(), "{name} reaches custom uniforms");
-            assert_eq!(index_in(name, false), None, "{name}");
-            assert_eq!(index_in(name, true), None, "{name}");
+            assert_eq!(index_in(name, false, false), None, "{name}");
+            assert_eq!(index_in(name, true, false), None, "{name}");
         }
         for name in [
             "is_burning",
@@ -2715,7 +2877,7 @@ in vec3 result; out vec4 color; void main() { color = vec4(result, 1.0); }",
             "is_sneaking",
             "is_sprinting",
         ] {
-            assert_eq!(index_in(name, false), index(name), "{name}");
+            assert_eq!(index_in(name, false, false), index(name), "{name}");
             assert!(index(name).is_some(), "{name}");
         }
     }

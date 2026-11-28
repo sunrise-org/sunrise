@@ -85,10 +85,10 @@ pub(crate) mod tests {
         use sunrise_core::geometry::Vec3;
         use sunrise_protocol::packets::play::{Clientbound as C, EntityEvent};
         crate::game::native_entity_refs::tests::with_client_game(|game| {
-            game.player = Some(
-                sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5))
-                    .unwrap(),
-            );
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                Vec3::new(2.5, 200.0, 2.5),
+            ));
             let (quiet_at, loud_at) = ([6.5, 201.5, 10.5], [12.5, 201.5, 10.5]);
             let mut quiet = sunrise_gameplay_common::game::fireworks::Rocket::remote(
                 101,

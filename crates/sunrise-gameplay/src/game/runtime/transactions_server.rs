@@ -744,7 +744,7 @@ impl crate::game::ServerGame<'_> {
             if let Some(modifiers) = modifiers {
                 level.effect_modifiers.push(((dim, id), modifiers));
                 super::living_attributes::modifier_invalidation_undo(
-                    &self.common.motion.attributes,
+                    self.common.motion.attributes(),
                     mob,
                 )
             } else {
@@ -1348,7 +1348,7 @@ impl crate::game::ServerGame<'_> {
                 let common = &mut game.common;
                 if let Some(mob) = common.mobs.iter_mut().find(|m| m.id == id && !m.removed) {
                     super::living_attributes::undo_mob_modifiers(
-                        &common.motion.attributes,
+                        common.motion.attributes(),
                         mob,
                         changes,
                     );

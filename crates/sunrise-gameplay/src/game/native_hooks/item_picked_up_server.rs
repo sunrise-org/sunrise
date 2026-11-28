@@ -144,6 +144,71 @@ impl crate::game::ServerGame<'_> {
         );
     }
 
+    /// `ItemEntity.playerTouch` now, for the player in place (the host's own, or the guest whose
+    /// turn it is), on the resident item `id`: the pickup the pass runs, with its hooks, its
+    /// statistic and its take animation. The count the inventory took.
+    pub(in crate::game) fn native_touch_item_now(&mut self, id: u32) -> u32 {
+        let Some(before) = self
+            .common
+            .dropped
+            .iter()
+            .find(|d| d.id == id)
+            .map(|d| d.stack.count)
+        else {
+            return 0;
+        };
+        if let Some(conn) = self.server.lan_acting {
+            let Some(host) = self.server.lan.as_ref() else {
+                return 0;
+            };
+            let Some(guest) = host
+                .hub
+                .guests
+                .connection_index(conn)
+                .map(|gi| &host.hub.guests[gi])
+            else {
+                return 0;
+            };
+            let (collector, position, uuid) = (
+                guest.entity_id,
+                guest.position,
+                sunrise_sim::lan::playerdata::uuid_ints(guest.uuid),
+            );
+            let mut taken = Vec::new();
+            self.native_guest_pickup(conn, id, uuid, &mut taken);
+            if let Some(host) = self.server.lan.as_ref() {
+                for &(item, count) in &taken {
+                    host.hub
+                        .take_item(item as i32, collector, count as i32, position);
+                }
+            }
+            return taken.iter().map(|&(_, count)| count).sum();
+        }
+        if self.common.player.is_none() {
+            return 0;
+        }
+        let own = self.common.level.ensure_player_uuid();
+        let mut items = self.common.dropped.lift();
+        let found = (0..items.len()).find(|&i| items[i].id == id);
+        if let Some(mut index) = found {
+            self.native_touch_item_entity(
+                PickupSlot::Lifted {
+                    items: &mut items,
+                    index: &mut index,
+                },
+                own,
+            );
+        }
+        self.common.put_back_dropped(items);
+        let after = self
+            .common
+            .dropped
+            .iter()
+            .find(|d| d.id == id)
+            .map_or(0, |d| d.stack.count);
+        before.saturating_sub(after)
+    }
+
     /// Unified `ItemEntity.playerTouch` sequence shared by host-player and guest
     /// pickups (matching NeoForge `ItemEntityPickupEvent.Pre` and `Post`).
     fn native_touch_item_entity(&mut self, mut slot: PickupSlot<'_>, player: [i32; 4]) {
@@ -195,7 +260,8 @@ impl crate::game::ServerGame<'_> {
                     self.lend_lifted_item(items, **index, |game| game.native_pickup_answer(id))
                 }
                 PickupSlot::Resident { conn, .. } => {
-                    let Some(answer) = self.as_guest(*conn, |game| game.native_pickup_answer(id))
+                    let Some(answer) =
+                        self.as_guest_here(*conn, |game| game.native_pickup_answer(id))
                     else {
                         return;
                     };
@@ -242,7 +308,8 @@ impl crate::game::ServerGame<'_> {
         let rest = match &slot {
             PickupSlot::Lifted { .. } => self.native_pickup_insert(&captured),
             PickupSlot::Resident { conn, .. } => {
-                let Some(rest) = self.as_guest(*conn, |game| game.native_pickup_insert(&captured))
+                let Some(rest) =
+                    self.as_guest_here(*conn, |game| game.native_pickup_insert(&captured))
                 else {
                     return;
                 };
@@ -282,9 +349,12 @@ impl crate::game::ServerGame<'_> {
                     })
                 }
                 PickupSlot::Resident { conn, .. } => {
+                    // In place within the guest's own turn (`touch_item`), as the Pre notice and
+                    // the insert above. A refused turn heard nothing: what `Inventory.add` left
+                    // stays the remainder, never "all of it fit".
                     let told = self
-                        .as_guest(*conn, |game| game.native_pickup_post(id, &captured, rest))
-                        .unwrap_or(None);
+                        .as_guest_here(*conn, |game| game.native_pickup_post(id, &captured, rest))
+                        .unwrap_or_else(|| rest_before.clone());
                     let present = self.common.dropped.iter().any(|d| d.id == id);
                     let removed =
                         !present || self.common.persist.removals.contains(&Target::Item(id));
@@ -386,7 +456,7 @@ impl crate::game::ServerGame<'_> {
                 }
             }
             PickupSlot::Resident { conn, .. } => {
-                let _ = self.as_guest(*conn, |game| {
+                let _ = self.as_guest_here(*conn, |game| {
                     game.award_stat("picked_up", kind, count as i32);
                     if let Some(thrower) = thrower {
                         game.trigger_thrown_picked_up_by_player(picked, thrower);

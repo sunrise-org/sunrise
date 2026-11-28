@@ -29,6 +29,7 @@ import java.util.UUID;
 import net.minecraft.client.Camera;
 import net.minecraft.client.CameraType;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.OptionInstance;
 import net.minecraft.client.Options;
 import net.minecraft.client.gui.Gui;
 import net.minecraft.client.gui.Hud;
@@ -104,6 +105,8 @@ import net.minecraft.network.protocol.game.ClientboundTrackedWaypointPacket;
 import net.minecraft.network.protocol.game.CommonPlayerSpawnInfo;
 import net.minecraft.network.protocol.game.GameProtocols;
 import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
+import net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket;
+import net.minecraft.network.protocol.game.ServerboundPlayerInputPacket;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
 import net.minecraft.resources.Identifier;
@@ -117,6 +120,7 @@ import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.entity.Interaction;
 import net.minecraft.world.entity.decoration.painting.PaintingVariant;
 import net.minecraft.world.entity.monster.Creeper;
+import net.minecraft.world.entity.player.Input;
 import net.minecraft.world.entity.monster.spider.Spider;
 import net.minecraft.world.entity.projectile.FishingHook;
 import net.minecraft.world.flag.FeatureFlags;
@@ -132,6 +136,7 @@ import net.minecraft.world.phys.Vec3;
  *   1. bundle.json: PacketBundlePacker, BundlerInfo, PacketProcessor, ClientPacketListener.handleBundlePacket
  *   2. post_effects.json: ConfigurationProtocols/GameProtocols codecs, ClientConfigurationPacketListenerImpl, ClientPacketListener login/respawn/post_effects
  *   3. entity_data.json: EntityDataSerializers, ClientboundSetEntityDataPacket.STREAM_CODEC, PacketDecoder + Connection.exceptionCaught
+ *   4. sent_input.json: LocalPlayer.sendChanges around ClientPacketListener handleRespawn/handleLogin (MultiPlayerGameMode.createPlayer)
  */
 public final class VanillaNetworkParityOracle {
     private static final HexFormat HEX = HexFormat.of();
@@ -203,6 +208,10 @@ public final class VanillaNetworkParityOracle {
                 sent.add("keep_alive:" + k.getId());
             } else if (packet instanceof ServerboundMovePlayerPacket.Rot r) {
                 sent.add("move_player_rot:" + f32Bits(r.getYRot(0f)) + ":" + f32Bits(r.getXRot(0f)));
+            } else if (packet instanceof ServerboundPlayerInputPacket p) {
+                sent.add("player_input:" + payload(ServerboundPlayerInputPacket.STREAM_CODEC, p));
+            } else if (packet instanceof ServerboundPlayerCommandPacket p) {
+                sent.add("player_command:" + payload(ServerboundPlayerCommandPacket.STREAM_CODEC, p));
             } else {
                 sent.add(packet.type().id().toString());
             }
@@ -476,6 +485,12 @@ public final class VanillaNetworkParityOracle {
         byte[] bytes = new byte[buf.readableBytes()];
         buf.getBytes(buf.readerIndex(), bytes);
         return HEX.formatHex(bytes);
+    }
+
+    static <T> String payload(StreamCodec<FriendlyByteBuf, T> codec, T packet) {
+        FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
+        codec.encode(buf, packet);
+        return toHex(buf);
     }
 
     static int queuedCount(PacketProcessor processor) throws Exception {
@@ -1170,6 +1185,84 @@ public final class VanillaNetworkParityOracle {
         return root;
     }
 
+    /** The player input and player command packets one LocalPlayer.sendChanges sends, in order, as payload hex. */
+    static JsonArray sendChanges(LocalPlayer player, Input keys, boolean sprint, RecordingConnection conn) {
+        player.input.keyPresses = keys;
+        player.setSprinting(sprint);
+        conn.sent.clear();
+        player.sendChanges();
+        JsonArray out = new JsonArray();
+        for (String s : conn.sent) {
+            if (s.startsWith("player_input:") || s.startsWith("player_command:")) out.add(s);
+        }
+        return out;
+    }
+
+    /**
+     * Each way the client gets its next LocalPlayer, from a player that last sent sneak and a sprint: a death's
+     * respawn (createPlayer without KEEP_ENTITY_DATA), a dimension change (KEEP_ENTITY_DATA: the old player's
+     * last sent input and sprint), a login after clearClientLevel (a new player) and a login without it (the
+     * same player). After each, the next player holds or releases sneak and sprints or not.
+     */
+    static JsonObject recordSentInput(File gameDir) throws Exception {
+        JsonObject root = new JsonObject();
+        root.addProperty("game_version", "26.3");
+        Holder<net.minecraft.world.level.dimension.DimensionType> overworldType =
+            ParityData.access.lookupOrThrow(Registries.DIMENSION_TYPE).getOrThrow(BuiltinDimensionTypes.OVERWORLD);
+        Holder<net.minecraft.world.level.dimension.DimensionType> netherType =
+            ParityData.access.lookupOrThrow(Registries.DIMENSION_TYPE).getOrThrow(BuiltinDimensionTypes.NETHER);
+        var overworldSpawn = new CommonPlayerSpawnInfo(
+            overworldType, Level.OVERWORLD, 1L, GameType.SURVIVAL, Optional.empty(), false, false, Optional.empty(), 0, 63
+        );
+        var netherSpawn = new CommonPlayerSpawnInfo(
+            netherType, Level.NETHER, 1L, GameType.SURVIVAL, Optional.empty(), false, false, Optional.empty(), 0, 32
+        );
+        var loginPacket = new ClientboundLoginPacket(
+            7, false, Set.of(Level.OVERWORLD, Level.NETHER), 20, 8, 8, false, true, false, overworldSpawn, false, false
+        );
+
+        StubMinecraft mc = makeMinecraft(gameDir);
+        put(mc.options, Options.class, "autoJump", OptionInstance.createBoolean("test", false));
+        RecordingConnection conn = new RecordingConnection();
+        ClientPacketListener listener = makePlayListener(mc, conn, null);
+        // The level is ready (startWaitingForNewLevel's notifyPlayerLoaded) before each sendChanges.
+        Field clientLoaded = findField(ClientPacketListener.class, "clientLoaded");
+        listener.handleLogin(loginPacket);
+
+        Input sneak = new Input(false, false, false, false, false, true, false);
+        JsonArray steps = new JsonArray();
+        for (String transition : List.of("death_respawn", "dimension_change", "reconfigure_then_login", "login_without_reconfigure")) {
+            for (Input keys : List.of(sneak, Input.EMPTY)) {
+                for (boolean sprint : new boolean[]{true, false}) {
+                    JsonObject step = new JsonObject();
+                    step.addProperty("transition", transition);
+                    step.addProperty("shift", keys.shift());
+                    step.addProperty("sprint", sprint);
+                    clientLoaded.setBoolean(listener, true);
+                    step.add("before", sendChanges(mc.player, sneak, true, conn));
+                    boolean inNether = mc.player.level().dimension() == Level.NETHER;
+                    switch (transition) {
+                        case "death_respawn" ->
+                            listener.handleRespawn(new ClientboundRespawnPacket(inNether ? netherSpawn : overworldSpawn, (byte) 0));
+                        case "dimension_change" ->
+                            listener.handleRespawn(new ClientboundRespawnPacket(inNether ? overworldSpawn : netherSpawn, (byte) 3));
+                        case "reconfigure_then_login" -> {
+                            // handleConfigurationStart's clearClientLevel drops the player.
+                            mc.player = null;
+                            listener.handleLogin(loginPacket);
+                        }
+                        default -> listener.handleLogin(loginPacket);
+                    }
+                    clientLoaded.setBoolean(listener, true);
+                    step.add("after", sendChanges(mc.player, keys, sprint, conn));
+                    steps.add(step);
+                }
+            }
+        }
+        root.add("steps", steps);
+        return root;
+    }
+
     static JsonObject recordEntityData(ProtocolInfo<ClientGamePacketListener> play, File gameDir) throws Exception {
         JsonObject root = new JsonObject();
         root.addProperty("game_version", "26.3");
@@ -1675,6 +1768,7 @@ public final class VanillaNetworkParityOracle {
         Files.writeString(outDir.resolve("bundle.json"), gson.toJson(recordBundles(play, gameDir)) + "\n");
         Files.writeString(outDir.resolve("post_effects.json"), gson.toJson(recordPostEffects(play, gameDir)) + "\n");
         Files.writeString(outDir.resolve("entity_data.json"), gson.toJson(recordEntityData(play, gameDir)) + "\n");
+        Files.writeString(outDir.resolve("sent_input.json"), gson.toJson(recordSentInput(gameDir)) + "\n");
         System.out.println("NETWORK_PARITY_WITNESS_OK " + outDir);
     }
 }

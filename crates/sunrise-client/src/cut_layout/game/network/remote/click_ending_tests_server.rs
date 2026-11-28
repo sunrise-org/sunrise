@@ -21,7 +21,7 @@ fn an_end_crystal_click_on_a_block_ends_there() {
         peer.set_read_timeout(Some(std::time::Duration::from_millis(50)))
             .unwrap();
         game.set_local_mode(sunrise_command::args::GameMode::Survival);
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)));
         game.world
             .chunks
             .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
@@ -131,7 +131,7 @@ fn flint_and_steel_use_on_ends_the_click() {
     let (client, _server) = sunrise_protocol::connection::Pipe::pair();
     game.connect_local(client, "FlintTest").unwrap();
     game.client.remote.as_mut().unwrap().entity_id = 7;
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)));
     game.inventory[0] = Some(ItemStack::new("minecraft:flint_and_steel", 1));
     game.offhand = Some(ItemStack::new("minecraft:stick", 1));
     game.selected = 0;

@@ -23,7 +23,7 @@ mod mod_parrot_tests {
         sunrise_gameplay::game::native_entity_refs::tests::with_game(|game| {
             let owner = [1, 2, 3, 4];
             game.level.player_uuid = Some(owner);
-            let mut player = PlayerMotion::new(game.motion, Vec3::new(0.5, 100.0, 0.5)).unwrap();
+            let mut player = PlayerMotion::new(game.motion, Vec3::new(0.5, 100.0, 0.5));
             player.ground.on_ground = true;
             game.player = Some(player);
             let parrot = game

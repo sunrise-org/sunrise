@@ -161,8 +161,7 @@ impl Session {
             session.configuring.clone(),
             session.payload_events.clone(),
         );
-        let (far, recorder, cookies, pings) = (
-            session.far.clone(),
+        let (recorder, cookies, pings) = (
             session.recorder.clone(),
             session.cookies.clone(),
             session.pings.clone(),
@@ -176,12 +175,12 @@ impl Session {
                 &Arc::new(Language::new()),
                 &send,
                 &cookies,
-                &far,
                 &data,
                 &recorder,
                 &crate::raw_payloads::Transport::empty(),
                 &pings,
                 &Arc::default(),
+                &crate::custom_registry_net::LocalRegistries::default(),
             );
         }));
         (session, peer)

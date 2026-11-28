@@ -42,9 +42,10 @@ pub(crate) mod attach_tests {
         )
         .unwrap();
         game.creative = false;
-        game.player = Some(
-            sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap(),
-        );
+        game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+            game.motion,
+            Vec3::new(0.5, 64.0, 0.5),
+        ));
         game
     }
 

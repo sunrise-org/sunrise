@@ -1,7 +1,6 @@
 //! A client mod's PCM streams: the mixer's worker pulls from a native [`AudioStream`] on its
 //! own pool, never vanilla's streaming slots.
-use super::types::SoundSource;
-use crate::{ClientHost, EntityRef};
+use crate::{ClientHost, EntityRef, SoundSource};
 use std::sync::Arc;
 
 /// The most streams one mod holds open at once ([`AudioRefusal::ModStreamLimit`]).

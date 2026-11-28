@@ -3,6 +3,7 @@
 //! entities for. A behaviour returns what is left in the slot and the level
 //! event it plays (`DefaultDispenseItemBehavior.dispense` then plays that
 //! event and the smoke animation, event 2000).
+#[allow(unused_imports)]
 use super::{Dim, item_abilities::ability};
 #[allow(unused_imports)]
 use crate::game::server_side::lan_entities::advance_entity_id_counter;
@@ -1369,13 +1370,9 @@ impl crate::game::ServerGame<'_> {
                 .bool_at(sunrise_game_data::gamerules::vanilla::TNT_EXPLODES)
                 && sulfur_cube::prime(&mut self.common.mobs[i], false)
             {
-                let m = &mut self.common.mobs[i];
-                let (at, id) = (m.position, m.id);
-                let mut events = Vec::new();
-                m.voice("entity.tnt.primed", &mut events);
+                // primeTime's sound and PRIME_FUSE, which the priming queued.
+                let events = std::mem::take(&mut self.common.mobs[i].outbox);
                 self.handle_mob_events(events)?;
-                let ctx = self.who_context(Some(sunrise_sim::mobs::Who::Mob(id)), None);
-                self.post_game_event("minecraft:prime_fuse", [at.x, at.y, at.z], ctx);
             }
             return Ok((self.hurt_and_break(stack, 1), CLICK));
         }

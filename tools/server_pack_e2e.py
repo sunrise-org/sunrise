@@ -201,15 +201,16 @@ def read_setting(path):
 # The game.
 
 class Game:
-    def __init__(self, bins, resources, work):
+    def __init__(self, bins, resources, work, *, mode='--offscreen', env=None, log=None):
         self.home = work / 'home'
         for d in ('home', 'launcher', 'data', 'config'):
             (work / d).mkdir(parents=True)
         self.env = lab.game_env(SUNRISE_HOME=self.home, SUNRISE_LAUNCHER_HOME=work / 'launcher',
-                                XDG_DATA_HOME=work / 'data', XDG_CONFIG_HOME=work / 'config')
-        self.base = [str(bins / 'sunrise-ctl'), '--socket', str(work / 'c.sock')]
-        self.log = work / 'c.log'
-        reply = self('launch', '--game', bins / 'sunrise-client', '--offscreen', '--resources', resources)
+                                XDG_DATA_HOME=work / 'data', XDG_CONFIG_HOME=work / 'config',
+                                **(env or {}))
+        self.base = [str(lab.binary(bins, 'sunrise-ctl')), '--socket', str(work / 'c.sock')]
+        self.log = (work / 'c.log') if log is None else Path(log)
+        reply = self('launch', '--game', lab.binary(bins, 'sunrise-client'), mode, '--resources', resources)
         self.pid = reply.get('pid')
 
     def __call__(self, *words, ok=True, timeout=300):

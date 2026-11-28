@@ -388,7 +388,7 @@ impl crate::game::ClientGame<'_> {
             ],
             hit_borrows: sunrise_gameplay_common::game::native_surface::HitBorrows {
                 living_types: self.common.res.living_type_keys(),
-                attributes: &self.common.motion.attributes,
+                attributes: self.common.motion.attributes(),
                 player_effects: &self.common.potions.effects,
                 player_uuid: None,
                 player_attachments: &self.common.player_state.attachments,

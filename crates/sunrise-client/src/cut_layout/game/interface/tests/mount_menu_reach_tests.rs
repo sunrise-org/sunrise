@@ -70,8 +70,7 @@ fn game_with_open_donkey<'a>(
         crate::game::profile_resolver,
     )
     .unwrap();
-    game.player =
-        Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 64.0, 8.5)).expect("a player"));
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 64.0, 8.5)));
     let kind = game
         .res
         .mob_types()

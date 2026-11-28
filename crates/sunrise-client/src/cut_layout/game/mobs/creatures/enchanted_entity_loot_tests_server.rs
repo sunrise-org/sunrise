@@ -281,7 +281,7 @@ fn the_hosts_kill_hands_the_host_as_the_attacker() {
     mod_platform::testing::with_mods(mods, || {
         with_game(|game| {
             game.load_server_loot();
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             game.player.as_mut().unwrap().entity_id = 9000;
             // The host's own turn: the uuid is acting, no guest connection.
             sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 9000, 99);

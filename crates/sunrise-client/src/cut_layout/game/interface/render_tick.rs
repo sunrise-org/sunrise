@@ -21,13 +21,10 @@ pub(crate) mod tests {
             "cut_layout::game::client_side::render_tick::tests::equipment_camera_overlays_emit_in_vanilla_slot_order",
             || {
                 with_client_game(|game| {
-                    game.player = Some(
-                        sunrise_sim::motion::PlayerMotion::new(
-                            game.motion,
-                            Vec3::new(0.5, 64.0, 0.5),
-                        )
-                        .unwrap(),
-                    );
+                    game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                        game.motion,
+                        Vec3::new(0.5, 64.0, 0.5),
+                    ));
                     game.client.camera_type = CameraType::FirstPerson;
                     game.client.chat_ui.hide_gui = false;
                     game.client.gui.atlas.sprites.clear();

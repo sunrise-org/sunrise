@@ -1828,7 +1828,10 @@ fn quick_craft(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::lan::{Joined, PlayerSender};
+    use crate::{
+        lan::{Joined, PlayerSender},
+        prepared_test_root,
+    };
     use sunrise_core::nbt::Tag;
 
     /// The test enchantments: Curse of Binding, and a data pack's `test:clinging` with its
@@ -1973,19 +1976,15 @@ pub(crate) mod tests {
         )
     }
 
-    /// The prepared resources' items, or None (the test is skipped) without them.
-    fn rules() -> Option<ItemRules> {
-        let root = crate::menu::tests::resource_root();
-        if !root.join("items.json").exists() {
-            eprintln!("skipping resource-backed menu check: {}", root.display());
-            return None;
-        }
-        let registry = sunrise_world::level::data::load_registry(&root).unwrap();
-        let facts = crate::blocks::BlockFacts::load(&root, &registry).unwrap();
+    /// The prepared item catalog, without loading block placement state or recipes.
+    fn prepared_item_rules() -> ItemRules {
+        let root = prepared_test_root::prepared_root(&[&[
+            "items.json",
+            "registries.json",
+            "data/minecraft/tags",
+        ]]);
         let defaults = sunrise_world::item_defaults::read(&root).unwrap();
-        Some(ItemRules(
-            Items::load(&root, &registry, &facts, &PackOverlay::NONE, &defaults).unwrap(),
-        ))
+        ItemRules(Items::catalog(&root, &PackOverlay::NONE, &defaults).unwrap())
     }
 
     fn contents(stack: &Option<ItemStack>) -> Vec<(String, u32)> {
@@ -2001,7 +2000,7 @@ pub(crate) mod tests {
     #[test]
     fn hosted_slot_view_respects_limits_and_transfers() {
         use crate::menu::SlotView;
-        let Some(rules) = rules() else { return };
+        let rules = ItemRules(Items::for_tests(Default::default()));
         let mut guest = guest();
         let mut chest = vec![Some(ItemStack::new("minecraft:stone", 60))];
         let mut view = View {
@@ -2031,7 +2030,7 @@ pub(crate) mod tests {
 
     #[test]
     fn invalid_pickup_button_leaves_chest_and_carried_unchanged() {
-        let Some(rules) = rules() else { return };
+        let rules = ItemRules(Items::for_tests(Default::default()));
         let mut g = guest();
         let mut chest = vec![Some(ItemStack::new("minecraft:stone", 10))];
         g.carried = Some(ItemStack::new("minecraft:bundle", 1));
@@ -2111,10 +2110,9 @@ pub(crate) mod tests {
     /// bundle takes a slot's stack and drops its first one into an empty
     /// slot; a stack clicked onto a bundle goes in, as far as it fits.
     #[test]
+    #[ignore = "daily"]
     fn guest_chest_clicks_fill_and_empty_bundles() {
-        let Some(rules) = rules() else {
-            return;
-        };
+        let rules = prepared_item_rules();
         let mut g = guest();
         let mut chest = vec![
             Some(ItemStack::new("minecraft:stone", 48)),
@@ -2169,6 +2167,7 @@ pub(crate) mod tests {
     /// inserts or removes anything, so a slot whose rules refuse the pickup
     /// keeps its bundle's contents.
     #[test]
+    #[ignore = "daily"]
     fn guest_bundle_keeps_its_contents_in_a_refusing_slot() {
         /// The prepared catalog, with a menu that refuses one slot.
         struct Refusing {
@@ -2188,9 +2187,7 @@ pub(crate) mod tests {
                 slot != 1
             }
         }
-        let Some(ItemRules(items)) = rules() else {
-            return;
-        };
+        let ItemRules(items) = prepared_item_rules();
         let rules = Refusing { items };
         let mut g = guest();
         let mut bundle = ItemStack::new("minecraft:bundle", 1);
@@ -2225,10 +2222,9 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn carried_bundle_uses_safe_take_for_refused_and_allowed_slots() {
-        let Some(ItemRules(items)) = rules() else {
-            return;
-        };
+        let ItemRules(items) = prepared_item_rules();
         let mut guest = guest();
         let mut chest = vec![Some(ItemStack::new("minecraft:stone", 8))];
         let mut view = View {
@@ -2560,24 +2556,22 @@ pub(crate) mod tests {
         assert_eq!(slots.get(&world, &g, 7), None);
         // A shift-click from the hotbar (menu slot 5 + 27) lands in the
         // container's first empty slot, not past its count.
-        if let Some(rules) = rules() {
-            g.inventory[0] = Some(ItemStack::new("minecraft:dirt", 1));
-            let mut drag = None;
-            let mut view = View {
-                guest: &mut g,
-                container: Some(&mut read),
-                shulker: false,
-                container_limits: Vec::new(),
+        let rules = ItemRules(Items::for_tests(Default::default()));
+        g.inventory[0] = Some(ItemStack::new("minecraft:dirt", 1));
+        let mut drag = None;
+        let mut view = View {
+            guest: &mut g,
+            container: Some(&mut read),
+            shulker: false,
+            container_limits: Vec::new(),
 
-                loop_context: &crate::test_resources::loop_context(
-                    sunrise_world::native_load_context::LoopSide::Server,
-                ),
-            };
-            click(&mut view, &mut drag, 5 + 27, 0, input::QUICK_MOVE, &rules);
-            assert_eq!(view.get(0).map(|s| s.item), Some("minecraft:dirt".into()));
-        } else {
-            read[0] = Some(ItemStack::new("minecraft:dirt", 1));
-        }
+            loop_context: &crate::test_resources::loop_context(
+                sunrise_world::native_load_context::LoopSide::Server,
+            ),
+        };
+        click(&mut view, &mut drag, 5 + 27, 0, input::QUICK_MOVE, &rules);
+        assert_eq!(view.get(0).map(|s| s.item), Some("minecraft:dirt".into()));
+        assert!(g.inventory[0].is_none());
         slots.write(&mut world, &mut g, read);
         let Some(BlockEntity::Mod(m)) = world.block_entities.get(&k) else {
             panic!("not a mod's");
@@ -2593,7 +2587,7 @@ pub(crate) mod tests {
 
     #[test]
     fn quick_craft_uses_original_stack_and_clamps_existing_count() {
-        let Some(rules) = rules() else { return };
+        let rules = ItemRules(Items::for_tests(Default::default()));
         let mut guest = guest();
         let mut chest = vec![None; 2];
         let mut view = View {
@@ -2616,9 +2610,10 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn guest_drag_matches_menu_for_vanilla_stack_limits() {
-        let Some(rules) = rules() else { return };
         crate::menu::tests::with_menu(crate::menu::Kind::Chest(1), |env, menu| {
+            let rules = ItemRules(env.items.clone());
             for (id, existing, carried, expected) in [
                 ("minecraft:stone", 63, 8, (64, 4, 3)),
                 ("minecraft:ender_pearl", 15, 8, (16, 4, 3)),
@@ -2788,7 +2783,7 @@ pub(crate) mod tests {
 
     #[test]
     fn oversized_hotbar_swap_respects_slot_limit_and_returns_displaced_items() {
-        let Some(rules) = rules() else { return };
+        let rules = ItemRules(Items::for_tests(Default::default()));
         let mut guest = guest();
         let mut dirt = ItemStack::new("minecraft:dirt", 8);
         dirt.data_mut().set_other(
@@ -2938,9 +2933,7 @@ pub(crate) mod tests {
 
     #[test]
     fn guest_shulker_box_menu_refuses_shulker_boxes() {
-        let Some(rules) = rules() else {
-            return;
-        };
+        let rules = ItemRules(Items::for_tests(Default::default()));
         for shulker in [true, false] {
             let mut g = guest();
             let mut container = vec![None; 27];
@@ -3311,10 +3304,9 @@ pub(crate) mod tests {
     /// the player, or an explicitly empty one, keeps it off, and a shift-click then moves nothing
     /// at all (`moveItemStackTo` refused). Data only: no part answers.
     #[test]
+    #[ignore = "daily"]
     fn guest_armour_slots_read_the_stacks_own_equippable() {
-        let Some(rules) = rules() else {
-            return;
-        };
+        let rules = prepared_item_rules();
         let helmet = |component: Option<Vec<(&str, Tag)>>| {
             let mut helmet = ItemStack::new("minecraft:iron_helmet", 1);
             let (id, value) = match component {
@@ -3925,8 +3917,9 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn non_bundle_item_with_bundle_contents_default_skips_vanilla_bundle_override() {
-        let Some(mut rules) = rules() else { return };
+        let mut rules = prepared_item_rules();
         let mut pouch = rules.0.items["minecraft:stick"].clone();
         pouch.id = "test:pouch".into();
         pouch.bundle = true;

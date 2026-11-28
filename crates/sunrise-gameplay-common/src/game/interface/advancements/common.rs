@@ -148,12 +148,7 @@ impl RemoteTree {
 #[derive(Clone, Copy)]
 pub struct TagSources<'a> {
     /// The world's packs' tags over the game's own, by registry.
-    pub pack_tags: Option<
-        &'a std::collections::HashMap<
-            &'static str,
-            std::collections::HashMap<String, std::collections::HashSet<String>>,
-        >,
-    >,
+    pub pack_tags: Option<&'a sunrise_sim::lan::data::PackTags>,
     pub items: &'a sunrise_items::items::Items,
     pub mob_data: &'a sunrise_sim::mobs::MobData,
     pub damage: &'a sunrise_world::damage_source::Catalog,

@@ -121,9 +121,10 @@ pub(crate) fn setup_game<'a>(
     ] {
         let _ = game.run_command(command);
     }
-    game.player = Some(
-        sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 4.5)).unwrap(),
-    );
+    game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+        game.motion,
+        Vec3::new(0.5, 64.0, 4.5),
+    ));
     sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(&mut game, 7, 7);
     game.server.next_entity = game.server.next_entity.max(100);
     game
@@ -148,8 +149,8 @@ pub(crate) fn clear_entities(game: &mut sunrise_gameplay::game::ServerGame<'_>) 
     game.crystals.clear();
     game.discard_resident_dragon();
     game.server.others.0.clear();
-    game.server.knot_ids.clear();
-    game.server.broken_knots.clear();
+    game.server.knot_state.knot_ids.clear();
+    game.server.knot_state.broken_knots.clear();
     game.resident_entities.knots.clear();
     game.reset_entity_residency();
     game.bind_local_player_residency();
@@ -265,6 +266,7 @@ pub(crate) fn summon_target(
             game.tick_server(false).unwrap();
             let id = *game
                 .server
+                .knot_state
                 .knot_ids
                 .get(&[3, 64, 4])
                 .expect("natural leash knot created on fence");

@@ -327,8 +327,7 @@ pub(crate) mod tests {
                 ));
                 super::super::native_entity_refs::tests::with_game(|game| {
                     game.options.dedicated = Some(Vec::new());
-                    game.player =
-                        Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+                    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)));
                     game.player
                         .as_mut()
                         .unwrap()
@@ -506,7 +505,7 @@ pub(crate) mod tests {
         }
         effect_test_mod([]);
         super::super::native_entity_refs::tests::with_game(|game| {
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             let player = game.player.as_mut().unwrap();
             player.set_health(18.0, false).unwrap();
             player.health.food.food = 14;
@@ -535,7 +534,7 @@ pub(crate) mod tests {
         }
         effect_test_mod([]);
         super::super::native_entity_refs::tests::with_game(|game| {
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             let id = brewing::effect("test:effect").unwrap().id;
             game.potions.effects.add(EffectInstance::new(id, 10, 1));
             game.tick_mob_effects();
@@ -604,7 +603,7 @@ pub(crate) mod tests {
         }
         effect_test_mod([]);
         super::super::native_entity_refs::tests::with_game(|game| {
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             game.player
                 .as_mut()
                 .unwrap()
@@ -726,7 +725,7 @@ pub(crate) mod tests {
                     "effect-owner",
                 )]));
                 super::super::native_entity_refs::tests::with_game(|game| {
-                    game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+                    game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
                     game.player.as_mut().unwrap().entity_id = 20;
                     super::super::native_entity_refs::tests::bind_local_player(game, 20, 123);
                     let cow = game.res.mob_types().get("minecraft:cow").unwrap().clone();
@@ -876,13 +875,10 @@ pub(crate) mod sound_on_added_tests {
     #[ignore = "daily"]
     fn a_new_omen_sounds_once_at_the_feet() {
         super::super::native_entity_refs::tests::with_game(|game| {
-            game.player = Some(
-                sunrise_sim::motion::PlayerMotion::new(
-                    game.motion,
-                    sunrise_core::geometry::Vec3::new(10.5, 64.0, -3.25),
-                )
-                .unwrap(),
-            );
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                sunrise_core::geometry::Vec3::new(10.5, 64.0, -3.25),
+            ));
             game.start_audio_capture();
             for (id, amplifier) in [
                 ("bad_omen", 0),
@@ -1016,7 +1012,7 @@ pub(crate) mod mob_absorption_max_tests {
             .add_empty_chunk(ChunkPos::new(0, 0))
             .unwrap();
         assert!(game.run_command("forceload add 0 0"));
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)));
         game.creative = true;
         assert!(game.run_command("scoreboard objectives add h203 dummy"));
         game.load_ticking_neighbourhood(0, 0);
@@ -1194,7 +1190,7 @@ pub(crate) mod mob_health_boost_tests {
             .add_empty_chunk(ChunkPos::new(0, 0))
             .unwrap();
         assert!(game.run_command("forceload add 0 0"));
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)));
         game.creative = true;
         game.load_ticking_neighbourhood(0, 0);
         test(&mut game);
@@ -1452,7 +1448,7 @@ pub(crate) mod depleted_absorption_tests {
             .add_empty_chunk(ChunkPos::new(0, 0))
             .unwrap();
         assert!(game.run_command("forceload add 0 0"));
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)));
         game.creative = true;
         game.load_ticking_neighbourhood(0, 0);
         test(&mut game);
@@ -1888,10 +1884,10 @@ pub(crate) mod tick_effects_tests {
                 villager.no_ai = true;
                 villager.extra.bed = Some([2, 64, 1]);
                 game.mobs.push(villager);
-                game.player = Some(
-                    sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(2.5, 64.0, 2.5))
-                        .unwrap(),
-                );
+                game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                    game.motion,
+                    Vec3::new(2.5, 64.0, 2.5),
+                ));
                 assert!(!game.village_centers().is_empty());
 
                 // 1. Production Bad Omen -> Raid Omen insertion order:
@@ -2016,7 +2012,7 @@ pub(crate) mod declared_modifier_player_tests {
         lucky_mod();
         super::super::native_entity_refs::tests::with_game(|game| {
             let lucky = brewing::effect("testfx:lucky").unwrap();
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             let luck = |game: &mut sunrise_gameplay::game::ServerGame<'_>| {
                 game.player
                     .as_mut()

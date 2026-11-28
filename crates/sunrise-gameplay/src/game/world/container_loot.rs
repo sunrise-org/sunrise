@@ -173,6 +173,9 @@ impl ServerGame<'_> {
                     if !matches!(entity, BlockEntity::Mod(_)) {
                         return slots.to_vec();
                     }
+                    // `RandomizableContainer` fills the container's declared
+                    // inventory, not a longer backing list: a slot-change
+                    // listener may have grown the saved rows past it.
                     let state = world.block(key.0, key.1, key.2);
                     let block = &self.common.res.facts().get(state).name;
                     let count = sunrise_sim::save::block_mod_item_slots(block);
@@ -258,6 +261,8 @@ impl ServerGame<'_> {
         match target {
             LootTarget::Block(key) => {
                 if let Some(e) = self.common.world.block_entities.get_mut(&key) {
+                    // `replace_slots` writes the declared slots only; rows past
+                    // a mod container's inventory stay where they were.
                     e.replace_slots(&slots);
                 }
             }

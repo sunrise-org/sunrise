@@ -56,8 +56,7 @@ mod tests {
         let mut player = sunrise_sim::motion::PlayerMotion::new(
             game.common.motion,
             sunrise_core::geometry::Vec3::new(0.5, 64.0, 0.5),
-        )
-        .unwrap();
+        );
         player.entity_id = remote.entity_id;
         game.player = Some(player);
         game.client.streaming.insert_remote(
@@ -700,8 +699,7 @@ mod tests {
         let mut player = sunrise_sim::motion::PlayerMotion::new(
             game.common.motion,
             sunrise_core::geometry::Vec3::new(0.5, 64.0, 0.5),
-        )
-        .unwrap();
+        );
         player.entity_id = remote.entity_id;
         game.player = Some(player);
         game.client.streaming.insert_remote(
@@ -805,7 +803,7 @@ mod tests {
             check(game);
         });
         with_game(|game| {
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)));
             bind_local_player(game, 42, 456);
             game.server
                 .streaming

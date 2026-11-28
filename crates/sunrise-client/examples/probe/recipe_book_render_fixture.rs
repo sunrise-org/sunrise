@@ -27,10 +27,6 @@ fn runs(r: &[Run]) -> Value {
             .collect(),
     )
 }
-fn round(v: f32) -> f32 {
-    (v * 1e4).round() / 1e4
-}
-
 pub fn main() -> sunrise_client::Result<()> {
     let args: Vec<String> = crate::args().collect();
     let usage = "usage: recipe_book_render_fixture RESOURCES CASES OUTPUT";
@@ -197,7 +193,7 @@ pub fn main() -> sunrise_client::Result<()> {
         let draws: Vec<Value> = draw(&screen)
             .into_iter()
             .filter_map(|d| {
-                let m: Vec<f32> = d.pose.iter().map(|v| round(*v)).collect();
+                let m: Vec<f32> = d.pose.to_vec();
                 let mut o = match d.call {
                     Call::Blit {
                         texture,

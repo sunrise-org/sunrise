@@ -269,7 +269,7 @@ fn a_saved_mod_container_loads_its_table_before_its_items() {
             sunrise_sim::save::block_mod_item_slots("fixture:crate"),
             SLOTS
         );
-        assert_eq!(entity.slots(), &[], "from a chunk");
+        assert_eq!(entity.slots(), vec![None; SLOTS].as_slice(), "from a chunk");
         let BlockEntity::Mod(loaded_entity) = entity else {
             panic!("the crate's block entity")
         };
@@ -287,7 +287,11 @@ fn a_saved_mod_container_loads_its_table_before_its_items() {
             sunrise_sim::structure_blocks::generated_container("fixture:crate", &structure)
                 .unwrap();
         assert_eq!(pending.map(|p| p.table_id()), Some(TABLE.to_owned()));
-        assert_eq!(entity.slots(), &[], "from a structure");
+        assert_eq!(
+            entity.slots(),
+            vec![None; SLOTS].as_slice(),
+            "from a structure"
+        );
     });
 }
 
@@ -321,5 +325,130 @@ fn a_slotless_mod_block_entitys_loot_fields_stay_in_a_captured_structure() {
         let mut tag = saved.clone();
         ServerGame::write_pending_loot(&game.world, at, "minecraft:stone", &mut tag);
         assert_eq!(tag, saved);
+    });
+}
+
+/// A backing list longer than the declared inventory (a slot-change listener
+/// may grow it) does not widen the loot fill: `LootTable.fill` sees the 27
+/// declared slots only, and the extra saved row stays where it was.
+#[test]
+#[ignore = "daily"]
+fn a_longer_backing_list_does_not_widen_the_loot_fill() {
+    if run_fresh_cases(
+        concat!(
+            module_path!(),
+            "::a_longer_backing_list_does_not_widen_the_loot_fill"
+        )
+        .split_once("::")
+        .unwrap()
+        .1,
+        "SUNRISE_CONTAINER_LOOT_LONG_BACKING_CHILD",
+        &["loot"],
+    ) {
+        return;
+    }
+    with_crate(|game, handle| {
+        let BlockEntity::Mod(entity) = game
+            .world
+            .block_entities
+            .get_mut(&KEY)
+            .expect("the crate's block entity")
+        else {
+            panic!("the crate's block entity")
+        };
+        entity.items.resize(SLOTS + 5, None);
+        entity.items[SLOTS + 2] = Some(ItemStack::new("minecraft:diamond", 1));
+        assert_eq!(handle.set_loot_table(game, TABLE, 42), Ok(true));
+        assert_eq!(handle.unpack_loot_table(game), Ok(true));
+        let all = slots(game);
+        assert_eq!(all.len(), SLOTS + 5, "the extra saved row survives");
+        assert_eq!(all[..SLOTS], expected(VANILLA_42)[..]);
+        assert_eq!(all[SLOTS + 2], Some(("minecraft:diamond".to_owned(), 1)));
+    });
+}
+
+/// A sparse saved `Items` list loads as the container's declared 27 slots,
+/// not as the last occupied slot's length; a saved row past that size stays
+/// in the raw NBT and survives a save/load round trip.
+#[test]
+#[ignore = "daily"]
+fn a_saved_sparse_mod_container_pads_to_its_declared_size() {
+    if run_fresh_cases(
+        concat!(
+            module_path!(),
+            "::a_saved_sparse_mod_container_pads_to_its_declared_size"
+        )
+        .split_once("::")
+        .unwrap()
+        .1,
+        "SUNRISE_CONTAINER_LOOT_SPARSE_CHILD",
+        &["load"],
+    ) {
+        return;
+    }
+    with_crate(|game, _| {
+        let stone = ItemStack::new("minecraft:stone", 1);
+        let diamond = ItemStack::new("minecraft:diamond", 1);
+        let BlockEntity::Mod(entity) = game
+            .world
+            .block_entities
+            .get_mut(&KEY)
+            .expect("the crate's block entity")
+        else {
+            panic!("the crate's block entity")
+        };
+        entity.items = vec![None; SLOTS + 3];
+        entity.items[4] = Some(stone.clone());
+        entity.items[SLOTS + 2] = Some(diamond.clone());
+        let registry = game.pack.assets.registry;
+        let mut batch = sunrise_sim::save::chunks_with_block_entities(
+            game.world.chunks.values(),
+            &game.world.block_entities,
+            &game.world.block_names,
+        );
+        game.attach_save_data(&mut batch[0]);
+        let encoded =
+            sunrise_sim::save::encode(&batch[0], registry, game.res.biomes(), &Default::default());
+        let loaded = sunrise_sim::save::decode(&encoded, registry, game.res.biomes()).unwrap();
+        let (_, entity) = loaded
+            .block_entities
+            .iter()
+            .find(|(p, _)| *p == KEY)
+            .unwrap();
+        assert_eq!(entity.slots().len(), SLOTS, "the declared shape");
+        assert_eq!(entity.slots()[4].as_ref(), Some(&stone));
+        let BlockEntity::Mod(loaded_entity) = entity else {
+            panic!("the crate's block entity")
+        };
+        let Tag::List(rows) = loaded_entity
+            .nbt
+            .get(&"Items".into())
+            .unwrap_or_else(|| panic!("the out-of-range row stays raw: {:?}", loaded_entity.nbt))
+        else {
+            panic!("the out-of-range row stays raw: {:?}", loaded_entity.nbt)
+        };
+        assert!(
+            rows.iter()
+                .any(|row| row.get("Slot") == Some(&Tag::Byte(29))),
+            "the saved row at 29 stays on disk: {rows:?}"
+        );
+        // Save that decoded container again: the raw row is still there.
+        let entities: std::collections::HashMap<_, _> =
+            loaded.block_entities.iter().cloned().collect();
+        let again = sunrise_sim::save::chunks_with_block_entities(
+            game.world.chunks.values(),
+            &entities,
+            &game.world.block_names,
+        );
+        let two =
+            sunrise_sim::save::encode(&again[0], registry, game.res.biomes(), &Default::default());
+        let twice = sunrise_sim::save::decode(&two, registry, game.res.biomes()).unwrap();
+        let (_, entity) = twice
+            .block_entities
+            .iter()
+            .find(|(p, _)| *p == KEY)
+            .unwrap();
+        assert_eq!(entity.slots()[4].as_ref(), Some(&stone));
+        assert_eq!(entity.slots().len(), SLOTS);
     });
 }

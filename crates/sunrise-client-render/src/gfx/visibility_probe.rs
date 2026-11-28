@@ -351,7 +351,7 @@ pub fn verify_witness(path: &Path) -> Result<usize, String> {
             }
 
             let mut out = Vec::new();
-            r.visible(camera, rd, &all_frustum, |_| true, |_, _| false, &mut out);
+            r.visible(camera, rd, &all_frustum, |_| true, &mut out);
             let mut actual_res: Vec<[i32; 3]> = out
                 .iter()
                 .map(|v| [v.key.0, v.key.1 + min_sec_y, v.key.2])
@@ -407,7 +407,7 @@ pub fn verify_witness(path: &Path) -> Result<usize, String> {
                 let expected_set: HashSet<[i32; 3]> = expected_frustum.iter().copied().collect();
 
                 out.clear();
-                r.visible(camera, rd, &view_frustum, |_| true, |_, _| false, &mut out);
+                r.visible(camera, rd, &view_frustum, |_| true, &mut out);
                 let mut res_vis: Vec<[i32; 3]> = out
                     .iter()
                     .map(|v| [v.key.0, v.key.1 + min_sec_y, v.key.2])

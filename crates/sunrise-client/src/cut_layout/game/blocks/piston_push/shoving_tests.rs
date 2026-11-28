@@ -304,7 +304,7 @@ fn a_server_side_turning_shove_never_moves_the_local_player() {
                 let holder = holder(game, 4.5);
                 let from = Vec3::new(5.2, 70.0, 4.5);
                 let velocity = Vec3::new(-0.4, 0.0, 0.25);
-                game.player = Some(PlayerMotion::new(game.motion, from).unwrap());
+                game.player = Some(PlayerMotion::new(game.motion, from));
                 game.player.as_mut().unwrap().velocity = velocity;
                 turn(game, holder, 90.0);
                 assert_eq!(game.player.as_ref().unwrap().position, from);
@@ -324,7 +324,7 @@ fn a_client_side_turning_shove_moves_the_local_player() {
             with_client_game(|game| {
                 empty_chunk(game);
                 let _wire = Connection::local(logged_client(game));
-                let mut player = PlayerMotion::new(game.motion, Vec3::new(5.2, 70.0, 4.5)).unwrap();
+                let mut player = PlayerMotion::new(game.motion, Vec3::new(5.2, 70.0, 4.5));
                 player.entity_id = PLAYER as i32;
                 player.client_side = true;
                 player.velocity = Vec3::new(-0.4, 0.0, 0.25);
@@ -414,8 +414,7 @@ fn a_vanilla_piston_shove_leaves_the_players_velocity_alone() {
                 let mut chunk = Chunk::empty(0, 0);
                 chunk.set(5, 200, 5, moving.0);
                 game.world.chunks.insert((0, 0), Arc::new(chunk));
-                let mut player =
-                    PlayerMotion::new(game.motion, Vec3::new(5.5, 200.0, 5.5)).unwrap();
+                let mut player = PlayerMotion::new(game.motion, Vec3::new(5.5, 200.0, 5.5));
                 player.velocity = Vec3::new(-0.4, -0.2, 0.1);
                 game.player = Some(player);
                 let pos = BlockPos::new(5, 200, 5);
@@ -471,7 +470,7 @@ fn a_predicted_collider_shove_passes_the_server_move_check() {
                     finish_login(game, &mut wire);
                     game.client.screen = sunrise_gameplay_common::game::Screen::Playing;
                     empty_chunk(game);
-                    let mut player = PlayerMotion::new(game.motion, from).unwrap();
+                    let mut player = PlayerMotion::new(game.motion, from);
                     player.entity_id = PLAYER as i32;
                     player.client_side = true;
                     game.player = Some(player);
@@ -528,7 +527,7 @@ fn a_predicted_collider_shove_passes_the_server_move_check() {
             with_game(|game| {
                 empty_chunk(game);
                 holder(game, 4.75);
-                game.player = Some(PlayerMotion::new(game.motion, from).unwrap());
+                game.player = Some(PlayerMotion::new(game.motion, from));
                 game.server.lan_acting = Some(CONN);
                 game.server.lan_acting_entity = Some(PLAYER);
                 game.server.lan_acting_uuid = Some(11);

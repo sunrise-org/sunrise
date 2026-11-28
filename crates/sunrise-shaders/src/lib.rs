@@ -14,6 +14,8 @@
 //! - [`load_post`]: a dimension's `prepare`, `deferred`, `composite` and `final` programs, in order (2.1).
 //! - [`load_textures`]: the custom textures `texture.*` and `customTexture.*` name (3.4).
 //! - [`Macros`] and [`eval_condition`]: the macros packs test, and the `#if` arithmetic (1.5).
+//! - [`asks_for_identity`]: whether a pack tests `IS_IRIS` / `IRIS_VERSION`, which
+//!   [`Macros::set_identity`] defines (Iris-path compatibility, decision D-8).
 
 mod biomes;
 mod block_ids;
@@ -21,6 +23,7 @@ mod condition;
 mod config;
 mod custom;
 mod discover;
+mod identity;
 mod lang;
 mod macros;
 mod options;
@@ -35,7 +38,7 @@ mod translate;
 pub use biomes::{
     category as biome_category, pack_id as biome_pack_id, precipitation as biome_precipitation,
 };
-pub use block_ids::{BlockIds, BlockLayers, LayerMatch, RenderLayer};
+pub use block_ids::{BlockIds, BlockLayers, LayerMatch, RenderLayer, TagMembers};
 pub use condition::{Conditionals, eval_condition, resolve_defined};
 pub use config::{
     BUFFERS, Buffer, Config, Format, HALF_LIVES, Kind, SHADOW_COLORS, Shadow, buffer_index,
@@ -43,11 +46,12 @@ pub use config::{
 };
 pub use custom::{Custom, Val};
 pub use discover::{Found, candidates, discover};
+pub use identity::{IRIS_VERSION, asked as asks_for_identity};
 pub use lang::Lang;
 pub use macros::{MC_VERSION, Macros, RENDER_STAGES, render_stage};
 pub use options::{
     PackOption, apply as apply_options, choose as choose_option, chosen_file, chosen_text, options,
-    parse_chosen, properties_macros, read_properties, switches_on, value_options, with_options,
+    parse_chosen, read_properties, switches_on, value_options, with_options,
 };
 pub use pack::{Pack, PackError};
 pub use post::{
@@ -56,7 +60,7 @@ pub use post::{
 };
 pub use post::{
     Post, PostProgram, STARS_BLEND, ShadowCulling, SkySwitches, TRANSLUCENT_BLEND,
-    dimension_folder, dimension_folder_named, load_post,
+    dimension_folder, dimension_folder_named, load_post, program_stages,
 };
 pub use preprocess::{Diagnostic, Origin, Preprocessed, preprocess};
 pub use properties::{Entry, Note, Properties, Tonemap};

@@ -113,7 +113,7 @@ fn a_layer_reads_the_status_heights_the_vanilla_rows_before_it_left() {
         super::set_fixture_mode(game, GameMode::Survival);
         // One row of hearts, one point of armour, full food and depleted air above water: the
         // health, armour, food and air rows each take 10 pixels.
-        let mut player = PlayerMotion::new(game.motion, Vec3::new(2.0, 64.0, 2.0)).unwrap();
+        let mut player = PlayerMotion::new(game.motion, Vec3::new(2.0, 64.0, 2.0));
         player.set_health(12.0, false).unwrap();
         player
             .set_modifier("minecraft:armor", "heights:armor", 2.0, "add_value", true)

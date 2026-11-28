@@ -89,15 +89,25 @@ fn admitted_raid_loses_removed_loaded_bed_without_erasing_memory() {
     assert_eq!(level.is_village(&game, [18, 200, 1]), Ok(true));
     assert_eq!(level.is_village(&game, [34, 200, 1]), Ok(false));
     assert!(game.raid_command_create([8, 200, 8], 1));
-    let id = game.server.raiding.0.raids.ids()[0];
+    let id = game.server.raiding.0.level.raids.ids()[0];
     for _ in 0..400 {
         game.world.game_time += 1;
         game.tick_raids();
-        if game.server.raiding.0.raids.get(id).unwrap().groups_spawned == 1 {
+        if game
+            .server
+            .raiding
+            .0
+            .level
+            .raids
+            .get(id)
+            .unwrap()
+            .groups_spawned
+            == 1
+        {
             break;
         }
     }
-    let raid = game.server.raiding.0.raids.get(id).unwrap();
+    let raid = game.server.raiding.0.level.raids.get(id).unwrap();
     assert!(raid.started);
     assert_eq!(raid.groups_spawned, 1, "real first wave must be admitted");
     assert!(
@@ -108,7 +118,7 @@ fn admitted_raid_loses_removed_loaded_bed_without_erasing_memory() {
         game.tick_raids();
     }
     assert_eq!(
-        game.server.raiding.0.raids.get(id).unwrap().status,
+        game.server.raiding.0.level.raids.get(id).unwrap().status,
         Status::Ongoing
     );
     // Unavailable claims remain unknown rather than becoming known air.
@@ -130,7 +140,7 @@ fn admitted_raid_loses_removed_loaded_bed_without_erasing_memory() {
     game.tick_raids();
     assert_eq!(level.is_village(&game, bed), Ok(false));
     assert_eq!(
-        game.server.raiding.0.raids.get(id).unwrap().status,
+        game.server.raiding.0.level.raids.get(id).unwrap().status,
         Status::Loss
     );
     assert_eq!(

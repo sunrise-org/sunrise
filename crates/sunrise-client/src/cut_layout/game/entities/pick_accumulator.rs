@@ -42,14 +42,15 @@ mod tests {
                 (min.y + max.y) / 2.0,
                 (min.z + max.z) / 2.0,
             );
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.0, 64.0, 0.0)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.0, 64.0, 0.0)));
             let eye = game.aim().unwrap().0[1] - 64.0;
             // Yaw 0 looks along +z.
             (game.yaw, game.pitch) = (0.0, 0.0);
             let eyes_at = |game: &mut sunrise_gameplay::game::ServerGame<'_>, at: Vec3| {
-                game.player = Some(
-                    PlayerMotion::new(game.motion, Vec3::new(at.x, at.y - eye, at.z)).unwrap(),
-                );
+                game.player = Some(PlayerMotion::new(
+                    game.motion,
+                    Vec3::new(at.x, at.y - eye, at.z),
+                ));
             };
             let picked = |game: &sunrise_gameplay::game::ServerGame<'_>| {
                 game.mob_hit().map(|(i, _, _)| game.mobs[i].id)

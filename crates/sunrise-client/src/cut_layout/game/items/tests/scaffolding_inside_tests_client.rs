@@ -32,17 +32,14 @@ fn a_click_from_inside_a_scaffolding_block_places_on_the_opposite_face() {
     game.world
         .set(COLUMN[0], COLUMN[1], COLUMN[2], supported)
         .unwrap();
-    game.player = Some(
-        PlayerMotion::new(
-            game.motion,
-            Vec3::new(
-                f64::from(COLUMN[0]) + 0.5,
-                f64::from(COLUMN[1]) - 1.0,
-                f64::from(COLUMN[2]) + 0.5,
-            ),
-        )
-        .unwrap(),
-    );
+    game.player = Some(PlayerMotion::new(
+        game.motion,
+        Vec3::new(
+            f64::from(COLUMN[0]) + 0.5,
+            f64::from(COLUMN[1]) - 1.0,
+            f64::from(COLUMN[2]) + 0.5,
+        ),
+    ));
     *game.held_mut() = Some(ItemStack::new("minecraft:scaffolding", 1));
     game.yaw = 0.0;
     game.pitch = -90.0;

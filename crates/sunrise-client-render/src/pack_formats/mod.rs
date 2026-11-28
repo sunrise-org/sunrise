@@ -6,6 +6,7 @@
 mod colors;
 mod custom_sky;
 mod item_bars;
+mod lightmap;
 
 use crate::resource_source::ResourceSource;
 use std::sync::Arc;
@@ -34,6 +35,14 @@ impl PackFormats for Formats {
     ) -> Option<Arc<dyn crate::custom_sky::SkyLayers>> {
         let sky = custom_sky::CustomSky::load(root);
         (!sky.is_empty()).then(|| Arc::new(sky) as _)
+    }
+
+    fn lightmaps(
+        &self,
+        root: &ResourceSource,
+    ) -> Option<Arc<dyn crate::custom_lightmap::Lightmaps>> {
+        let lightmaps = lightmap::CustomLightmaps::load(root);
+        (!lightmaps.is_empty()).then(|| Arc::new(lightmaps) as _)
     }
 
     fn item_bars(&self, root: &ResourceSource) -> Option<Arc<dyn crate::pack_palette::ItemBars>> {

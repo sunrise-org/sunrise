@@ -42,7 +42,7 @@ pub fn check_parts(
 #[cfg(any(test, feature = "testing"))]
 pub fn empty_pose_table() -> impl Sized {
     (
-        crate::client::arm_pose::test_table(Vec::new()),
+        crate::content::arm_pose::test_table(Vec::new()),
         std::marker::PhantomData::<std::rc::Rc<()>>,
     )
 }

@@ -57,8 +57,7 @@ fn player_and_dispenser_apply_only_the_context_seen_by_the_veto() {
                             game.world.set(x, 65, z, glass).unwrap();
                         }
                     }
-                    game.player =
-                        Some(PlayerMotion::new(game.motion, Vec3::new(12.5, 64.0, 12.5)).unwrap());
+                    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(12.5, 64.0, 12.5)));
                     bind_local_player(game, 20, 123);
                     game.server.lan_acting_name = Some("Placer".into());
                     game.server.lan_acting_permission = Some(0);
@@ -188,8 +187,7 @@ fn state_for_placement_distinguishes_player_and_dispenser_sources() {
                     let stone = registry.default_state("minecraft:stone").unwrap();
                     game.world.set(4, 63, 4, stone).unwrap();
                     game.world.set(8, 63, 5, stone).unwrap();
-                    game.player =
-                        Some(PlayerMotion::new(game.motion, Vec3::new(12.5, 64.0, 12.5)).unwrap());
+                    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(12.5, 64.0, 12.5)));
                     bind_local_player(game, 20, 123);
                     game.server.lan_acting_name = Some("Placer".into());
                     game.server.lan_acting_permission = Some(0);
@@ -329,8 +327,7 @@ fn substituted_placement_uses_the_held_item_preclear_and_selected_placed_by() {
             game.block_ticks
                 .add_empty_chunk(sunrise_core::position::ChunkPos::new(0, 0))
                 .unwrap();
-            game.player =
-                Some(PlayerMotion::new(game.motion, Vec3::new(12.5, 64.0, 12.5)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(12.5, 64.0, 12.5)));
             bind_local_player(game, 20, 123);
             game.server.lan_acting_name = Some("Placer".into());
             game.server.lan_acting_permission = Some(0);

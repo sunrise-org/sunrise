@@ -109,7 +109,6 @@ fn with_server(
             NetConfig {
                 listen: false,
                 announce: false,
-                lod_distance: 0,
                 ..NetConfig::lan(0, String::new(), 2)
             },
             config,
@@ -138,9 +137,10 @@ fn with_server(
         guest.placed = true;
         guest.loaded = true;
         guest.health = 20.0;
-        guest.motion = Some(Box::new(
-            sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(3.5, 64.0, 5.5)).unwrap(),
-        ));
+        guest.motion = Some(Box::new(sunrise_sim::motion::PlayerMotion::new(
+            game.motion,
+            Vec3::new(3.5, 64.0, 5.5),
+        )));
         game.server.lan.as_mut().unwrap().hub.guests.push(guest);
         test(game);
     });

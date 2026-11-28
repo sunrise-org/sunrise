@@ -181,9 +181,11 @@ impl Catalog {
                 .as_object()
                 .ok_or_else(|| invalid("invalid entity supplier"))?
             {
-                let id = ids
-                    .get(name)
-                    .ok_or_else(|| invalid("unknown supplier attribute"))?;
+                let id = ids.get(name).ok_or_else(|| {
+                    invalid(format!(
+                        "missing {name} definition referenced by {entity} supplier"
+                    ))
+                })?;
                 bases[id.0] = Some(number(base)?);
             }
             defaults.insert(entity.clone(), Arc::from(bases));

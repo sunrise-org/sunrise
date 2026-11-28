@@ -116,26 +116,49 @@ fn authored_fade_globals_keep_their_own_meaning() {
 }
 
 #[test]
-fn fade_feature_negotiation_ignores_case_and_defines_no_macro() {
-    for (request, rejected) in [
-        ("", false),
-        ("iris.features.required=FADE_VARIABLE\n", false),
-        ("iris.features.required=fade_variable\n", false),
-        ("iris.features.optional=fade_variable\n", false),
-        ("iris.features.required=UNKNOWN_FADE\n", true),
+fn fade_feature_negotiation_ignores_case_and_defines_the_written_macro() {
+    // The request matches in any case; the answer is `IRIS_FEATURE_FADE_VARIABLE` as Sunrise
+    // writes the flag (decision D-7), never the pack's own spelling.
+    for (request, rejected, probe) in [
+        ("", false, "opaque"),
+        (
+            "iris.features.required=FADE_VARIABLE\n",
+            false,
+            "transition",
+        ),
+        (
+            "iris.features.required=fade_variable\n",
+            false,
+            "transition",
+        ),
+        (
+            "iris.features.optional=fade_variable\n",
+            false,
+            "transition",
+        ),
+        ("iris.features.required=UNKNOWN_FADE\n", true, "opaque"),
     ] {
-        let macros = Macros::standard();
-        let properties = Properties::parse(request, &macros);
-        assert_eq!(
-            !Macros::standard().feature_notes(&properties).is_empty(),
-            rejected
+        let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        archive
+            .start_file(
+                "shaders/shaders.properties",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+        let text = format!(
+            "{request}#ifdef IRIS_FEATURE_FADE_VARIABLE\nprobe=transition\n#else\nprobe=opaque\n#endif\n\
+             #ifdef IRIS_FEATURE_fade_variable\nspelled=pack\n#endif\n"
         );
-        // No `IRIS_FEATURE_*` (spec OQ-2): the pack keeps its base path.
-        let selected = Properties::parse(
-            "#ifdef IRIS_FEATURE_fade_variable\nprobe=transition\n#else\nprobe=opaque\n#endif\n",
-            &macros,
-        );
-        assert_eq!(selected.get("probe"), Some("opaque"));
+        std::io::Write::write_all(&mut archive, text.as_bytes()).unwrap();
+        let pack = sunrise_shaders::Pack::from_zip_bytes(
+            "fade.zip",
+            archive.finish().unwrap().into_inner(),
+        )
+        .unwrap();
+        let (properties, notes) = sunrise_shaders::read_properties(&pack, &mut Macros::standard());
+        assert_eq!(!notes.is_empty(), rejected, "{request}");
+        assert_eq!(properties.get("probe"), Some(probe), "{request}");
+        assert_eq!(properties.get("spelled"), None, "{request}");
     }
 }
 

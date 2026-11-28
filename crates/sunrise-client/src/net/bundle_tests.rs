@@ -19,12 +19,12 @@ fn play_reader(
             &Arc::new(Language::new()),
             &send,
             &Cookies::default(),
-            &Arc::default(),
             &data,
             &Arc::new(Mutex::new(None)),
             &transport,
             &Arc::default(),
             &Arc::default(),
+            &crate::custom_registry_net::LocalRegistries::default(),
         )
     })
 }
@@ -379,12 +379,12 @@ fn malformed_play_packets_fail_decode_before_bundling() {
                 &lang,
                 &send,
                 &Cookies::default(),
-                &Arc::default(),
                 &data,
                 &Arc::new(Mutex::new(None)),
                 &Transport::empty(),
                 &Arc::default(),
                 &Arc::default(),
+                &crate::custom_registry_net::LocalRegistries::default(),
             )
         })
         .join()

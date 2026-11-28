@@ -53,7 +53,6 @@ fn judged_with(
     data: Option<&Path>,
 ) -> Verdict {
     let bundle = crate::bundle_in(dir).unwrap().unwrap();
-    let target = Rc::new(target.clone());
     let mut read = table(&bundle.dir);
     judge(
         &bundle.manifest,
@@ -63,7 +62,7 @@ fn judged_with(
             mixins_rev: crate::MIXINS_REV,
         },
         || read.as_mut().map_err(|why| *why),
-        &mut || Ok::<_, String>(target.clone()),
+        &mut || Ok::<_, String>(target),
         &mut || match data {
             Some(data) => game_uses::entries(&bundle.manifest, data, build),
             None => Err("no game code declared: never read".to_owned()),
@@ -184,7 +183,7 @@ fn an_older_list_is_completed_by_the_build_it_was_made_for_and_its_unchecked_ent
     // `made_for_surface` gives the build it was made for's surface, or why it cannot.
     let judge_with = |target: &serde_json::Value, made_for_surface: Result<String, String>| {
         let bundle = crate::bundle_in(&dir).unwrap().unwrap();
-        let target = Rc::new(serde_json::from_value(target.clone()).unwrap());
+        let target = serde_json::from_value(target.clone()).unwrap();
         let mut read = table(&bundle.dir);
         judge(
             &bundle.manifest,
@@ -194,9 +193,14 @@ fn an_older_list_is_completed_by_the_build_it_was_made_for_and_its_unchecked_ent
                 mixins_rev: crate::MIXINS_REV,
             },
             || read.as_mut().map_err(|why| *why),
-            &mut || Ok::<_, String>(Rc::clone(&target)),
+            &mut || Ok::<_, String>(&target),
             &mut || Err("no game code declared: never read".to_owned()),
-            Some(&mut || made_for_surface.clone().map(String::into_bytes)),
+            Some(&mut || {
+                made_for_surface
+                    .as_deref()
+                    .map(str::as_bytes)
+                    .map_err(Clone::clone)
+            }),
         )
     };
     let unread = || Err("unread".to_owned());
@@ -1167,7 +1171,8 @@ fn hook_versions_from_the_build_it_was_made_for_count_whatever_the_game_code_sho
     let judge_with = |manifest_text: String| {
         std::fs::write(&manifest, manifest_text).unwrap();
         let bundle = crate::bundle_in(&dir).unwrap().unwrap();
-        let target = Rc::new(serde_json::from_value(hook(2)).unwrap());
+        let target = serde_json::from_value(hook(2)).unwrap();
+        let made_for_surface = hook(1).to_string();
         let mut read = table(&bundle.dir);
         judge(
             &bundle.manifest,
@@ -1177,9 +1182,9 @@ fn hook_versions_from_the_build_it_was_made_for_count_whatever_the_game_code_sho
                 mixins_rev: crate::MIXINS_REV,
             },
             || read.as_mut().map_err(|why| *why),
-            &mut || Ok::<_, String>(Rc::clone(&target)),
+            &mut || Ok::<_, String>(&target),
             &mut || Err("no build data".to_owned()),
-            Some(&mut || Ok(hook(1).to_string().into_bytes())),
+            Some(&mut || Ok(made_for_surface.as_bytes())),
         )
         .unwrap()
     };

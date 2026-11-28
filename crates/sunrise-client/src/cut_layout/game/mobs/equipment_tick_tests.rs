@@ -15,7 +15,7 @@ fn lodestone_world(
     game.build_registries();
     game.set_allow_commands(true);
     game.level.health = 20.0;
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(14.5, 64.0, 14.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(14.5, 64.0, 14.5)));
     game.block_ticks
         .add_empty_chunk(BlockPos::new(0, 0, 0).chunk())
         .unwrap();

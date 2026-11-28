@@ -1731,8 +1731,7 @@ mod tests {
     /// a command or a datapack gives.
     fn small_body(resources: &crate::motion::MotionResources) -> crate::motion::PlayerMotion {
         use sunrise_world::attributes::{Modifier, Operation};
-        let mut m = crate::motion::PlayerMotion::new(resources, sunrise_core::geometry::Vec3::ZERO)
-            .expect("a body");
+        let mut m = crate::motion::PlayerMotion::new(resources, sunrise_core::geometry::Vec3::ZERO);
         let key = m.attributes.key("minecraft:scale").unwrap();
         let handle = m.attributes.get_instance(Some(key)).unwrap().unwrap();
         m.attributes
@@ -1760,8 +1759,7 @@ mod tests {
         };
         let next = |g: &Guest| {
             let mut m =
-                crate::motion::PlayerMotion::new(&resources, sunrise_core::geometry::Vec3::ZERO)
-                    .expect("a body");
+                crate::motion::PlayerMotion::new(&resources, sunrise_core::geometry::Vec3::ZERO);
             m.apply_saved_attributes(g.carried_attributes.as_ref())
                 .unwrap();
             m
@@ -1803,8 +1801,7 @@ mod tests {
         read.read_player(&tag);
         read.player_extra = Some(tag);
         let mut back =
-            crate::motion::PlayerMotion::new(&resources, sunrise_core::geometry::Vec3::ZERO)
-                .expect("a body");
+            crate::motion::PlayerMotion::new(&resources, sunrise_core::geometry::Vec3::ZERO);
         back.apply_saved_attributes(read.player_extra.as_ref().and_then(|t| t.get("attributes")))
             .unwrap();
         assert_eq!(back.attribute("minecraft:scale").unwrap(), 0.1);
@@ -1821,8 +1818,7 @@ mod tests {
         };
         let mut g = guest();
         let mut motion =
-            crate::motion::PlayerMotion::new(&resources, sunrise_core::geometry::Vec3::ZERO)
-                .expect("a body");
+            crate::motion::PlayerMotion::new(&resources, sunrise_core::geometry::Vec3::ZERO);
         motion.air = 99;
         g.motion = Some(Box::new(motion));
         let mut level = Level::default();

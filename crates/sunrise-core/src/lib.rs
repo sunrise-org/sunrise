@@ -17,6 +17,7 @@ pub mod equipment_slot;
 pub mod fast_hash;
 pub mod game_mode;
 pub mod geometry;
+pub mod graph;
 pub mod identifier;
 pub mod java_character;
 pub mod java_float_parse;
@@ -40,6 +41,8 @@ pub mod paletted;
 pub mod position;
 pub mod prepared_files;
 pub mod prepared_profile;
+#[cfg(any(test, feature = "test-support"))]
+pub mod prepared_test_support;
 pub mod profile;
 pub mod random;
 pub mod release;

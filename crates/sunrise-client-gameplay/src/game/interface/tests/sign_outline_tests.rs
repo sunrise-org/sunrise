@@ -31,7 +31,7 @@ fn check_signs(game: &mut crate::game::ClientGame<'_>) {
     game.connect_local(client, "SignOutline").unwrap();
     let player_id = game.client.remote.as_ref().unwrap().entity_id;
     let motion = game.motion;
-    let player = || PlayerMotion::new(motion, Vec3::new(FAR.x, FAR.y, FAR.z)).unwrap();
+    let player = || PlayerMotion::new(motion, Vec3::new(FAR.x, FAR.y, FAR.z));
     let mut chunk = Chunk::empty(0, 0);
     let section = chunk.section_index(POS[1]).unwrap();
     std::sync::Arc::make_mut(&mut chunk.sections[section]).light = Light::Uniform(0x83);

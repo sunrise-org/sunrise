@@ -49,7 +49,7 @@ impl ServerGame<'_> {
             origin_reservation: Some((action, id)),
             dimension: self.common.dim,
             resources: self.common.res.clone(),
-            attributes: self.common.motion.attributes.clone(),
+            attributes: self.common.motion.attributes().clone(),
         }
     }
 
@@ -196,7 +196,7 @@ impl ServerGame<'_> {
         }
         let dimension = self.common.dim;
         let resources = self.common.res.clone();
-        let attributes = self.common.motion.attributes.clone();
+        let attributes = self.common.motion.attributes().clone();
         let (parent, size) = (dying.id, dying.extra.size);
         let mut pending = (0..drawn)
             .map(|i| self.split_proposal(dying, i, action, kind))
@@ -263,7 +263,7 @@ impl ServerGame<'_> {
     ) -> BreedOutcome {
         let dimension = self.common.dim;
         let resources = self.common.res.clone();
-        let attributes = self.common.motion.attributes.clone();
+        let attributes = self.common.motion.attributes().clone();
         let action = NEXT_CHILD_ACTION.fetch_add(1, Ordering::Relaxed);
         let mut slot = baby.map(|baby| self.stash_pending_child(baby, action));
         let mut cancel = false;

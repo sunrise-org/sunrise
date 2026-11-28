@@ -1,0 +1,1 @@
+sunrise-gameplay-common game::creatures::dye_mix_tests::two_dyes_mix_by_their_crafting_recipe lib daily resources

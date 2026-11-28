@@ -83,7 +83,7 @@ fn updated_pose(
     server: bool,
 ) -> Pose {
     let (assets, binding, resources) = (&v.assets, &v.collision, &v.motion);
-    let mut body = PlayerMotion::new(resources, Vec3::new(20.5, 10.0, 20.5)).unwrap();
+    let mut body = PlayerMotion::new(resources, Vec3::new(20.5, 10.0, 20.5));
     body.entity_id = player;
     body.sleeping = flags.sleeping;
     body.swimming = flags.swimming;

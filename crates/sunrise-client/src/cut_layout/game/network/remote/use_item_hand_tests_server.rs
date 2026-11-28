@@ -72,7 +72,7 @@ fn the_item_event_names_the_host_player_on_its_own_click() {
     mod_platform::testing::with_mods(mods, || {
         with_game(|game| {
             game.options.dedicated = Some(Vec::new());
-            let mut player = PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 3.5)).unwrap();
+            let mut player = PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 3.5));
             player.entity_id = 77;
             game.player = Some(player);
             game.level.player_uuid = Some([1, 2, 3, 4]);

@@ -25,7 +25,7 @@ fn breaking_player(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> PathBuf
     ));
     std::fs::create_dir_all(&scratch).unwrap();
     game.server.world_root = scratch.clone();
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 62.0, 4.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 62.0, 4.5)));
     game.player.as_mut().unwrap().ground.on_ground = true;
     game.creative = false;
     game.build_registries();

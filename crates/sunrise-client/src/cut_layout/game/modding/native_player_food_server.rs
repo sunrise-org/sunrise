@@ -15,7 +15,7 @@ mod tests {
 
     /// The acting player with a body, as a hook's turn finds them.
     fn acting_player(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> PlayerRef {
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
         sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
         game.player(123).unwrap()
     }

@@ -42,7 +42,7 @@ fn connect(game: &mut sunrise_client_gameplay::game::ClientGame<'_>, position: V
     remote.logged_in = true;
     remote.entity_id = 1;
     remote.level_load.finish();
-    game.player = Some(PlayerMotion::new(game.motion, position).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, position));
     game.previous_position = position;
     server
 }
@@ -96,7 +96,7 @@ fn track_block(
     game.handle_waypoint(&TrackedWaypoint {
         operation: waypoint_operation::TRACK,
         id: WaypointId::Uuid(uuid),
-        style: "minecraft:test".into(),
+        style: sunrise_core::identifier::Identifier::parse("minecraft:test").unwrap(),
         color: Some(-16_777_216 | color),
         target: WaypointTarget::Block(position),
     });
@@ -336,7 +336,7 @@ fn block_waypoints_use_live_non_player_eyes_within_manhattan_three() {
                 // Re-place the local player in the replacement level (enter_remote_dimension clears it
                 // until the server's PlayerPosition packet arrives) so the locator bar has a camera entity.
                 let new_pos = Vec3::new(100.0, 64.0, 0.0);
-                game.player = Some(PlayerMotion::new(game.motion, new_pos).unwrap());
+                game.player = Some(PlayerMotion::new(game.motion, new_pos));
                 game.previous_position = new_pos;
                 track_block(game, 3, 3, [122, 64, 6]);
                 assert_eq!(

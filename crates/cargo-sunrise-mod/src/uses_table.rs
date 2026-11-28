@@ -12,23 +12,15 @@ use sunrise_native_build::game_uses;
 
 /// The surface export a fetched SDK holds. A schema this tool does not read names the two ways
 /// out: a build this tool reads, or the tool that SDK's release ships.
-pub(crate) fn surface_of(sdk: &PinnedSdk) -> Result<Surface, String> {
-    read_surface(sdk)?.map_err(|e| match e {
+pub(crate) fn surface_of(sdk: &PinnedSdk) -> Result<&Surface, String> {
+    sdk.surface.get().map_err(|e| match e {
         SurfaceError::Schema(_) => format!(
             "{}: {e}. Pin the mod to a build this tool reads with `cargo sunrise-mod pin <build>`, or use the tool in sdk-{}",
-            sdk.surface.display(),
-            sdk.build
+            sdk.surface_path().display(),
+            sdk.build()
         ),
-        _ => format!("{}: {e}", sdk.surface.display()),
+        _ => format!("{}: {e}", sdk.surface_path().display()),
     })
-}
-
-/// A fetched SDK's surface export as this tool reads it: the outer error is the file's, the inner
-/// one the surface's.
-pub(crate) fn read_surface(sdk: &PinnedSdk) -> Result<Result<Surface, SurfaceError>, String> {
-    let bytes =
-        std::fs::read(&sdk.surface).map_err(|e| format!("{}: {e}", sdk.surface.display()))?;
-    Ok(Surface::read(&bytes))
 }
 
 /// What the scan of a mod folder found.
@@ -104,24 +96,24 @@ pub(crate) fn table(
     manifest: &Manifest,
     sdk: &PinnedSdk,
 ) -> Result<UsesTable, String> {
-    let mut table = uses.table(sdk.build.clone());
+    let mut table = uses.table(sdk.build().to_owned());
     if game_uses::declared(manifest) {
         let staging = tempfile::tempdir().map_err(|e| format!("build data: {e}"))?;
         crate::sdk_fetch::release_data(
             &crate::sdk_fetch::Base::from_env(),
             &crate::sdk_fetch::keys(),
-            &sdk.build,
+            sdk.build(),
             staging.path(),
             true,
         )?;
         let data = staging
             .path()
-            .join(&sdk.build)
+            .join(sdk.build())
             .join(crate::sdk_fetch::BUILD_DATA);
         // An item the pinned build lacks is refused by the build, by name, and one its build data
         // cannot fingerprint is never shown unchanged; the list records the rest.
         table.entries.extend(
-            game_uses::entries(manifest, &data, &sdk.build)?
+            game_uses::entries(manifest, &data, sdk.build())?
                 .into_iter()
                 .filter_map(|(id, now)| now.into_entry(id)),
         );
@@ -134,7 +126,7 @@ pub(crate) fn table(
 
 /// `Greeter uses 14 items of the API (6 hooks, 5 methods, 3 types). Made for nightly-….`, then
 /// what the author should know about how it builds each struct.
-pub(crate) fn summary(name: &str, uses: &Uses, sdk: &PinnedSdk) -> String {
+pub(crate) fn summary(name: &str, uses: &Uses, sdk_name: &str) -> String {
     let mut kinds: BTreeMap<&str, usize> = BTreeMap::new();
     for used in &uses.items {
         *kinds.entry(kind_word(&used.entry.id)).or_default() += 1;
@@ -148,7 +140,7 @@ pub(crate) fn summary(name: &str, uses: &Uses, sdk: &PinnedSdk) -> String {
         uses.items.len(),
         plural("item", uses.items.len()),
         counts.join(", "),
-        sdk.name
+        sdk_name
     );
     for note in uses.items.iter().filter_map(|used| used.note.as_deref()) {
         text.push_str(note);
@@ -323,14 +315,8 @@ mod tests {
                 used("type:ItemStack"),
             ],
         };
-        let sdk = PinnedSdk {
-            build: "a".repeat(40),
-            name: "nightly-2026-11-13 (afe471c)".into(),
-            dir: "sdk".into(),
-            surface: "sdk/surface.json".into(),
-        };
         assert_eq!(
-            summary("Greeter", &uses, &sdk),
+            summary("Greeter", &uses, "nightly-2026-11-13 (afe471c)"),
             "Greeter uses 4 items of the API (2 hooks, 1 method, 1 type). Made for nightly-2026-11-13 (afe471c).\n"
         );
         assert_eq!(

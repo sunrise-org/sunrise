@@ -62,7 +62,7 @@ pub(crate) fn with_game(test: impl FnOnce(&mut sunrise_gameplay::game::ServerGam
             .add_empty_chunk(ChunkPos::new(x, z))
             .unwrap();
     }
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)));
     game.creative = true;
     assert!(game.run_command("fill 0 199 0 31 199 31 stone"));
     assert!(game.run_command("summon pig 13.5 200 2.5 {UUID:[I;114,0,0,99],NoAI:1b,NoGravity:1b}"));

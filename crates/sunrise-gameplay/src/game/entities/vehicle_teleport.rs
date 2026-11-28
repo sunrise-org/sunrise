@@ -414,6 +414,7 @@ impl ServerGame<'_> {
             let cooldown = game
                 .server
                 .portals
+                .level
                 .entities
                 .get(&id)
                 .map_or(0, |s| s.cooldown);

@@ -1,0 +1,2 @@
+sunrise-gameplay game::server_side::creatures_server::vehicle_loot_tests::a_boat_mount_reaches_the_death_loot_vehicle_predicate lib daily child-process
+sunrise-gameplay game::server_side::creatures_server::vehicle_loot_tests::the_target_projection_is_the_entity_the_roll_reads lib daily child-process

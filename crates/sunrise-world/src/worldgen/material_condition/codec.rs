@@ -5,6 +5,7 @@ use crate::worldgen::{
 };
 use serde_json::{Value, value::RawValue};
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
@@ -65,27 +66,19 @@ impl MaterialConditionRegistry {
     pub fn from_json(definitions: &BTreeMap<String, String>) -> Result<Self, DecodeError> {
         Self::load(definitions, None)
     }
-    /// Bind resolved biome tags, such as `TagDefinitions::build().tags`.
+    /// Bind resolved biome tags, such as the `tags` from `TagDefinitions::bind`.
     /// Names and memberships remain immutable for the lifetime of this registry.
     pub fn from_json_with_biome_tags(
         definitions: &BTreeMap<String, String>,
         biomes: &BTreeSet<String>,
         tags: &BTreeMap<String, Vec<String>>,
     ) -> Result<Self, DecodeError> {
-        if biomes.len() > 8192 || tags.len() > 8192 {
-            return Err(DecodeError::Field("material biome catalog size"));
-        }
         let names: BTreeSet<_> = biomes
             .iter()
             .map(|name| identifier(name))
             .collect::<Result<_, _>>()?;
         let mut values = BTreeMap::new();
-        let mut count = 0usize;
         for (name, members) in tags {
-            count = count.saturating_add(members.len());
-            if count > 65536 {
-                return Err(DecodeError::Field("material biome tag size"));
-            }
             let mut bound = Vec::with_capacity(members.len());
             for member in members {
                 let member = identifier(member)?;
@@ -131,14 +124,16 @@ impl MaterialConditionRegistry {
             loader.resolve(&name, 0)?;
         }
         Ok(Self {
-            values: loader.values,
+            values: loader.values.into_owned(),
             biomes: loader.biomes,
         })
     }
     pub fn decode(&self, json: &str) -> Result<MaterialCondition, DecodeError> {
         let raw: Box<RawValue> = serde_json::from_str(json)?;
+        // Borrowed: an inline condition only reads the accepted registry, and a decode has no
+        // definitions of its own to resolve into it.
         Loader {
-            values: self.values.clone(),
+            values: Cow::Borrowed(&self.values),
             biomes: self.biomes.clone(),
             ..Loader::default()
         }
@@ -164,14 +159,14 @@ impl MaterialConditionRegistry {
     }
 }
 #[derive(Default)]
-struct Loader {
+struct Loader<'a> {
     definitions: BTreeMap<String, Box<RawValue>>,
-    values: BTreeMap<String, Arc<MaterialCondition>>,
+    values: Cow<'a, BTreeMap<String, Arc<MaterialCondition>>>,
     active: BTreeSet<String>,
     biomes: Option<Arc<BiomeCatalog>>,
     nodes: usize,
 }
-impl Loader {
+impl Loader<'_> {
     fn resolve(&mut self, name: &str, depth: usize) -> Result<Arc<MaterialCondition>, DecodeError> {
         if depth >= 256 {
             return Err(DecodeError::Field("material condition depth"));
@@ -192,7 +187,7 @@ impl Loader {
         }
         let value = Arc::new(self.node(&json, depth + 1)?);
         self.active.remove(name);
-        self.values.insert(name.to_owned(), value.clone());
+        self.values.to_mut().insert(name.to_owned(), value.clone());
         Ok(value)
     }
     fn node(&mut self, raw: &RawValue, depth: usize) -> Result<MaterialCondition, DecodeError> {
@@ -468,5 +463,99 @@ mod tests {
         duplicate.insert("minecraft:z".to_owned(), r#"{"type":"steep"}"#.to_owned());
         assert!(MaterialConditionRegistry::from_json(&duplicate).is_err());
         assert_eq!(reference.to_json().unwrap(), r#""minecraft:a""#);
+    }
+}
+
+#[cfg(test)]
+mod large_catalog_tests {
+    use super::*;
+    use crate::worldgen::{
+        anchor::WorldGenerationContext,
+        material_condition::{MaterialConditions, MaterialRuleError, MaterialSurfaceQueries},
+    };
+    use std::sync::Arc;
+    use sunrise_core::{
+        position::BlockPos,
+        random::{LegacyRandom, RandomSource},
+    };
+
+    /// A surface whose survey names one fixed biome, for member/non-member checks.
+    struct BiomeSurface(&'static str);
+    impl MaterialSurfaceQueries for BiomeSurface {
+        fn surface_depth(&mut self, _: i32, _: i32) -> i32 {
+            0
+        }
+        fn surface_secondary(&mut self, _: i32, _: i32) -> f64 {
+            0.0
+        }
+        fn biome(&mut self, _: BlockPos) -> Result<Option<Arc<str>>, MaterialRuleError> {
+            Ok(Some(Arc::from(self.0)))
+        }
+    }
+
+    /// Compiles `condition` and asks it at one biome.
+    fn matches(condition: MaterialCondition, biome: &'static str) -> bool {
+        let mut random = LegacyRandom::new(0);
+        let mut worker = MaterialConditions::<LegacyRandom, _>::new(
+            WorldGenerationContext::new(-64, 384, 63),
+            random.fork_positional(),
+            BiomeSurface(biome),
+        );
+        let index = worker.add(condition).expect("the condition compiles");
+        worker.test(index).expect("the condition evaluates")
+    }
+
+    #[test]
+    fn a_large_catalog_resolves_a_high_numbered_tag_exactly() {
+        let mut biomes = BTreeSet::new();
+        let mut tags = BTreeMap::new();
+        for i in 0..8200 {
+            biomes.insert(format!("test:biome_{i}"));
+            let members = (0..9)
+                .map(|k| format!("test:biome_{}", (i + k) % 8200))
+                .collect();
+            tags.insert(format!("test:tag_{i}"), members);
+        }
+        // 8,200 tags of 9 members each is 73,800 memberships, above the old
+        // 65,536 catalogue limit; the tag itself stays small (9 members).
+        let defs = BTreeMap::from([(
+            "test:cond".to_owned(),
+            r##"{"type":"minecraft:biome","biome_is":"#test:tag_8199"}"##.to_owned(),
+        )]);
+        let reg = MaterialConditionRegistry::from_json_with_biome_tags(&defs, &biomes, &tags)
+            .expect("catalog above 8192 biomes/tags and 65536 memberships should bind");
+        let condition = reg.get("test:cond").unwrap().value().clone();
+        assert!(
+            matches!(condition, MaterialCondition::BiomeTag(_)),
+            "a named tag decodes as a tag, not an expanded list"
+        );
+        // `test:tag_8199` is `test:biome_8199` plus `test:biome_0..=7`.
+        assert!(matches(condition.clone(), "test:biome_8199"));
+        assert!(matches(condition.clone(), "test:biome_0"));
+        assert!(!matches(condition.clone(), "test:biome_8"));
+        assert!(!matches(condition, "test:biome_5000"));
+    }
+
+    #[test]
+    fn a_named_tag_above_8192_members_compiles() {
+        let mut biomes = BTreeSet::new();
+        for i in 0..8193 {
+            biomes.insert(format!("test:biome_{i}"));
+        }
+        // One tag straight past the old per-set member limit; vanilla's
+        // `HolderSet` has no such bound, and the catalog accepts it.
+        let tags = BTreeMap::from([(
+            "test:big".to_owned(),
+            biomes.iter().cloned().collect::<Vec<_>>(),
+        )]);
+        let defs = BTreeMap::from([(
+            "test:cond".to_owned(),
+            r##"{"type":"minecraft:biome","biome_is":"#test:big"}"##.to_owned(),
+        )]);
+        let reg = MaterialConditionRegistry::from_json_with_biome_tags(&defs, &biomes, &tags)
+            .expect("a bound tag may have more than 8192 members");
+        let condition = reg.get("test:cond").unwrap().value().clone();
+        assert!(matches(condition.clone(), "test:biome_8192"));
+        assert!(!matches(condition, "test:other"));
     }
 }

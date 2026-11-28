@@ -47,8 +47,10 @@ fn click_sign(
     // North of the sign, looking south at its front
     // (`SignBlockEntity.getSlotPlayerIsFacing`): a wall hanging sign facing
     // north and a ceiling one at rotation 8 both show it towards -Z.
-    game.player =
-        Some(sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(0.5, 70.0, -0.5)).ok()?);
+    game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+        game.motion,
+        Vec3::new(0.5, 70.0, -0.5),
+    ));
     game.yaw = 0.0;
     game.pitch = 0.0;
     let registry = &game.pack.assets.registry;

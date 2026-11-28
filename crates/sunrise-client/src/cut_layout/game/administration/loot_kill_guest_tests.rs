@@ -71,7 +71,7 @@ fn game(
             .unwrap();
     }
     assert!(game.run_command("fill 0 99 0 31 99 15 stone"));
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 100.0, 6.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 100.0, 6.5)));
     let net = NetConfig {
         announce: false,
         ..NetConfig::lan(0, "h038-test".into(), 2)

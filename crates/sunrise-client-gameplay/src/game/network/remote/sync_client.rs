@@ -593,7 +593,7 @@ impl crate::game::ClientGame<'_> {
                 player.velocity = delta;
             }
             None => {
-                let mut player = PlayerMotion::new(self.common.motion, position)?;
+                let mut player = PlayerMotion::new(self.common.motion, position);
                 // The id the server gave, for the hooks the motion fires.
                 player.entity_id = self.own_entity_id();
                 // Entity.noPhysics starts false until Player.tick() resolves PlayerInfo;
@@ -615,9 +615,7 @@ impl crate::game::ClientGame<'_> {
             }
         }
         entity_section_steps::player_teleport(self, had_player, current, position);
-        if !self.client.replay.playing() {
-            self.common.previous_position = position;
-        }
+        self.common.previous_position = position;
         self.common.yaw = yaw;
         self.common.pitch = pitch;
         // setValuesFromPositionPacket: setOldPosAndRot gives xRotO the same

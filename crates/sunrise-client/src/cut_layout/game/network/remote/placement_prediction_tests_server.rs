@@ -15,7 +15,7 @@ fn an_active_vault_ends_a_held_item_s_click_on_the_client() {
         peer.set_read_timeout(Some(std::time::Duration::from_millis(50)))
             .unwrap();
         game.set_local_mode(sunrise_command::args::GameMode::Survival);
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 3.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 3.5)));
         game.world
             .chunks
             .insert((0, 0), Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)));

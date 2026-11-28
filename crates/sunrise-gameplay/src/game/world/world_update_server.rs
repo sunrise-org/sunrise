@@ -1,7 +1,6 @@
 use super::*;
 
 impl crate::game::ServerGame<'_> {
-    pub(in crate::game) fn server_clear_lod(&mut self) {}
     pub fn server_update_world(&mut self) {
         if let Err(error) = self.server_update_world_with_eviction(false) {
             log::warn!("Sunrise: failed to save unloaded chunks or entities: {error}");
@@ -140,8 +139,8 @@ impl crate::game::ServerGame<'_> {
         // `extra` finishes chunks through radius + 1, even with no players.
         self.server.streaming.extra.extend(
             self.server
+                .chunk_ticking
                 .tickets
-                .0
                 .spawn_areas()
                 .map(|(center, radius)| (center, radius - 1)),
         );
@@ -151,7 +150,7 @@ impl crate::game::ServerGame<'_> {
                     .lan
                     .configuration_tasks
                     .loading_spawns(dim.id())
-                    .filter(|&center| !self.server.tickets.0.holds_player_spawn(center))
+                    .filter(|&center| !self.server.chunk_ticking.tickets.holds_player_spawn(center))
                     .map(|center| (center, sunrise_sim::ticket_levels::PLAYER_SPAWN_RADIUS - 1)),
             );
         }

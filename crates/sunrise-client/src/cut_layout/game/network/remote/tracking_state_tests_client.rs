@@ -58,7 +58,7 @@ fn tracking_emitters_follow_the_packet_target() {
     let remote = game.client.remote.as_mut().unwrap();
     remote.entity_id = 7;
     remote.logged_in = true;
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.0, 64.0, 0.0)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.0, 64.0, 0.0)));
     game.client.particles.0.seed_randoms(42, 43, 44);
 
     let check =

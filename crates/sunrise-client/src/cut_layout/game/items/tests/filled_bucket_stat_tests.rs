@@ -17,13 +17,10 @@ fn cauldron_game<'a>(
 ) -> sunrise_gameplay::game::ServerGame<'a> {
     let mut game = server_game(resources);
     game.creative = false;
-    game.player = Some(
-        sunrise_sim::motion::PlayerMotion::new(
-            game.motion,
-            sunrise_core::geometry::Vec3::new(2.5, 4.0, 2.5),
-        )
-        .unwrap(),
-    );
+    game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+        game.motion,
+        sunrise_core::geometry::Vec3::new(2.5, 4.0, 2.5),
+    ));
     let block = game
         .pack
         .assets

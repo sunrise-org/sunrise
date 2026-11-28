@@ -57,10 +57,10 @@ fn a_rider_sits_at_the_vehicle_types_own_passenger_attachment() {
             return;
         };
         let at = [1.5, 64.0, -2.5];
-        game.player = Some(
-            PlayerMotion::new(game.motion, Vec3::new(at[0], at[1], at[2]))
-                .expect("a player to ride"),
-        );
+        game.player = Some(PlayerMotion::new(
+            game.motion,
+            Vec3::new(at[0], at[1], at[2]),
+        ));
         for (kind, y, z) in SEATS {
             mob_at(&mut game, kind, 1, at);
             game.riding = Some(1);
@@ -152,9 +152,7 @@ fn a_marker_takes_no_rider() {
             "vanilla's `ERROR_MOUNT_FAILED`"
         );
         assert_eq!(game.riding, None, "the player stays off the marker");
-        game.player = Some(
-            PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).expect("a player to ride"),
-        );
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)));
         game.ride_mount(Target::Player, Target::Other(10))
             .expect("a display takes a rider");
         assert_eq!(game.riding, Some(10));

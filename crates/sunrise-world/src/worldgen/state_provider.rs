@@ -97,9 +97,6 @@ impl<'r> StateProviderBindings<'r> {
         }
         let mut bound_tags = BTreeMap::new();
         for (name, entries) in tags {
-            if entries.len() > MAX_TAG_BLOCKS {
-                return Err(DecodeError::Field("provider tag size"));
-            }
             let values = entries
                 .iter()
                 .map(|name| {
@@ -548,11 +545,6 @@ impl BlockStateProvider {
     }
 }
 
-/// Blocks a bound block tag may list (8,192 before content mods, vanilla's
-/// tags fit well within it): content mods' blocks join the shared tags
-/// (`mineable/pickaxe` takes every stone block of a pack).
-pub(crate) const MAX_TAG_BLOCKS: usize = 1 << 20;
-
 /// Bind the pinned registry's full-axis/full-facing/horizontal-facing property
 /// families. A five-way facing or two-axis property is a different property and
 /// is intentionally left unchanged. Unrelated properties retain their values.
@@ -671,6 +663,24 @@ mod tests {
             ),
         ]))
         .unwrap()
+    }
+
+    /// A resolved block tag keeps every member in order: `TagLoader.tryBuildTag`
+    /// collects ordered unique members and `HolderSetCodec.lookupTag` returns the
+    /// registered named set without a size ceiling (a content mod joins its
+    /// blocks to a shared tag such as `mineable/pickaxe`).
+    #[test]
+    fn a_resolved_block_tag_has_no_member_ceiling() {
+        let registry = registry();
+        let members = vec!["minecraft:stone".to_owned(); (1 << 20) + 1];
+        let tags = BTreeMap::from([("minecraft:huge".to_owned(), members)]);
+        let bindings = StateProviderBindings::new(&registry, BTreeSet::new(), &tags).unwrap();
+        assert_eq!(bindings.tags["minecraft:huge"].len(), (1 << 20) + 1);
+        assert!(
+            bindings.tags["minecraft:huge"]
+                .iter()
+                .all(|state| state.0 == 1)
+        );
     }
 
     /// Rotations follow the direction (down, up, north, south, west, east):

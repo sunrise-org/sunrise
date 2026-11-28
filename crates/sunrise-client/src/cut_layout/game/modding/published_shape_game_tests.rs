@@ -54,10 +54,10 @@ pub(super) fn with_bus(test: impl FnOnce(&mut sunrise_gameplay::game::ServerGame
             game.world
                 .chunks
                 .insert((0, 0), Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)));
-            game.player = Some(
-                sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(8.5, 70.0, 8.5))
-                    .unwrap(),
-            );
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                Vec3::new(8.5, 70.0, 8.5),
+            ));
             game.update_chunk_tickets();
             test(game);
         });

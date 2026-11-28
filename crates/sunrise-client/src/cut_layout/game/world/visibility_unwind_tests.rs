@@ -51,7 +51,7 @@ pub(crate) fn with_save_game(
             .chunks
             .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
         game.world.modified.insert((0, 0));
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.0, 64.0, 2.0)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.0, 64.0, 2.0)));
         game.level.player_uuid = Some([0, 0, 0, 99]);
         test(game);
     });

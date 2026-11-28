@@ -210,7 +210,70 @@ impl LiveSectionHost {
     }
 }
 
-mod_api::impl_host_areas!(LiveSectionHost, except(config, datafix));
+mod_api::impl_host_areas!(LiveSectionHost, except(config, datafix, keys));
+// The registries are not read while the entity's world view is borrowed: every read of the
+// area answers its typed refusal instead of the area default's panic.
+impl mod_api::prelude::KeysHost for LiveSectionHost {
+    fn biome(&self, _: &str) -> Result<mod_api::BiomeView<'_>, mod_api::BiomeKeyError> {
+        Err(mod_api::BiomeKeyError::Unavailable)
+    }
+
+    fn game_event_key(&self, _: &str) -> Option<mod_api::GameEventKey> {
+        None
+    }
+
+    fn block_key(&self, _: &str) -> Option<mod_api::BlockKey> {
+        None
+    }
+
+    fn effect_key(&self, _: &str) -> Option<mod_api::EffectKey> {
+        None
+    }
+
+    fn registry_entry(&self, _: &str, _: &str) -> Option<mod_api::RegistryEntry> {
+        None
+    }
+
+    fn visit_registry_entries(
+        &self,
+        _: &str,
+        _: &mut dyn FnMut(&str) -> core::ops::ControlFlow<()>,
+    ) -> Result<core::ops::ControlFlow<()>, mod_api::RegistryReadError> {
+        Err(mod_api::RegistryReadError::Unavailable)
+    }
+
+    fn registry_entry_in_tag(&self, _: &mod_api::RegistryEntry, _: &str) -> Option<bool> {
+        None
+    }
+
+    fn block_keys(&self) -> Vec<mod_api::BlockKey> {
+        Vec::new()
+    }
+
+    fn item_keys(&self) -> Vec<mod_api::ItemKey> {
+        Vec::new()
+    }
+
+    fn entity_type_keys(&self) -> Vec<mod_api::EntityTypeKey> {
+        Vec::new()
+    }
+
+    fn menu_keys(&self) -> Vec<mod_api::MenuKey> {
+        Vec::new()
+    }
+
+    fn enchantment_keys(&self) -> Vec<mod_api::EnchantmentKey> {
+        Vec::new()
+    }
+
+    fn registry_protocol_id(
+        &self,
+        _: &mod_api::Identifier,
+        _: &mod_api::Identifier,
+    ) -> Option<i32> {
+        None
+    }
+}
 impl mod_api::prelude::ConfigHost for LiveSectionHost {
     fn config_dir(&self) -> &std::path::Path {
         &self.config_root

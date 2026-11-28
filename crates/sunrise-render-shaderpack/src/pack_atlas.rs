@@ -1055,7 +1055,7 @@ impl PackAtlas {
              {cell}\
              hz_scale = vec2({:?}, {:?}) * {side};\n    \
              hz_Vertex = vec4(floor(hz_v_pos * 32768.0 + 0.03125) / 32768.0 + hz_origin.xyz, 1.0);\n    \
-             hz_uv_scale = hz_origin.w > 0.0 ? uintBitsToFloat(floatBitsToUint(hz_origin.w) & 0xff800000u) : fract(abs(hz_origin.w));\n    \
+             hz_uv_scale = uintBitsToFloat(floatBitsToUint(hz_origin.w) & 0xff800000u);\n    \
              hz_mid = vec2(0.5);\n    \
              hz_MultiTexCoord0 = vec4((hz_cell + clamp(vec2(hz_v_uv) * hz_uv_scale, 0.0, 1.0)) * hz_scale, 0.0, 1.0);\n    \
              hz_MultiTexCoord1 = vec4(float(hz_v_light.y), float(hz_v_light.x), 0.0, 1.0);\n    \
@@ -1099,11 +1099,9 @@ impl PackAtlas {
         };
         let attributes = [
             // section_instance stores 1 - visibility in a positive origin's mantissa.
-            // Negative origins encode a distant-terrain handover, fully visible here
-            // just as terrain.wgsl's instance_visibility treats them.
             (
                 "mc_chunkFade",
-                "(hz_origin.w > 0.0 ? 1.0 - float(floatBitsToUint(hz_origin.w) & 0x7fffffu) / 8388608.0 : 1.0)",
+                "(1.0 - float(floatBitsToUint(hz_origin.w) & 0x7fffffu) / 8388608.0)",
             ),
             ("mc_Entity", entity),
             ("at_midBlock", mid_block),

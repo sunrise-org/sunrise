@@ -380,13 +380,27 @@ impl Macros {
     /// ([`resolve_defined`]), as naga's preprocessor (pp-rs 0.2.1) read it. Otherwise
     /// [`Macros::try_expand`].
     pub fn expand_condition(&self, text: &str) -> Result<String, String> {
+        self.expand_condition_noting(text, &mut |_| {})
+    }
+
+    /// [`Macros::expand_condition`], calling `lookup` with each name a `defined` the expansion
+    /// makes reads ([`crate::condition::eval_condition_noting`]).
+    pub fn expand_condition_noting(
+        &self,
+        text: &str,
+        lookup: &mut dyn FnMut(&str),
+    ) -> Result<String, String> {
         if !self.arity {
             return self.try_expand(text);
         }
         self.condition.set(true);
         let expanded = self.expand(text);
         self.condition.set(false);
-        resolve_defined(&expanded, |name| self.is_defined(name))
+        let lookup = RefCell::new(lookup);
+        resolve_defined(&expanded, |name| {
+            (lookup.borrow_mut())(name);
+            self.is_defined(name)
+        })
     }
 
     /// Expand the tokens, keeping their sources, and report whether a call is still open.

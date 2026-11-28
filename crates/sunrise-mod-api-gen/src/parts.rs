@@ -1,6 +1,7 @@
 //! Discover ordinary Parts modules, without joining their runtime bodies.
 mod installation;
-use std::{fs, path::Path};
+use crate::index::Index;
+use std::{collections::BTreeMap, path::Path};
 use syn::{Item, Visibility};
 
 pub(crate) const DIRECTORY: &str = "crates/sunrise-mod-vocab/src/parts";
@@ -32,17 +33,74 @@ fn reexport(items: &[Item], module: &str) -> String {
     format!("#[allow(unused_imports)] {scope} use {module}::*;\n")
 }
 
-pub(crate) fn source(root: &Path) -> Result<String, String> {
+pub(crate) struct Collected {
+    pub(crate) prefix: String,
+    fixtures: String,
+    pub(crate) trait_exports: String,
+    pub(crate) has_shared: bool,
+}
+
+impl Collected {
+    pub(crate) fn finish(
+        mut self,
+        root: &Path,
+        index: &mut Index<'_>,
+        inputs: &mut crate::Inputs,
+    ) -> Result<String, String> {
+        if self.has_shared {
+            self.prefix
+                .push_str(&installation::source_with_index(root, index, inputs)?);
+        }
+        self.prefix.push_str(&format!(
+            "/// Shared Parts fixtures for engine tests.\n#[cfg(any(test, feature = \"testing\"))]\npub mod tests {{\n{}}}\n",
+            self.fixtures
+        ));
+        Ok(self.prefix)
+    }
+
+    fn finish_without_installation(mut self) -> String {
+        self.prefix.push_str(&format!(
+            "/// Shared Parts fixtures for engine tests.\n#[cfg(any(test, feature = \"testing\"))]\npub mod tests {{\n{}}}\n",
+            self.fixtures
+        ));
+        self.prefix
+    }
+}
+
+fn format_trait_exports(unions: &[Vec<String>; 2]) -> String {
+    let names: Vec<&str> = unions
+        .iter()
+        .flat_map(|members| {
+            members
+                .iter()
+                .map(|member| member.rsplit("::").next().unwrap())
+        })
+        .collect();
+    if names.is_empty() {
+        String::new()
+    } else {
+        format!("pub use crate::parts::{{{}}};\n", names.join(","))
+    }
+}
+
+pub(crate) fn collect_tracked(
+    root: &Path,
+    inputs: &mut crate::Inputs,
+) -> Result<Collected, String> {
     let dir = root.join(DIRECTORY);
     let mut modules = String::new();
     let mut fixtures = String::new();
     let mut unions = [Vec::new(), Vec::new()];
-    for kind in sunrise_game_discovery::module_files(&dir)? {
+    let mut has_shared = false;
+    for kind in inputs.module_files(&dir)? {
+        if kind == "shared" {
+            has_shared = true;
+        }
         let path = dir.join(format!("{kind}.rs"));
-        let source = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        let source = inputs.read_to_string(&path).map_err(|e| e.to_string())?;
         let file = syn::parse_file(&source).map_err(|e| format!("{}: {e}", path.display()))?;
-        let path = path.to_string_lossy();
-        modules.push_str(&format!("#[path = {path:?}] mod {kind};\n"));
+        let path_str = path.to_string_lossy();
+        modules.push_str(&format!("#[path = {path_str:?}] mod {kind};\n"));
         modules.push_str(&reexport(&file.items, &kind));
         for item in &file.items {
             if let Item::Trait(item) = item {
@@ -64,7 +122,11 @@ pub(crate) fn source(root: &Path) -> Result<String, String> {
             }
         }
     }
-    let mut template = fs::read_to_string(dir.join("unions.rs.in")).map_err(|e| e.to_string())?;
+    let unions_path = dir.join("unions.rs.in");
+    let mut template = inputs
+        .read_to_string(&unions_path)
+        .map_err(|e| e.to_string())?;
+    let trait_exports = format_trait_exports(&unions);
     for (owner, members) in ["Registrar", "CapabilityProviders"].iter().zip(unions) {
         let declaration = format!("pub trait {owner} {{}}");
         let bounds = if members.is_empty() {
@@ -76,24 +138,56 @@ pub(crate) fn source(root: &Path) -> Result<String, String> {
     }
     syn::parse_file(&template).map_err(|e| e.to_string())?;
     modules.push_str(&template);
-    modules.push_str(&installation::source(root)?);
-    modules.push_str(&format!(
-        "/// Shared Parts fixtures for engine tests.\n#[cfg(any(test, feature = \"testing\"))]\npub mod tests {{\n{fixtures}}}\n"
-    ));
-    Ok(modules)
+    Ok(Collected {
+        prefix: modules,
+        fixtures,
+        trait_exports,
+        has_shared,
+    })
+}
+
+pub(crate) fn source_tracked(root: &Path, inputs: &mut crate::Inputs) -> Result<String, String> {
+    let collected = collect_tracked(root, inputs)?;
+    if !collected.has_shared {
+        return Ok(collected.finish_without_installation());
+    }
+    let mut expanded_map = if root.join(crate::exports::DIRECTORY).is_dir() {
+        crate::exports::sources_tracked(root, None, Some(&collected.trait_exports), inputs)?
+    } else {
+        BTreeMap::new()
+    };
+    expanded_map.insert(OUTPUT.to_owned(), collected.prefix.clone());
+    let included = [
+        (crate::host::AREAS_OUTPUT, ""),
+        ("mod_api_generated.rs", ""),
+        ("mod_api_generated_host.rs", ""),
+        (crate::capability_keys::OUTPUT, ""),
+    ];
+    let mut index = Index::new(root, &included, crate::index::CRATES)
+        .expanding(|_, source| crate::exports::expand_with(source, &expanded_map));
+    let output = collected.finish(root, &mut index, inputs)?;
+    inputs.extend_paths(index.read.borrow().iter().cloned());
+    Ok(output)
+}
+
+pub(crate) fn source(root: &Path) -> Result<String, String> {
+    source_tracked(root, &mut crate::Inputs::default())
 }
 
 /// Discover concrete authoring modules independently from the vocabulary's area traits.
-pub(crate) fn registration_source(root: &Path) -> Result<String, String> {
+pub(crate) fn registration_source(
+    root: &Path,
+    inputs: &mut crate::Inputs,
+) -> Result<String, String> {
     let dir = root.join("crates/sunrise-mod-api/src/parts");
     if !dir.exists() {
         return Ok(String::new());
     }
     let mut modules = String::new();
     let mut fixtures = String::new();
-    for kind in sunrise_game_discovery::module_files(&dir)? {
+    for kind in inputs.module_files(&dir)? {
         let path = dir.join(format!("{kind}.rs"));
-        let source = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        let source = inputs.read_to_string(&path).map_err(|e| e.to_string())?;
         let file = syn::parse_file(&source).map_err(|e| format!("{}: {e}", path.display()))?;
         modules.push_str(&format!(
             "#[path = {:?}] mod {kind};\n",
@@ -111,9 +205,9 @@ pub(crate) fn registration_source(root: &Path) -> Result<String, String> {
                 // Account for its discovered items when deciding re-export visibility.
                 let fragments = dir.join(format!("{kind}_fixtures"));
                 if fragments.is_dir() {
-                    for name in sunrise_game_discovery::module_files(&fragments)? {
+                    for name in inputs.module_files(&fragments)? {
                         let path = fragments.join(format!("{name}.rs"));
-                        let source = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+                        let source = inputs.read_to_string(&path).map_err(|e| e.to_string())?;
                         let file = syn::parse_file(&source)
                             .map_err(|e| format!("{}: {e}", path.display()))?;
                         items.extend(file.items);
@@ -130,27 +224,31 @@ pub(crate) fn registration_source(root: &Path) -> Result<String, String> {
 }
 
 /// Export just the discovered area traits; runtime-only Parts remain private.
-pub(crate) fn trait_exports(root: &Path) -> Result<String, String> {
-    let file = syn::parse_file(&source(root)?).map_err(|e| e.to_string())?;
-    let mut names = Vec::new();
-    for item in file.items {
-        if let Item::Trait(item) = item {
-            for bound in item.supertraits {
-                if let syn::TypeParamBound::Trait(bound) = bound {
-                    names.push(bound.path.segments.last().unwrap().ident.to_string());
+pub(crate) fn trait_exports(root: &Path, inputs: &mut crate::Inputs) -> Result<String, String> {
+    let dir = root.join(DIRECTORY);
+    let mut unions = [Vec::new(), Vec::new()];
+    for kind in inputs.module_files(&dir)? {
+        let path = dir.join(format!("{kind}.rs"));
+        let source = inputs.read_to_string(&path).map_err(|e| e.to_string())?;
+        let file = syn::parse_file(&source).map_err(|e| format!("{}: {e}", path.display()))?;
+        for item in &file.items {
+            if let Item::Trait(item) = item {
+                let name = item.ident.to_string();
+                for (index, suffix) in ["Registrar", "CapabilityProviders"].iter().enumerate() {
+                    if name.ends_with(suffix) {
+                        unions[index].push(format!("crate::parts::{name}"));
+                    }
                 }
             }
         }
     }
-    if names.is_empty() {
-        return Ok(String::new());
-    }
-    Ok(format!("pub use crate::parts::{{{}}};\n", names.join(",")))
+    Ok(format_trait_exports(&unions))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     #[ignore = "daily"]
@@ -197,7 +295,11 @@ mod tests {
         fs::write(&wrapper, shared).unwrap();
         let compile_and_run = || {
             fs::write(root.join("generated.rs"), source(&root).unwrap()).unwrap();
-            fs::write(root.join("exported.rs"), trait_exports(&root).unwrap()).unwrap();
+            fs::write(
+                root.join("exported.rs"),
+                trait_exports(&root, &mut crate::Inputs::default()).unwrap(),
+            )
+            .unwrap();
             let binary = root.join(format!("union-test{}", std::env::consts::EXE_SUFFIX));
             let output = std::process::Command::new("rustc")
                 .args(["--edition=2024", "--test"])
@@ -279,6 +381,7 @@ mod tests {
         assert!(!removed.contains("alpha"));
         fs::remove_dir_all(root).unwrap();
     }
+
     #[test]
     fn discovered_fixture_items_keep_the_shared_namespace() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
@@ -293,7 +396,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            !registration_source(&root)
+            !registration_source(&root, &mut crate::Inputs::default())
                 .unwrap()
                 .contains("super::sample::tests")
         );
@@ -302,7 +405,7 @@ mod tests {
             "pub fn fixture() {}\n",
         )
         .unwrap();
-        let generated = registration_source(&root).unwrap();
+        let generated = registration_source(&root, &mut crate::Inputs::default()).unwrap();
         syn::parse_file(&generated).unwrap();
         assert!(generated.contains("pub use super::sample::tests::*;"));
         fs::remove_dir_all(root).unwrap();

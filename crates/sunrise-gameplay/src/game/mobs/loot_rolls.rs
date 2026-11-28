@@ -261,11 +261,8 @@ impl ServerGame<'_> {
                 .iter()
                 .find(|mob| mob.id == id)
                 .map(|mob| {
-                    let vehicle = mob
-                        .extra
-                        .mount
-                        .and_then(|mount| self.common.mobs.iter().find(|other| other.id == mount))
-                        .map(|other| sunrise_world::loot::LootEntity::new(&other.kind.id));
+                    // EntityPredicate's `vehicle`: the entity it rides, as at its death.
+                    let vehicle = mob.extra.mount.and_then(|id| self.vehicle_loot_entity(id));
                     sunrise_sim::mobs::drops::loot_entity_with_variants(
                         mob,
                         vehicle,

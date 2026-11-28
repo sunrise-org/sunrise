@@ -101,9 +101,10 @@ fn a_test_instance_from_an_enabled_world_pack_is_found_and_runs() {
                 .insert((cx, cz), Arc::new(Chunk::empty(cx, cz)));
         }
     }
-    game.player = Some(
-        sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(24.5, 100.0, 8.5)).unwrap(),
-    );
+    game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+        game.motion,
+        Vec3::new(24.5, 100.0, 8.5),
+    ));
     game.server.chat_capture = Some(Vec::new());
     assert!(game.run_command("test run h275:broken"));
     let said: Vec<String> = game
@@ -263,9 +264,10 @@ fn a_pack_test_instance_runs_and_applies_its_pack_test_environment() {
                 .insert((cx, cz), Arc::new(Chunk::empty(cx, cz)));
         }
     }
-    game.player = Some(
-        sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(24.5, 100.0, 8.5)).unwrap(),
-    );
+    game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+        game.motion,
+        Vec3::new(24.5, 100.0, 8.5),
+    ));
     game.world.weather.raining = false;
     game.world.weather.thundering = false;
     game.ui.rules.set(

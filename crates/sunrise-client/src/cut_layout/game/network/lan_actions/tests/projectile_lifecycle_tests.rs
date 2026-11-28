@@ -108,9 +108,10 @@ fn projectile_restore_entries_keep_the_bound_arrow() {
                         },
                     );
                 } else {
-                    game.player = Some(
-                        PlayerMotion::new(game.motion, Vec3::new(at[0], at[1], at[2])).unwrap(),
-                    );
+                    game.player = Some(PlayerMotion::new(
+                        game.motion,
+                        Vec3::new(at[0], at[1], at[2]),
+                    ));
                     sunrise_gameplay::game::entity_server::taken_pass_tests::assert_projectile_spawn_survives(
                         game,
                         |game| {

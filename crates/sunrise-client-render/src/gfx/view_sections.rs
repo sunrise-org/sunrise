@@ -130,7 +130,7 @@ pub(super) fn view_sections<T>(
     let own = Frustum::from_planes(frustum(
         ViewCamera::new(view, view.camera, far).own_view_proj,
     ));
-    sections.visible(view.camera, radius, &own, |_| true, |_, _| false, out);
+    sections.visible(view.camera, radius, &own, |_| true, out);
     for v in out.iter_mut() {
         v.origin = resident::origin(v.key, sections.min_y(), frame_camera)
             .as_vec3()

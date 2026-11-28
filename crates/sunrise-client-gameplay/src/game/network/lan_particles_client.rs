@@ -127,10 +127,6 @@ impl ClientGame<'_> {
         let Some(options) = self.received_particle(&p.particle, p.pos) else {
             return;
         };
-        // Combat feel Legacy draws a hit as 1.8.9 did: no sweep, no damage hearts.
-        if self.pvp_hides_particle(options.ty) {
-            return;
-        }
         let Some(remote) = &mut self.client.remote else {
             return;
         };

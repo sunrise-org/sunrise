@@ -54,7 +54,7 @@ fn game<'a>(
     )
     .unwrap();
     game.set_allow_commands(true);
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 100.0, 8.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 100.0, 8.5)));
     game.world
         .chunks
         .insert((0, 0), Arc::new(Chunk::empty(0, 0)));

@@ -24,6 +24,13 @@ impl PartRegistrar {
         let recipe_book_filters = self.recipe_book_filters.clone();
         let registered = self.registered;
         let block_entity_transforms = self.block_entity_transforms.clone();
+        let type_identities = self.type_identities.clone();
+        let custom_registry_count = self.custom_registries.len();
+        let custom_registry_entry_counts: Vec<usize> = self
+            .custom_registries
+            .iter()
+            .map(|registry| registry.entries.len())
+            .collect();
         // Append-only tables retain previous mods' entries without requiring
         // Clone on runtime callback objects or their eventual frozen caches.
         macro_rules! checkpoint {
@@ -49,10 +56,31 @@ impl PartRegistrar {
                     registrar.recipe_book_fields = recipe_book_fields;
                     registrar.recipe_book_filters = recipe_book_filters;
                     registrar.registered = registered;
+                    registrar.type_identities = type_identities;
+                    let rejected_custom_registries =
+                        registrar.custom_registries.split_off(custom_registry_count);
+                    let mut rejected_custom_entries = Vec::new();
+                    for (registry, old_len) in registrar
+                        .custom_registries
+                        .iter_mut()
+                        .zip(custom_registry_entry_counts)
+                    {
+                        for (entry_id, value) in registry.entries.split_off(old_len) {
+                            registry.entry_owners.remove(&entry_id.to_string());
+                            rejected_custom_entries.push(value);
+                        }
+                    }
                     // The checkpoint is fully restored before destroying even one value.
                     // Drop individual owned entries, never a collection containing multiple
                     // mod destructors that could panic while unwinding the first destructor.
                     $(discard_startup_registrations(owner, $field);)*
+                    for rejected in rejected_custom_registries {
+                        discard_startup_registrations(
+                            owner,
+                            rejected.entries.into_iter().map(|(_, value)| value),
+                        );
+                    }
+                    discard_startup_registrations(owner, rejected_custom_entries);
                     discard_startup_registrations(owner, rejected_tags.blocks);
                     discard_startup_registrations(owner, rejected_tags.items);
                     discard_startup_registrations(owner, rejected_transforms.into_values());

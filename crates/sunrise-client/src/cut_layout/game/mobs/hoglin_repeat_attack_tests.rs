@@ -535,7 +535,7 @@ fn place_player(game: &mut sunrise_gameplay::game::ServerGame<'_>, x: f64, z: f6
     } else {
         game.server.next_entity += 1;
         let id = game.server.next_entity;
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(x, 100.0, z)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(x, 100.0, z)));
         super::native_entity_refs::tests::bind_local_player(game, id, 1);
     }
 }

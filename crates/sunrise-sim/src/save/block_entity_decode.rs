@@ -115,7 +115,7 @@ pub fn decode_end_gateway(tag: &Tag) -> crate::containers::EndGateway {
 /// Slotless holders (`mod_item_slots == 0`) keep `Items` verbatim in `nbt`,
 /// and rows outside `0..mod_item_slots`, duplicates, invalid or noncanonical
 /// rows, and slotless entries stay verbatim in `nbt`.
-/// The game sizes the modeled vector to its container when it uses it.
+/// The game sizes the modeled vector to its declared container when the entity loads.
 pub(super) fn decode_mod_block_entity(
     id: String,
     tag: &Tag,
@@ -188,6 +188,16 @@ pub fn block_mod_item_slots(block: &str) -> usize {
     mod_api::__private::parts_installation::block_container(block)
         .map_or(0, |container| container.slots)
 }
+
+/// The container's size is its declaration's (`NonNullList.withSize`), not the last
+/// occupied slot's: a saved `Items` list is sparse, so every reader (a menu, a loot
+/// fill) must see the declared list. Rows past the declaration stay where they are.
+pub(super) fn pad_declared_slots(items: &mut Vec<Option<crate::items::ItemStack>>, slots: usize) {
+    if items.len() < slots {
+        items.resize(slots, None);
+    }
+}
+
 /// A `RandomizableContainer`: a chest, barrel, shulker box, dispenser or hopper, or a mod
 /// block entity whose block declares container slots. Its `LootTable` and `LootTableSeed`
 /// wait beside it until its first access rolls them.
@@ -243,9 +253,8 @@ pub fn decode_block_entity_replacing(
             if crate::block_entity_types::valid(block, m.id()) != Some(true) {
                 return None;
             }
-            // Missing saved stacks are empty slots, whatever the declared capacity: `items` holds
-            // the slots up to the last one occupied, and a slot past it reads as empty.
             // Any saved stacks past the declared size stay out of the menu but on disk.
+            pad_declared_slots(&mut m.items, slots);
             true
         }
         _ => crate::block_entity_types::valid(block, &saved_id)

@@ -52,13 +52,10 @@ fn a_cancelling_part_silences_level_event_2001_and_keeps_the_debris() {
     mod_platform::testing::with_mods(mods.into(), || {
         with_client_game(|game| {
             let _server = logged_client(game);
-            game.player = Some(
-                PlayerMotion::new(
-                    game.motion,
-                    sunrise_core::geometry::Vec3::new(4.5, 63.0, 4.5),
-                )
-                .unwrap(),
-            );
+            game.player = Some(PlayerMotion::new(
+                game.motion,
+                sunrise_core::geometry::Vec3::new(4.5, 63.0, 4.5),
+            ));
             game.world
                 .chunks
                 .insert((0, 0), Arc::new(Chunk::empty(0, 0)));

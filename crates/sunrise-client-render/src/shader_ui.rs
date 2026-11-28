@@ -27,6 +27,8 @@ pub(crate) enum Item {
     Pack(u16),
     /// Opens `shaderpacks/`.
     Folder,
+    /// The picked pack's Iris compatibility: Auto, On or Off (`graphics::IrisCompat`).
+    IrisCompat,
     /// Option `.0` of the picked pack: the `.0`th of its options by name.
     Option(u16),
     /// Opens screen `.0`.
@@ -55,6 +57,16 @@ const PICK_A_PACK: &str = "Pick a shader pack. Picking the one in use turns shad
 const NO_PICK: &str = "sunrise.settings.shader_options.no_pack";
 const NO_SCREENS: &str = "sunrise.settings.shader_options.none";
 const PENDING: &str = "Changed options apply with Apply, or when you leave.";
+/// The picked pack's Iris compatibility switch, its description and its values.
+const IRIS_COMPAT: &str = "sunrise.shaders.iris_compat";
+const IRIS_COMPAT_ABOUT: &str = "sunrise.shaders.iris_compat.about";
+const IRIS_COMPAT_AUTO: &str = "sunrise.shaders.iris_compat.auto";
+const IRIS_COMPAT_ON: &str = "sunrise.shaders.iris_compat.on";
+const IRIS_COMPAT_OFF: &str = "sunrise.shaders.iris_compat.off";
+/// The row of a pack that runs with Iris compatibility (`%s`: its name), and what its
+/// description adds.
+const IRIS_COMPAT_ROW: &str = "sunrise.shaders.iris_compat.row";
+const IRIS_COMPAT_RUNS: &str = "sunrise.shaders.iris_compat.runs";
 /// Pack descriptions run longer than Sunrise's own: the strip has room for a line more.
 pub(crate) const NOTE_LINES: usize = 3;
 /// Screens this many links from the main one, or fewer, are in the page list.
@@ -75,6 +87,12 @@ fn classic(s: &Settings) -> Option<&crate::shader_options::ShaderOptions> {
     s.shader_options
         .as_ref()
         .filter(|o| o.pack == s.sunrise.shader_pack)
+}
+
+/// Whether the picked pack `file` runs with Iris compatibility, as its options were last read
+/// with the switch (`ShaderOptions::iris_compat`).
+fn runs_iris_compat(s: &Settings, file: &str) -> bool {
+    file == s.sunrise.shader_pack && classic(s).is_some_and(|o| o.iris_compat)
 }
 
 /// The `.0`th option name of the pack.
@@ -152,8 +170,20 @@ fn parts(item: Item, s: &Settings, screens: &[PackScreen]) -> (String, Option<St
     match item {
         Item::Pack(i) => {
             let pack = s.shader_packs.get(usize::from(i));
-            let name = pack.map_or_else(String::new, |p| p.file.clone());
+            let name = match pack {
+                Some(p) if runs_iris_compat(s, &p.file) => lang::tr(IRIS_COMPAT_ROW, &[&p.file]),
+                Some(p) => p.file.clone(),
+                None => String::new(),
+            };
             (name, Some(String::new()))
+        }
+        Item::IrisCompat => {
+            let value = match s.sunrise.iris_compat_of(&s.sunrise.shader_pack) {
+                crate::graphics::IrisCompat::Auto => IRIS_COMPAT_AUTO,
+                crate::graphics::IrisCompat::On => IRIS_COMPAT_ON,
+                crate::graphics::IrisCompat::Off => IRIS_COMPAT_OFF,
+            };
+            (lang::get(IRIS_COMPAT), Some(lang::get(value)))
         }
         Item::Folder => (lang::get("pack.openFolder"), None),
         Item::Link(i) => (format!("{}...", screen_name(i, screens)), None),
@@ -216,8 +246,14 @@ fn description(item: Item, s: &Settings, screens: &[PackScreen]) -> String {
             } else {
                 "Press to use it."
             });
-            format!("{kind} {what} ({})", pack.file)
+            let compat = if runs_iris_compat(s, &pack.file) {
+                format!(" {}", lang::get(IRIS_COMPAT_RUNS))
+            } else {
+                String::new()
+            };
+            format!("{kind} {what}{compat} ({})", pack.file)
         }
+        Item::IrisCompat => lang::get(IRIS_COMPAT_ABOUT),
         Item::Folder => lang::get("Put shader pack .zip files or folders in it."),
         Item::Reset => lang::get("Puts every option of this pack back to its default."),
         Item::Profile => classic(s)
@@ -247,18 +283,26 @@ fn row(item: Item, s: &Settings, screens: &[PackScreen]) -> Row<Item> {
             steps: slider_steps(item, s),
             text,
         },
-        (Item::Option(_) | Item::Profile, None, None, Some(text)) => Value::Choice(text),
+        (Item::Option(_) | Item::Profile | Item::IrisCompat, None, None, Some(text)) => {
+            Value::Choice(text)
+        }
         _ => Value::Press,
     };
     Row::new(item, name, value).about(description(item, s, screens))
 }
 
-/// The installed packs, then the folder's row: what Sunrise Settings' Shaders page lists
-/// (`sunrise_ui`).
+/// The installed packs, the picked one followed by its Iris compatibility switch, then the
+/// folder's row: what Sunrise Settings' Shaders page lists (`sunrise_ui`).
 pub(crate) fn pack_rows(s: &Settings) -> Vec<Row<Item>> {
-    let packs = (0..s.shader_packs.len()).map(|i| Item::Pack(i as u16));
-    let installed = packs.chain([Item::Folder]);
-    installed.map(|item| row(item, s, &[])).collect()
+    let mut items = Vec::new();
+    for (i, pack) in s.shader_packs.iter().enumerate() {
+        items.push(Item::Pack(i as u16));
+        if pack.file == s.sunrise.shader_pack {
+            items.push(Item::IrisCompat);
+        }
+    }
+    items.push(Item::Folder);
+    items.into_iter().map(|item| row(item, s, &[])).collect()
 }
 
 /// Why the picked pack's settings can't be opened, if they can't: no pack picked, or the pick
@@ -324,6 +368,12 @@ impl ShaderScreen {
                 outputs.push(Output::Event(Event::OpenShaderOptions));
             }
         }
+        if s.sunrise.iris_compat != before.sunrise.iris_compat {
+            // The packs' Iris compatibility goes back too, the pick's read again with it.
+            s.sunrise.iris_compat = before.sunrise.iris_compat.clone();
+            outputs.push(Output::Event(Event::ShaderPack));
+            outputs.push(Output::Event(Event::OpenShaderOptions));
+        }
         if s.extras.last_shader_pack != before.extras.last_shader_pack {
             // The toggle key (or a removed pack) changed the remembered pick while the screen
             // was open: it goes back too. Rendering needs no event for what isn't picked.
@@ -331,10 +381,12 @@ impl ShaderScreen {
         }
         outputs
     }
-    /// Whether the pick or the remembered pick differs from `before`.
+    /// Whether the pick, the remembered pick or a pack's Iris compatibility differs from
+    /// `before`.
     pub(crate) fn pick_differs(s: &Settings, before: &Settings) -> bool {
         let pick = s.sunrise.shader_pack != before.sunrise.shader_pack;
-        pick || s.extras.last_shader_pack != before.extras.last_shader_pack
+        let compat = s.sunrise.iris_compat != before.sunrise.iris_compat;
+        pick || compat || s.extras.last_shader_pack != before.extras.last_shader_pack
     }
 }
 
@@ -347,12 +399,14 @@ impl shell::Screen for ShaderScreen {
     fn note_lines(&self) -> usize {
         NOTE_LINES
     }
-    /// The rows read the packs, the pick and its options.
+    /// The rows read the packs, the pick, its options and its Iris compatibility.
     fn stamp(&self, s: &Settings) -> u64 {
         let packs: Vec<_> = s.shader_packs.iter().map(|p| &p.file).collect();
-        let options = (s.shader_options.as_ref()).map(|o| (&o.pack, &o.chosen, o.changed));
+        let options =
+            (s.shader_options.as_ref()).map(|o| (&o.pack, &o.chosen, o.changed, o.iris_compat));
         let h = &s.sunrise;
-        shell::stamp_of(&(&h.shader_pack, packs, options))
+        let compat = h.iris_compat_of(&h.shader_pack);
+        shell::stamp_of(&(&h.shader_pack, packs, options, compat))
     }
     /// The picked pack's screens under its name: those the main screen links to in the page
     /// list, the ones farther in opened by their links.
@@ -413,6 +467,22 @@ impl shell::Screen for ShaderScreen {
                 outputs
             }
             Item::Folder => vec![Output::Event(Event::OpenShaderPackFolder)],
+            // The pick's switch steps, is saved, and the pick is read again with it, its
+            // changed options kept first; a load started with the old mode is never installed
+            // (the game's `drop_stale_identity_build`).
+            Item::IrisCompat if !pack.is_empty() => {
+                let mode = s.sunrise.iris_compat_of(&pack).step(back);
+                s.sunrise.set_iris_compat(&pack, mode);
+                let mut outputs = Vec::new();
+                if s.shader_options.as_ref().is_some_and(|o| o.changed) {
+                    self.saving(s);
+                    outputs.push(Output::Event(Event::ShaderOptions));
+                }
+                outputs.push(Output::Event(Event::ShaderPack));
+                outputs.push(Output::Event(Event::OpenShaderOptions));
+                outputs
+            }
+            Item::IrisCompat => Vec::new(),
             // The shell follows a link (`link`).
             Item::Link(_) => Vec::new(),
             Item::Profile => match s.shader_options.as_mut().filter(|o| o.pack == pack) {
@@ -457,7 +527,7 @@ impl shell::Screen for ShaderScreen {
     /// and the profile (up goes back); the other rows leave it to scroll the list.
     fn wheel_step(&mut self, s: &mut Settings, item: Item, back: bool) -> Option<Vec<Output>> {
         let steps = match item {
-            Item::Profile => true,
+            Item::Profile | Item::IrisCompat => true,
             Item::Option(_) => switch(item, s).is_none() && slider(item, s).is_none(),
             _ => false,
         };
@@ -696,6 +766,63 @@ mod tests {
                 (Tab::Screen(5), Part::Next)
             ]
         );
+    }
+
+    /// The picked pack's row is followed by its Iris compatibility switch, Auto at first; a
+    /// press steps it for that pack alone, saves it and reads the pick again (its changed
+    /// options saved first), and Undo puts it back. The pack's row says it runs with Iris
+    /// compatibility while its options were read with it on, and not otherwise.
+    #[test]
+    fn the_picked_pack_has_an_iris_compatibility_switch_beside_its_row() {
+        let english = lang::Language::load(&[], "en_us");
+        let ((), missed) = lang::scoped(english, || {
+            use crate::graphics::IrisCompat;
+            let mut s = settings();
+            let before = s.clone();
+            let rows = pack_rows(&s);
+            let ids: Vec<Item> = rows.iter().map(|r| r.id).collect();
+            assert_eq!(
+                ids,
+                [Item::Pack(0), Item::IrisCompat, Item::Pack(1), Item::Folder]
+            );
+            assert_eq!(rows[1].name, "Iris compatibility");
+            assert_eq!(rows[1].value, Value::Choice("Auto".into()));
+            assert_eq!(
+                (rows[0].name.as_str(), rows[2].name.as_str()),
+                ("A.zip", "B.zip")
+            );
+            let mut screen = ShaderScreen::default();
+            let reads = vec![
+                Output::Event(Event::ShaderPack),
+                Output::Event(Event::OpenShaderOptions),
+            ];
+            assert_eq!(screen.press(&mut s, Item::IrisCompat, false), reads);
+            assert_eq!(s.sunrise.iris_compat_of("A.zip"), IrisCompat::On);
+            assert_eq!(s.sunrise.iris_compat_of("B.zip"), IrisCompat::Auto);
+            assert!(ShaderScreen::pick_differs(&s, &before));
+            s.shader_options.as_mut().unwrap().cycle("BLOOM", false);
+            let saved_first = [vec![Output::Event(Event::ShaderOptions)], reads.clone()].concat();
+            assert_eq!(screen.press(&mut s, Item::IrisCompat, false), saved_first);
+            assert_eq!(s.sunrise.iris_compat_of("A.zip"), IrisCompat::Off);
+            assert_eq!(pack_rows(&s)[1].value, Value::Choice("Off".into()));
+            // The row follows what the pick was read with.
+            assert_eq!(pack_rows(&s)[0].name, "A.zip");
+            s.shader_options.as_mut().unwrap().iris_compat = true;
+            let rows = pack_rows(&s);
+            assert_eq!(rows[0].name, "A.zip (Iris compatibility)");
+            assert!(rows[0].about.contains("It runs with Iris compatibility."));
+            assert_eq!(rows[2].name, "B.zip");
+            assert_eq!(screen.undo_pick(&mut s, &before), reads);
+            assert_eq!(s.sunrise.iris_compat_of("A.zip"), IrisCompat::Auto);
+            // No pick, no switch.
+            s.set_shader_pick("");
+            let ids: Vec<Item> = pack_rows(&s).iter().map(|r| r.id).collect();
+            assert_eq!(ids, [Item::Pack(0), Item::Pack(1), Item::Folder]);
+            assert!(screen.press(&mut s, Item::IrisCompat, false).is_empty());
+        });
+        let mut missed = missed;
+        missed.retain(|key| !VANILLA_KEYS.contains(&key.as_str()));
+        assert_eq!(missed, Vec::<String>::new());
     }
 
     #[test]

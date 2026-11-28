@@ -135,7 +135,7 @@ pub(crate) fn assert_tnt_blast(game: &mut sunrise_gameplay::game::ServerGame<'_>
     }
     game.world.set(x, y, z + 1, dirt).unwrap();
     let id = game.tnts[0].id;
-    game.server.portals.entities.insert(
+    game.server.portals.level.entities.insert(
         id,
         PortalState {
             cooldown: if protected { 0 } else { 300 },

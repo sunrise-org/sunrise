@@ -33,8 +33,7 @@ pub(crate) fn fixture(
                     .add_empty_chunk(ChunkPos::new(0, 0))
                     .unwrap();
                 assert!(game.run_command("fill 0 79 0 15 79 15 stone"));
-                game.player =
-                    Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 80.0, 4.5)).unwrap());
+                game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 80.0, 4.5)));
                 bind_local_player(game, 11, 123);
                 game.set_mode_id(0);
                 game.server.next_entity = 100;

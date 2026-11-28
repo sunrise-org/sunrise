@@ -116,13 +116,10 @@ pub(crate) mod tests {
         *game.test_window_mut() = Some(window);
         game.client.title.0 = None;
         game.client.screen = Screen::Playing;
-        game.common.player = Some(
-            sunrise_sim::motion::PlayerMotion::new(
-                game.common.motion,
-                sunrise_core::geometry::Vec3::ZERO,
-            )
-            .unwrap(),
-        );
+        game.common.player = Some(sunrise_sim::motion::PlayerMotion::new(
+            game.common.motion,
+            sunrise_core::geometry::Vec3::ZERO,
+        ));
 
         // Release while playing clears the grab.
         game.client.focused = true;

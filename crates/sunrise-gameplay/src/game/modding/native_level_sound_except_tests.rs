@@ -356,7 +356,7 @@ fn committed_effects_leave_unrelated_queues_intact_prevent_sound_recursion_and_k
                     assert_eq!(game.server.pending_particles.len(), 1);
                     assert_eq!(game.server.lan_events.len(), 1);
                     assert_eq!(game.server.lan_global_events.len(), 1);
-                    assert_eq!(game.server.lan_entity_events, vec![(entity13_id, 2)]);
+                    assert_eq!(game.server.lan_queues.entity_events, vec![(entity13_id, 2)]);
                     decode_packets(&rx12);
 
                     // Part B: Inside a transaction, `play_level_sound_at_position` runs synchronously at
@@ -401,7 +401,7 @@ fn committed_effects_leave_unrelated_queues_intact_prevent_sound_recursion_and_k
                     assert_eq!(game.server.lan_events[0].kind, 1000);
                     assert_eq!(game.server.lan_global_events.len(), 1);
                     assert_eq!(game.server.lan_global_events[0].1, 1028);
-                    assert_eq!(game.server.lan_entity_events, vec![(entity13_id, 2)]);
+                    assert_eq!(game.server.lan_queues.entity_events, vec![(entity13_id, 2)]);
 
                     // Commit replay ran zero mod callbacks and delivered both sounds in journal order.
                     assert!(triggered.load(Ordering::SeqCst));
@@ -422,7 +422,7 @@ fn committed_effects_leave_unrelated_queues_intact_prevent_sound_recursion_and_k
                     game.world
                         .chunks
                         .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
-                    game.server.lan_entity_events.clear();
+                    game.server.lan_queues.entity_events.clear();
                     let zombie_id = game
                         .spawn_mob(
                             "minecraft:zombie",
@@ -455,7 +455,7 @@ fn committed_effects_leave_unrelated_queues_intact_prevent_sound_recursion_and_k
                         "non-player equipment write stays broken after abort"
                     );
                     assert_eq!(
-                        game.server.lan_entity_events,
+                        game.server.lan_queues.entity_events,
                         vec![(zombie_id as i32, 49)],
                         "coupled non-player break event stays on the immediate side of the rollback boundary"
                     );

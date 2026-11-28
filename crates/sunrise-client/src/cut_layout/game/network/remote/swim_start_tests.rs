@@ -105,8 +105,7 @@ fn local_swim_eligibility_replaces_entry_and_the_shallow_sprint_query() {
                         .streaming
                         .insert_remote(&mut game.common.world, Chunk::empty(0, 0));
                     water_column(game);
-                    let mut player =
-                        PlayerMotion::new(game.motion, Vec3::new(4.5, 64.5, 4.5)).unwrap();
+                    let mut player = PlayerMotion::new(game.motion, Vec3::new(4.5, 64.5, 4.5));
                     player.entity_id = 42;
                     game.player = Some(player);
                     game.bind_local_player_residency();
@@ -219,13 +218,10 @@ fn swim_entry_reads_each_authoritative_guests_own_equipment() {
                         let mut body = guest(conn);
                         body.loaded = true;
                         body.position = position;
-                        body.motion = Some(Box::new(
-                            PlayerMotion::new(
-                                game.motion,
-                                Vec3::new(position[0], position[1], position[2]),
-                            )
-                            .unwrap(),
-                        ));
+                        body.motion = Some(Box::new(PlayerMotion::new(
+                            game.motion,
+                            Vec3::new(position[0], position[1], position[2]),
+                        )));
                         body.armor[3] = Some(ItemStack::new(boots, 1));
                         ids.push(body.entity_id as u32);
                         game.server.lan.as_mut().unwrap().hub.guests.push(body);

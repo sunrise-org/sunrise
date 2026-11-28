@@ -5,8 +5,8 @@ use core::ops::ControlFlow;
 use mod_api::{
     BlockCapabilitySite, BlockEntityRef, BlockFace, BlockSide, CollisionFlags, Compound,
     DatapackRegistrySet, DimensionKey, EntityReadError, EntityRef, EntityResidency, EntityTypeKey,
-    EquipmentSlot, ItemEntityRef, LevelReadError, LevelRef, LivingRef, MainHand, MenuRef,
-    PlayerRef, SupportType, WorldEpoch, client::first_person::Hand,
+    EquipmentSlot, Hand, ItemEntityRef, LevelReadError, LevelRef, LivingRef, MainHand, MenuRef,
+    PlayerRef, SupportType, WorldEpoch,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
@@ -240,6 +240,14 @@ pub trait ModapiModdingSideGameExt<'__sg>: crate::game::SideGame<'__sg> {
 
     fn side_received_registry_datapacks(&self) -> Option<Arc<DatapackRegistrySet>> {
         <Self::State as SideOps>::side_received_registry_datapacks(self.side_state())
+    }
+
+    #[inline(always)]
+    fn side_custom_tag_source<'s>(&'s self) -> crate::game::native_tags::CustomTagSource<'s>
+    where
+        '__sg: 's,
+    {
+        <Self::State as SideOps>::side_custom_tag_source(self.side_state())
     }
 
     fn side_level_handle_current(&self, level: LevelRef) -> bool {
@@ -579,6 +587,9 @@ pub trait SideOps: Sized {
     ) -> Option<Arc<DatapackRegistrySet>>;
     fn side_received_registry_datapacks(&self) -> Option<Arc<DatapackRegistrySet>> {
         None
+    }
+    fn side_custom_tag_source(&self) -> crate::game::native_tags::CustomTagSource<'_> {
+        crate::game::native_tags::CustomTagSource::None
     }
     fn side_level_handle_current(game: &Self::Game<'_>, level: LevelRef) -> bool;
     fn side_level_is_raining_at(

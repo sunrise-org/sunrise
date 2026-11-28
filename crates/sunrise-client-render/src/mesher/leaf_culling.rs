@@ -57,7 +57,7 @@ const ADJACENT_STRIDES: [isize; 6] = [
 /// Per-worker leaf mask and BFS scratch. The vectors keep their capacity
 /// between sections and modes; `Off` does no work at all.
 #[derive(Default)]
-pub(super) struct LeafMask {
+pub struct LeafMask {
     cells: Vec<Cell>,
     depth: Vec<u8>,
     queue: Vec<u16>,

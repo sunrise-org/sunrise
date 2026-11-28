@@ -59,7 +59,7 @@ fn end_game<'a>(
 fn the_dragon_boss_bar_takes_the_dragons_custom_name() {
     let mut resources = None;
     let mut game = end_game(&mut resources);
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 128.0, 0.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 128.0, 0.5)));
     // The chunks `EnderDragonFight.isArenaLoaded` waits for, lit as received
     // chunks are, so the fight's next player scan adopts or makes its dragon.
     {

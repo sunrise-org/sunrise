@@ -67,7 +67,7 @@ mod tests {
         )]
         .into();
         let _ = mod_api::testing::rebuild_parts(|| -> Result<(), ()> {
-            sunrise_gameplay_common::game::api_values::install_parts(&mods).unwrap();
+            crate::game::api_values::install_parts(&mods).unwrap();
             mod_platform::testing::with_mods(mods, || {
                 let _ = mod_api::__private::take_hook_panics();
                 let first = selector_tokens();

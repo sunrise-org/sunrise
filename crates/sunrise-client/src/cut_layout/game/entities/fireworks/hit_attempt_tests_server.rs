@@ -18,7 +18,7 @@ use {
 };
 
 pub(crate) fn fresh_player(game: &mut sunrise_gameplay::game::ServerGame<'_>, mode: GameMode) {
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
     bind_local_player(game, 7, 7);
     game.server.lan_acting_name = Some("attempts".into());
     game.server.lan_acting_permission = Some(4);
@@ -229,7 +229,7 @@ fn remaining_hit_callers_observe_refusals_and_zero_damage() {
             game.mobs.clear();
             for dead in [true, false] {
                 fresh_player(game, GameMode::Spectator); // excluded from splash
-                let mut body = Box::new(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+                let mut body = Box::new(PlayerMotion::new(game.motion, Vec3::ZERO));
                 if dead {
                     body.set_health(0.0, false).unwrap();
                 }

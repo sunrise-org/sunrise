@@ -1,0 +1,2 @@
+sunrise-client-gameplay game::client_side::remote_projectiles::firework_attach_high_bit_tests::attached_rocket_metadata_keeps_high_bit_ids lib daily resources
+sunrise-gameplay game::server_side::lan_entities::vehicle_meta_tests::attached_rocket_metadata_keeps_a_high_bit_guest_id lib daily resources

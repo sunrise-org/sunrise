@@ -40,7 +40,7 @@ pub(crate) fn check_answer(g: &sunrise_gameplay::game::ServerGame<'_>, slot: usi
 fn dragon_takes_player_thorns_through_its_body() {
     with_game(|g| {
         for wing in [false, true] {
-            g.player = Some(PlayerMotion::new(g.motion, Vec3::new(30.0, 64.0, 0.5)).unwrap());
+            g.player = Some(PlayerMotion::new(g.motion, Vec3::new(30.0, 64.0, 0.5)));
             g.player.as_mut().unwrap().entity_id = 77;
             g.armor[1] = Some(thorny());
             let mut d = Dragon::new(Vec3::new(0.0, 70.0, 0.0), 0.0, 1);
@@ -176,7 +176,7 @@ pub(crate) fn with_game(test: impl FnOnce(&mut sunrise_gameplay::game::ServerGam
     .unwrap();
     g.options.dedicated = Some(Vec::new());
     g.world = World::new(g.res.facts().air, 1);
-    g.player = Some(PlayerMotion::new(g.motion, Vec3::new(30.0, 64.0, 0.5)).unwrap());
+    g.player = Some(PlayerMotion::new(g.motion, Vec3::new(30.0, 64.0, 0.5)));
     g.player.as_mut().unwrap().entity_id = 77;
     g.start_audio_capture();
     test(&mut g);

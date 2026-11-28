@@ -222,13 +222,10 @@ fn a_mod_blocks_custom_menu_gets_its_registered_screen() {
                     sunrise_gameplay_common::game::execution_role::ExecutionRole::Client,
                     |game| {
                         seed_native_menu(game, 1, CRATE_MENU);
-                        game.player = Some(
-                            sunrise_sim::motion::PlayerMotion::new(
-                                game.motion,
-                                sunrise_core::geometry::Vec3::new(17.5, 64.0, -8.5),
-                            )
-                            .unwrap(),
-                        );
+                        game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                            game.motion,
+                            sunrise_core::geometry::Vec3::new(17.5, 64.0, -8.5),
+                        ));
                         let pos = (17, 63, -9);
                         game.world
                             .chunks

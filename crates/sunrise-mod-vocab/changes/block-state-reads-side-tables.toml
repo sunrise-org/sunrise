@@ -1,0 +1,3 @@
+ids = ["handle:BlockStates::light_dampening", "handle:BlockStates::is_suffocating", "handle:BlockStates::is_valid_spawn", "handle:LevelRef::state_is_suffocating"]
+why = "These reads answer from the side's own tables: through a host they use the open world's tables as its data packs bind them, the ones the game's own checks read, and with no world packs the answer is unchanged. A friction part's level and the client keep the game's built-in tables until the client receives the world's tables."
+migrate = "Nothing to change."

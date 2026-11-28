@@ -411,8 +411,7 @@ pub(in crate::game) mod tests {
                         .default_state("minecraft:stone")
                         .unwrap();
                     game.world.set(0, 65, 0, stone).unwrap();
-                    let mut body =
-                        PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap();
+                    let mut body = PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5));
                     body.shift_key_down = true;
                     body.pose_fit_sizes = game.body_fit_sizes(1, &body, None);
                     assert_eq!(body.pose_fit_sizes.iter().any(Option::is_some), subscribed);
@@ -637,7 +636,7 @@ pub(in crate::game) mod tests {
         use sunrise_protocol::packets::play::{AttributeSnapshot, Clientbound, UpdateAttributes};
         let attribute = game
             .motion
-            .attributes
+            .attributes()
             .id("minecraft:scale")
             .unwrap()
             .registry_id();

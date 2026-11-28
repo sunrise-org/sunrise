@@ -44,7 +44,7 @@ pub(crate) fn run_a_cloud_in_water_resets_its_fall_distance_and_a_dry_one_keeps_
                 prepare_entity_ticking_neighborhood(game, ChunkPos::new(cx, cz));
             }
         }
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
         game.update_chunk_tickets();
         bind_local_player(game, 1, 99);
         game.set_allow_commands(true);

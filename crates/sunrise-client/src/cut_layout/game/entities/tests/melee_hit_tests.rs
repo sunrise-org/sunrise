@@ -48,7 +48,7 @@ fn game<'a>(
         crate::game::profile_resolver,
     )
     .unwrap();
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)));
     game.creative = creative;
     game.mode = if creative {
         sunrise_command::args::GameMode::Creative

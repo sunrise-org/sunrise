@@ -50,29 +50,46 @@ pub trait MenusBackend {
     /// the ender chest's, the crafting grid's or a mod's chest or transient container slot.
     /// Returns `None` for an unavailable menu, an out-of-range index, or an unbound linked slot.
     fn menu_slot_backing(&self, menu: MenuRef, slot: usize) -> Option<MenuSlotBacking>;
-    /// Side: server.
+    /// Side: both.
     /// How many of `stack` the live menu slot holds (`Slot.mayPlace`, then `Slot.getMaxStackSize`):
     /// a furnace's fuel slot one bucket, an armour slot one piece that fits it (asking the item's
     /// `can_equip` part for this menu's player), a crafting result none. An owned transient slot
     /// uses its declared limit or the item's own limit, whichever is lower. Excluded targets
     /// (such as a backpack's locked hotbar slot) and unbound linked slots hold nothing (`Some(0)`).
     ///
-    /// Returns `None` for an enabled handler-backed slot ([`MenuSlotBacking::Place`]), because
-    /// querying a [`ResourceHandler`] requires server-action authority. Read-only callers can
-    /// distinguish that case from a stale menu or out-of-range index with
-    /// [`MenuRef::slot_backing`]: `Some(MenuSlotBacking::Place(_))` names a handler-backed slot,
-    /// which can be queried from a `&mut dyn ServerHost` through [`MenuRef::probe_slot_holds`].
+    /// On the server, returns `None` for an enabled handler-backed slot
+    /// ([`MenuSlotBacking::Place`]), because querying a [`ResourceHandler`] requires
+    /// server-action authority. Read-only server callers can distinguish that refusal from a
+    /// stale menu or out-of-range index with [`MenuRef::slot_backing`]:
+    /// `Some(MenuSlotBacking::Place(_))` names a handler-backed slot, which can be queried from a
+    /// `&mut dyn ServerHost` through [`MenuRef::probe_slot_holds`].
+    ///
+    /// On a client, only the local player's live menu answers, and it answers as the client's
+    /// own click prediction asks its slots (vanilla runs `AbstractContainerMenu.clicked` on the
+    /// client too, with the same `Slot` subclasses): the menu's slot rules, `can_equip` Parts and
+    /// the mods' `menu_slot_rules`, over the client's predicted slots, which include its own
+    /// unconfirmed clicks until the server corrects them. The answer is the prediction's, not the
+    /// server's: a mod menu's handler-backed slot answers by its declared layout there (a client
+    /// holds no handler, and `slot_backing` is server-only), and the server may still refuse what
+    /// the client allowed. Slots are numbered as `ContainerClick` numbers them, the crafter's
+    /// result slot included. `None` for another player's menu, a stale one, or a menu the
+    /// client's prediction does not model.
     fn menu_slot_holds(&self, menu: MenuRef, slot: usize, stack: &ItemStack) -> Option<u32>;
-    /// Side: server.
+    /// Side: both.
     /// Whether the live menu slot gives up what it holds (`Slot.mayPickup`): bound armour stays
     /// on outside creative, and excluded targets or unbound linked slots refuse pickup
     /// (`Some(false)`).
     ///
-    /// Returns `None` for an enabled handler-backed slot ([`MenuSlotBacking::Place`]), because
-    /// simulating a pickup against a [`ResourceHandler`] requires server-action authority.
-    /// Read-only callers can distinguish that case from a stale menu or out-of-range index with
-    /// [`MenuRef::slot_backing`]: `Some(MenuSlotBacking::Place(_))` names a handler-backed slot,
-    /// which can be probed from a `&mut dyn ServerHost` through [`MenuRef::probe_slot_gives`].
+    /// On the server, returns `None` for an enabled handler-backed slot
+    /// ([`MenuSlotBacking::Place`]), because simulating a pickup against a [`ResourceHandler`]
+    /// requires server-action authority. Read-only server callers can distinguish that refusal
+    /// from a stale menu or out-of-range index with [`MenuRef::slot_backing`]:
+    /// `Some(MenuSlotBacking::Place(_))` names a handler-backed slot, which can be probed from a
+    /// `&mut dyn ServerHost` through [`MenuRef::probe_slot_gives`].
+    ///
+    /// On a client, the local player's live menu answers from its click prediction, with the
+    /// stack the predicted slot holds, as for [`MenuRef::slot_holds`]: a handler-backed slot
+    /// answers by its layout, and the server's own answer may differ.
     fn menu_slot_gives(&self, menu: MenuRef, slot: usize) -> Option<bool>;
     /// Side: server.
     /// Ask menu placement rules before handing an explicit transfer to the backing handler.

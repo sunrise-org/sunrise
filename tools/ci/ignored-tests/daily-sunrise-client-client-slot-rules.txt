@@ -1,0 +1,6 @@
+# The client's MenuRef::slot_holds and slot_gives reads during ItemPart prediction use prepared resources.
+sunrise-client cut_layout::game::client_side::remote_client::tests::client_menu_tests::client_crafter_slot_rules_use_the_crafter_layout lib daily resources
+sunrise-client cut_layout::game::client_side::remote_client::tests::client_menu_tests::client_packet_opened_shulker_box_refuses_shulker_boxes lib daily resources
+sunrise-client cut_layout::game::client_side::stacked_on_other_tests_client::item_part_tests::a_can_equip_part_reads_its_own_armour_slot_without_recursing lib daily resources
+sunrise-client cut_layout::game::client_side::stacked_on_other_tests_client::item_part_tests::an_item_tab_hotbar_pickup_names_the_inventory_menu_slot lib daily resources
+sunrise-client cut_layout::game::client_side::stacked_on_other_tests_client::item_part_tests::item_part_reads_slot_rules_during_client_prediction lib daily resources

@@ -232,6 +232,18 @@ impl SideOps for crate::game::client_side::ClientState {
     fn side_received_registry_datapacks(&self) -> Option<Arc<DatapackRegistrySet>> {
         self.remote.as_ref()?.datapacks.received().cloned()
     }
+    fn side_custom_tag_source(
+        &self,
+    ) -> sunrise_gameplay_common::game::native_tags::CustomTagSource<'_> {
+        let Some(remote) = self.remote.as_ref() else {
+            return sunrise_gameplay_common::game::native_tags::CustomTagSource::None;
+        };
+        sunrise_gameplay_common::game::native_tags::CustomTagSource::Client {
+            tags_loaded: remote.tags.is_some(),
+            dynamic: &remote.registries,
+            custom_registries: &remote.custom_registries,
+        }
+    }
     fn side_level_handle_current(game: &Self::Game<'_>, level: LevelRef) -> bool {
         game.client_level_handle_current(level)
     }
@@ -492,6 +504,7 @@ use mod_api::EntityRef;
 use mod_api::EntityResidency;
 use mod_api::EntityTypeKey;
 use mod_api::EquipmentSlot;
+use mod_api::Hand;
 use mod_api::ItemEntityRef;
 use mod_api::LevelReadError;
 use mod_api::LevelRef;
@@ -501,7 +514,6 @@ use mod_api::MenuRef;
 use mod_api::PlayerRef;
 use mod_api::SupportType;
 use mod_api::WorldEpoch;
-use mod_api::client::first_person::Hand;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;

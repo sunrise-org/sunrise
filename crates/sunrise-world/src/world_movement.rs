@@ -9,7 +9,7 @@ use crate::{
 };
 use sunrise_core::geometry::{
     Aabb, Axis, ShapeOp, Vec3, VoxelShape, entity_collision_bounds, oriented::OrientedCollider,
-    try_resolve_step_movement_oriented,
+    try_resolve_step_movement_oriented_into,
 };
 
 /// How far below the feet `Entity.getAvailableSpaceBelow` looks for ground.
@@ -50,6 +50,10 @@ thread_local! {
     /// allocates nothing once the list has grown to fit.
     static COLLIDERS: std::cell::RefCell<Vec<OrientedCollider>> =
         const { std::cell::RefCell::new(Vec::new()) };
+    /// The collected voxel shapes of the collision query in progress, kept between queries
+    /// so repeated entity moves allocate no scratch vector.
+    static SHAPES: std::cell::RefCell<Vec<VoxelShape>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// A move's list of colliders, borrowed from the thread's reusable one and given back empty.
@@ -65,6 +69,23 @@ impl Drop for Colliders {
     fn drop(&mut self) {
         self.0.clear();
         COLLIDERS.with(|list| *list.borrow_mut() = std::mem::take(&mut self.0));
+    }
+}
+
+/// A collision query's scratch shape list, borrowed from the thread's reusable one and given
+/// back empty.
+struct Shapes(Vec<VoxelShape>);
+
+impl Shapes {
+    fn take() -> Self {
+        Self(SHAPES.with(|list| std::mem::take(&mut *list.borrow_mut())))
+    }
+}
+
+impl Drop for Shapes {
+    fn drop(&mut self) {
+        self.0.clear();
+        SHAPES.with(|list| *list.borrow_mut() = std::mem::take(&mut self.0));
     }
 }
 
@@ -115,16 +136,15 @@ where
     let candidate_budget = scan_cells(sweep).map_or(request.candidate_budget, |cells| {
         cells.max(request.candidate_budget)
     });
-    try_resolve_step_movement_oriented(
+    let mut shapes = Shapes::take();
+    try_resolve_step_movement_oriented_into(
         request.movement,
         request.bounds,
         request.max_step,
         request.on_ground,
         &colliders.0,
-        |bounds| {
-            // A box's blocks are a few dozen shapes at most: one allocation,
-            // not the doubling a push-by-push list makes.
-            let mut shapes = Vec::with_capacity(entities.len() + 16);
+        &mut shapes.0,
+        |bounds, shapes| {
             shapes.extend_from_slice(&entities);
             if let Some(border) = world
                 .movement_border(request.entity, bounds)
@@ -137,7 +157,7 @@ where
             {
                 shapes.push(hit?.shape);
             }
-            Ok(shapes)
+            Ok(())
         },
     )
 }
@@ -224,14 +244,14 @@ where
     ) else {
         return false;
     };
-    let mut colliders = Vec::new();
+    let mut colliders = Shapes::take();
     for hit in scan {
         let Ok(hit) = hit else {
             return false;
         };
-        colliders.push(hit.shape);
+        colliders.0.push(hit.shape);
     }
-    in_range_of_ground_among(bounds, &colliders)
+    in_range_of_ground_among(bounds, &colliders.0)
 }
 
 /// The collider half: `collectAllColliders(body).isEmpty()` and `Shapes.collide`

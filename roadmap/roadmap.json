@@ -87,7 +87,7 @@
    "status": "now",
    "area": "performance",
    "plain": "Making Sunrise faster than vanilla on every computer, with smooth camera movement even at 32 chunks, by spreading the work better over the processor's cores.",
-   "dev": "Frame pacing at render distance 32 (#678): long frames come from work competing with the render thread. In review: no main-thread tick stutter at high render distances (#3827), each proto chunk's light view built once (#3815), video memory handed back by the vertex arena (#3466), chunk batches assembled on helper threads (#3036), free structure starts in the generation workers (#1760). Still open: far terrain at 48 to 64 chunks (#718) and CPU-bound fields of block entities (#717). Every change shows before and after numbers from `tools/perf_bench.py` against vanilla 26.3 (docs/benchmark.md).",
+   "dev": "Frame pacing at render distance 32 (#678): long frames come from work competing with the render thread. In review: no main-thread tick stutter at high render distances (#3827), each proto chunk's light view built once (#3815), video memory handed back by the vertex arena (#3466), chunk batches assembled on helper threads (#3036), free structure starts in the generation workers (#1760). Still open: CPU-bound fields of block entities (#717). Every change shows before and after numbers from `tools/perf_bench.py` against vanilla 26.3 (docs/benchmark.md).",
    "links": [
     "#3827",
     "#3815",
@@ -95,7 +95,6 @@
     "#3036",
     "#1760",
     "#678",
-    "#718",
     "#717",
     "docs/benchmark.md"
    ],
@@ -440,7 +439,7 @@
    "status": "next",
    "area": "performance",
    "plain": "Sunrise should run well on small machines: integrated graphics, the Steam Deck, older Macs and 8 GB of memory, with a battery mode that saves power on laptops.",
-   "dev": "Partly done: an opt-in 60 FPS cap with fewer workers on battery, Far Detail Reduced for integrated GPUs and animated textures on the GPU (both shipped). Left: measured targets and fixes per class of machine (memory use, worker counts, startup) on a Steam Deck, old Intel and Apple Silicon Macs and 8 GB computers, reported on the Benchmarks page.",
+   "dev": "Partly done: an opt-in 60 FPS cap with fewer workers on battery, and animated textures on the GPU. Left: measured targets and fixes per class of machine (memory use, worker counts, startup) on a Steam Deck, old Intel and Apple Silicon Macs and 8 GB computers, reported on the Benchmarks page.",
    "links": [
     "docs/benchmark.md",
     "https://playsunrise.net/docs/performance"
@@ -632,18 +631,6 @@
    ]
   },
   {
-   "id": "exact-far-terrain",
-   "title": "Exact far terrain from real chunks",
-   "status": "later",
-   "area": "performance",
-   "plain": "Far terrain drawn from the world you really built and explored, caves and builds included, not only a preview from the seed.",
-   "dev": "Keep a 3D mip store on disk built from real chunks, drawn by the GPU beside the seed preview for areas nobody has visited. Written from scratch and measured before it is kept. Builds on Far Detail and the far-terrain levels of detail already shipped; the open work on them is #718.",
-   "links": [
-    "#718",
-    "#4678"
-   ]
-  },
-  {
    "id": "older-jars",
    "title": "Older Fabric and Forge mods",
    "status": "later",
@@ -803,18 +790,6 @@
    "dev": "Not implemented (docs/graphics.md). Anisotropic filtering needs linear magnification in wgpu, which blurs close blocks, so close-up sharpness has to be kept first; MSAA would sit beside FXAA, and SMAA or TAA are asked for too; exclusive fullscreen where the backend supports it.",
    "links": [
     "docs/graphics.md"
-   ]
-  },
-  {
-   "id": "video-studio",
-   "title": "A complete video studio inside the game",
-   "status": "later",
-   "area": "extras",
-   "plain": "Record, replay and edit videos without leaving the game: record in a keypress, replay a session, cut and finish the video. One of Sunrise's original goals.",
-   "dev": "Three stages. Recording: capture gameplay in a keypress with an encoder thread and little frame-time cost. Replay: a replay mode for recorded sessions. Editing: cuts, camera paths, titles and export. None of it exists yet; the agent-control socket (docs/agent-control.md) already lets tools drive the game for scripted shots.",
-   "links": [
-    "docs/agent-control.md",
-    "#10025"
    ]
   },
   {
@@ -1259,19 +1234,6 @@
    "dev": "Frames uploaded once, no per-tick CPU blend or copy (#1239).",
    "links": [
     "#1239"
-   ],
-   "shipped_in": "v0.2.5"
-  },
-  {
-   "id": "far-detail",
-   "title": "Far Detail for integrated graphics",
-   "status": "shipped",
-   "area": "performance",
-   "plain": "An optional Reduced setting for far terrain, suggested on integrated graphics, that saves 2 to 4 ms of GPU time per frame.",
-   "dev": "Opt-in reduced far terrain (#1199), on far-terrain chunk summaries built on the workers (#1029).",
-   "links": [
-    "#1199",
-    "#1029"
    ],
    "shipped_in": "v0.2.5"
   },

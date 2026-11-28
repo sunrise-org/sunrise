@@ -92,7 +92,7 @@ mod tests {
         with_game(|game| {
             fixture_resident_column(&mut game.world, (0, 0));
             game.options.dedicated = Some(Vec::new());
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             game.world.health_rules.difficulty = sunrise_world::food::Difficulty::Easy;
             let boat_id = game.take_entity_id();
             game.boats
@@ -297,7 +297,7 @@ mod tests {
 
     /// A player entity for the tests: the host's player standing in for a guest.
     fn player(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> EntityRef {
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
         sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
         game.entity(20).unwrap()
     }

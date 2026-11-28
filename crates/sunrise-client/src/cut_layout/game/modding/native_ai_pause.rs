@@ -32,7 +32,7 @@ mod tests {
                 game.world.set(x, 64, z, stone).unwrap();
             }
         }
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
         bind_local_player(game, 20, 123);
     }
 

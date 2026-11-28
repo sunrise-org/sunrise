@@ -240,7 +240,7 @@ mod console_source_tests {
     #[ignore = "daily"]
     fn the_console_runs_as_the_server_not_the_player_in_place() {
         with_guests(|game| {
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)));
             game.build_registries();
             let (tx, rx) = mpsc::channel();
             let hub = &mut game.server.lan.as_mut().unwrap().hub;

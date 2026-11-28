@@ -213,7 +213,13 @@ impl crate::game::ClientGame<'_> {
             trigger_extras,
             world: &mut self.common.world,
             facts: self.common.res.facts(),
-            tables: native_block_tables::BlockTables::new(&self.common.res, &self.common.pack),
+            // The client's state holds no world tables: its level's suffocation rules are the
+            // game's own.
+            tables: native_block_tables::BlockTables::new(&self.common.res, &self.common.pack)
+                .with_side_tables(
+                    sunrise_gameplay_common::game::level_suffocation_of(None, &self.common.res),
+                    items,
+                ),
             collision: self.common.collision,
             events: &mut self.common.level_events,
             dimension,

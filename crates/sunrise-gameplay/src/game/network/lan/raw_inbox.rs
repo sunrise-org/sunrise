@@ -103,7 +103,9 @@ impl crate::game::ServerGame<'_> {
             } else {
                 other_entities.as_slice()
             };
-            events = self.resume_raw_inbox(&mut host.hub, active_entities, active_spawn);
+            events = sunrise_level::spans::time("lan_drain", || {
+                self.resume_raw_inbox(&mut host.hub, active_entities, active_spawn)
+            });
         }
     }
 }

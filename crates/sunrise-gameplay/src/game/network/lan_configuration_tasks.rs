@@ -263,8 +263,8 @@ impl crate::game::ServerGame<'_> {
                     self.enter_level(Dim::from_id(dimension))
                         .map_err(|e| e.to_string())?;
                     self.server
+                        .chunk_ticking
                         .tickets
-                        .0
                         .add_spawn(prepared.chunk(), SpawnTicketKind::Player);
                     self.enter_level(back).map_err(|e| e.to_string())?;
                     return Ok(SpawnTask::Load(prepared));
@@ -305,15 +305,15 @@ impl crate::game::ServerGame<'_> {
                         rotation,
                     };
                     self.server
+                        .chunk_ticking
                         .tickets
-                        .0
                         .add_spawn(prepared.chunk(), SpawnTicketKind::Player);
                     SpawnTask::Load(prepared)
                 }
                 Err(chunk) => {
                     self.server
+                        .chunk_ticking
                         .tickets
-                        .0
                         .add_spawn(chunk, SpawnTicketKind::Search);
                     SpawnTask::Find {
                         level,
@@ -327,8 +327,8 @@ impl crate::game::ServerGame<'_> {
                 if spawn_area_full(&self.common.world, prepared.chunk(), PLAYER_SPAWN_RADIUS) {
                     // Hand off the pending load range to a fresh Ready ticket.
                     self.server
+                        .chunk_ticking
                         .tickets
-                        .0
                         .add_spawn(prepared.chunk(), SpawnTicketKind::Player);
                     SpawnTask::Ready(prepared)
                 } else {
@@ -337,8 +337,8 @@ impl crate::game::ServerGame<'_> {
             }
             SpawnTask::Ready(prepared) => {
                 self.server
+                    .chunk_ticking
                     .tickets
-                    .0
                     .add_spawn(prepared.chunk(), SpawnTicketKind::Player);
                 SpawnTask::Ready(prepared)
             }
@@ -349,14 +349,21 @@ impl crate::game::ServerGame<'_> {
     }
 
     pub(in crate::game::server_side) fn tick_spawn_tickets(&mut self, running: bool, notify: bool) {
-        if self.server.tickets.0.spawn_areas().next().is_some() {
+        if self
+            .server
+            .chunk_ticking
+            .tickets
+            .spawn_areas()
+            .next()
+            .is_some()
+        {
             // ServerChunkCache.tick doesn't purge in a frozen level, nor
             // does pause-when-empty tick the cache (it only polls chunk work).
             if running {
                 let streaming = &self.server.streaming;
                 self.server
+                    .chunk_ticking
                     .tickets
-                    .0
                     .tick_spawn(|center| streaming.chunk_ready_for_saving(center));
             }
             self.rebuild_chunk_tickets(notify);

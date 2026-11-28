@@ -154,14 +154,17 @@ fn the_bridge_names_the_attacker_and_what_it_holds() {
             mob
         };
         let by_player = Damage {
+            direct: None,
             attacker: Some(Who::Player),
             ..Damage::of(DamageKind::Generic)
         };
         let by_mob = Damage {
+            direct: None,
             attacker: Some(Who::Mob(3)),
             ..by_player
         };
         let by_nobody = Damage {
+            direct: None,
             attacker: None,
             ..by_player
         };
@@ -251,7 +254,7 @@ fn a_canceled_push_is_reported() {
 fn thorns_name_the_wearer_not_the_incoming_attacker() {
     use sunrise_sim::motion::PlayerMotion;
     let heard = heard(|game, _| {
-        let mut player = PlayerMotion::new(game.motion, Vec3::ZERO).unwrap();
+        let mut player = PlayerMotion::new(game.motion, Vec3::ZERO);
         player.entity_id = 7;
         game.player = Some(player);
         let mut chest = ItemStack::new("minecraft:diamond_chestplate", 1);
@@ -277,7 +280,7 @@ fn thorns_name_the_wearer_not_the_incoming_attacker() {
 
 fn player_with_sword(game: &mut sunrise_gameplay::game::ServerGame<'_>) {
     use sunrise_sim::motion::PlayerMotion;
-    let mut player = PlayerMotion::new(game.motion, Vec3::ZERO).unwrap();
+    let mut player = PlayerMotion::new(game.motion, Vec3::ZERO);
     player.entity_id = 7;
     game.player = Some(player);
     game.common.inventory[game.common.selected] = Some(ItemStack::new("minecraft:iron_sword", 1));
@@ -447,8 +450,7 @@ fn a_guest_blow_on_a_guest_names_the_attacker_and_the_sword() {
                 })
                 .unwrap();
             let mut victim =
-                sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(3.0, 64.0, 5.0))
-                    .unwrap();
+                sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(3.0, 64.0, 5.0));
             victim.entity_id = 13;
             game.server
                 .lan
@@ -778,8 +780,8 @@ pub(crate) fn credit_pig(game: &mut sunrise_gameplay::game::ServerGame<'_>) {
         .chunks
         .insert((0, 0), Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)));
     game.server
+        .chunk_ticking
         .tickets
-        .0
         .update(Some(sunrise_sim::ticket_levels::Sources {
             players: vec![(0, 0)],
             forced: Vec::new(),

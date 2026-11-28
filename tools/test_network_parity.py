@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Compare play packet bundles, post_effects lifecycle, and strict entity_data decoding with vanilla 26.3.
+"""Compare play packet bundles, post_effects lifecycle, strict entity_data decoding, and a new player's
+sent input and sprint with vanilla 26.3.
 
 Compiles and runs VanillaNetworkParityOracle against the pinned 26.3 client jar on JDK 25,
-writing bundle.json, post_effects.json, entity_data.json, and meta.json into a private witness
+writing bundle.json, post_effects.json, entity_data.json, sent_input.json, and meta.json into a private witness
 directory, then runs each Rust parity test in its own process via SUNRISE_NETWORK_WITNESS_DIR."""
 import argparse
 import contextlib
@@ -16,33 +17,28 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from tools import lab, oracle_harness as harness, test_rust_parity as base, test_model_baking_parity as baking
+from tools.ci import ignored_tests
 
 ORACLE = 'VanillaNetworkParityOracle'
 
-PROTOCOL_TESTS = [
-    'entity_data::tests::unknown_entity_data_serializers_fail_decode_like_26_3',
-    'entity_data::tests::valid_26_3_optional_global_pos_and_painting_variant_decode_completely',
-    'packets::configuration::tests::configuration_decodes_post_effects_packet_26_3',
-]
+# The daily rows that read this harness's witnesses: the standalone run takes its tests from them, so it runs the
+# exact names the daily shards run.
+ROW_FILES = ('daily-network-parity.txt', 'daily-sunrise-client-new-player-sent-input.txt')
 
-LIB_TESTS = [
-    'net::tests::bundle_holds_packets_until_closing_delimiter_and_emits_one_event_26_3',
-    'net::tests::bundled_keepalive_waits_for_game_thread_in_bundle_order_26_3',
-    'net::tests::bundle_rejects_terminal_packet_and_oversize_over_4096_26_3',
-    'net::tests::configuration_post_effects_disconnects_with_packet_error_26_3',
-    'net::tests::unknown_entity_data_serializer_disconnects_play_session_like_26_3',
-]
+WITNESS_FILES = ('bundle.json', 'post_effects.json', 'entity_data.json', 'sent_input.json')
 
-CLIENT_TESTS = [
-    'game::remote::entity_data_schema::tests::entity_data_schema_matches_26_3',
-    'game::remote::raw_ingress::bundle_parity_tests::genpvp_ping_rotation_and_keepalive_bundle_apply_atomically_in_order_26_3',
-    'game::remote::raw_ingress::bundle_parity_tests::dependent_entity_bundle_never_splits_across_poll_or_tick_26_3',
-    'game::remote::raw_ingress::bundle_parity_tests::entity_data_validation_inline_painting_and_pre_login_bundle_errors_26_3',
-    'game::remote::raw_ingress::post_effects_parity_tests::post_effects_cleared_on_login_respawn_and_reconfigure_26_3',
-    'game::remote::raw_ingress::post_effects_parity_tests::post_effects_before_login_disconnects_with_packet_error_26_3',
-]
 
-WITNESS_FILES = ('bundle.json', 'post_effects.json', 'entity_data.json')
+def tests_by_package():
+    """{package: [exact test name, ...]} from ROW_FILES' `lib` daily rows, in row order."""
+    files = {f'{ignored_tests.POLICY_PATH}/{name}' for name in ROW_FILES}
+    tests, seen = {}, set()
+    for row in ignored_tests.listed_entries():
+        if row.file in files:
+            assert row.mark == 'daily' and row.reference == 'lib', f'{row.file}: {row.test} is not a lib daily row'
+            tests.setdefault(row.package, []).append(row.test)
+            seen.add(row.file)
+    assert seen == files, f'no rows in {sorted(files - seen)}'
+    return tests
 
 
 def record(lock, jars, libraries, build, witness_dir=None):
@@ -156,22 +152,19 @@ def main():
         env['SUNRISE_TEST_RESOURCES'] = str(args.resources.resolve())
         env['SUNRISE_NETWORK_WITNESS_DIR'] = str(witness_dir.resolve())
 
-        for package, target_name, name, tests in (
-            ('sunrise-protocol', 'sunrise_protocol', 'protocol-tests', PROTOCOL_TESTS),
-            ('sunrise-client-lib', 'sunrise_client_lib', 'client-lib-tests', LIB_TESTS),
-            ('sunrise-client', 'sunrise_client', 'client-tests', CLIENT_TESTS),
-        ):
-            binary = build_test_binary(build, package, target_name, env)
+        total = 0
+        for package, tests in tests_by_package().items():
+            binary = build_test_binary(build, package, package.replace('-', '_'), env)
             for idx, test in enumerate(tests):
                 log = run_logged(
                     [binary, '--ignored', '--exact', '--test-threads=1', test],
-                    build, f'{name}-{idx}', cwd=scratch, env=env,
+                    build, f'{package}-{idx}', cwd=scratch, env=env,
                 )
                 assert '1 passed; 0 failed' in log.read_text(encoding='utf-8'), (
                     f'expected "1 passed; 0 failed" for {test} in {log}'
                 )
+                total += 1
 
-    total = len(PROTOCOL_TESTS) + len(LIB_TESTS) + len(CLIENT_TESTS)
     print(f'Network parity passed ({total} tests against {witness_dir})')
 
 

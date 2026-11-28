@@ -3,6 +3,8 @@
 #[cfg(test)]
 mod tests {
 
+    #[cfg(feature = "client")]
+    use super::super::native_entity_refs::tests::with_client_game;
     use super::super::native_entity_refs::tests::with_game;
     use mod_api::{
         EntityConstructingEvent, EntityJoinLevelEvent, EntityRef, EntitySpawn, FinalizeSpawnEvent,
@@ -48,6 +50,407 @@ mod tests {
             self.0.lock().unwrap().push(format!("join {}", event.kind));
             Flow::Continue
         }
+    }
+
+    /// `LevelRef::check_spawn_rules` (#6042): the light override decides a dark-only rule, `Any`
+    /// finds the dark, a non-mob type passes as a type with no placement entry does, and a stale
+    /// handle, a level not in place and a client refuse.
+    #[test]
+    #[ignore = "daily"]
+    fn a_level_checks_spawn_rules_with_the_light_a_mod_names() {
+        use mod_api::{LevelReadError, LightOverride, SpawnReason};
+        with_game(|game| {
+            game.world
+                .chunks
+                .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+            let dirt = game
+                .pack
+                .assets
+                .registry
+                .default_state("minecraft:dirt")
+                .unwrap();
+            game.world.set(8, 63, 8, dirt).unwrap();
+            game.world.health_rules.difficulty = sunrise_world::food::Difficulty::Normal;
+            let level = game.level(game.dim.id()).unwrap();
+            let host: &dyn Host = game;
+            let ask = |light| {
+                level.check_spawn_rules(
+                    host,
+                    "minecraft:zombie",
+                    [8, 64, 8],
+                    SpawnReason::Natural,
+                    light,
+                )
+            };
+            assert_eq!(ask(LightOverride::Level(0)), Ok(true));
+            assert_eq!(ask(LightOverride::Level(15)), Ok(false));
+            assert_eq!(ask(LightOverride::Level(200)), Ok(false), "clamped to 15");
+            assert_eq!(ask(LightOverride::Any), Ok(true));
+            let at = |kind, pos| {
+                level.check_spawn_rules(host, kind, pos, SpawnReason::Natural, LightOverride::Any)
+            };
+            assert_eq!(
+                at("minecraft:zombie", [900, 64, 900]),
+                Ok(false),
+                "unloaded"
+            );
+            assert_eq!(at("minecraft:no_such_mob", [8, 64, 8]), Ok(false));
+            assert_eq!(
+                at("minecraft:arrow", [8, 64, 8]),
+                Ok(true),
+                "a non-mob has no placement entry"
+            );
+            let stale = LevelRef::new(WorldEpoch::new(level.epoch().get() + 1), level.dimension());
+            assert_eq!(
+                stale.check_spawn_rules(
+                    host,
+                    "minecraft:zombie",
+                    [8, 64, 8],
+                    SpawnReason::Natural,
+                    LightOverride::Any
+                ),
+                Err(LevelReadError::Stale)
+            );
+            let unopened = LevelRef::new(level.epoch(), mod_api::DimensionKey::NETHER);
+            assert_eq!(
+                unopened.check_spawn_rules(
+                    host,
+                    "minecraft:zombie",
+                    [8, 64, 8],
+                    SpawnReason::Natural,
+                    LightOverride::Any
+                ),
+                Err(LevelReadError::Unavailable),
+                "a level not in place"
+            );
+        });
+        #[cfg(feature = "client")]
+        with_client_game(|game| {
+            let epoch = game.native_lifecycle.epoch().unwrap();
+            let level = LevelRef::new(epoch, game.dim.key());
+            let host: &dyn Host = game;
+            assert_eq!(
+                level.check_spawn_rules(
+                    host,
+                    "minecraft:zombie",
+                    [8, 64, 8],
+                    SpawnReason::Natural,
+                    LightOverride::Any
+                ),
+                Err(LevelReadError::Unavailable)
+            );
+        });
+    }
+
+    /// What `LightProbe`'s placement listener read at one check.
+    #[derive(Debug)]
+    struct HookRead {
+        reason: mod_api::SpawnReason,
+        default_result: bool,
+        /// The sky light the hook's own `level` handle reads at `pos`.
+        sky: Option<i32>,
+        draw: i64,
+        /// What the listener's own `check_spawn_rules` call answered.
+        nested: Result<bool, mod_api::LevelReadError>,
+    }
+    /// Replaces the zombie's spawn rule with one that passes only at block light 15 and records
+    /// the reason and the light it read. Its placement listener records what it saw, draws from
+    /// the lent random and asks `check_spawn_rules` again.
+    struct LightProbe {
+        rules: Arc<Mutex<Vec<(mod_api::SpawnReason, i32, i32)>>>,
+        hooks: Arc<Mutex<Vec<HookRead>>>,
+    }
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for LightProbe {
+        fn register(
+            &self,
+            registrar: &mut dyn mod_api::Registrar,
+            _: &mod_api::RegistrationContext,
+        ) {
+            let rules = self.rules.clone();
+            let predicate: Arc<dyn mod_api::SpawnPlacementPredicate> = Arc::new(
+                move |_: mod_api::EntityTypeKey,
+                      ctx: &mut dyn mod_api::SpawnPlacementContext,
+                      reason: mod_api::SpawnReason,
+                      pos: mod_api::BlockPos| {
+                    let block = ctx.level().block_light(pos);
+                    let sky = ctx.level().sky_light(pos);
+                    rules.lock().unwrap().push((reason, block, sky));
+                    block == 15
+                },
+            );
+            let zombie = registrar.entity_type_key("minecraft:zombie");
+            registrar
+                .register_spawn_placement(
+                    zombie,
+                    None,
+                    None,
+                    predicate,
+                    mod_api::SpawnPlacementOperation::Replace,
+                )
+                .unwrap();
+        }
+        fn mob_spawn_placement_check(
+            &self,
+            host: &dyn Host,
+            event: &mut mod_api::MobSpawnPlacementCheckEvent<'_>,
+        ) {
+            let pos = [event.pos.x, event.pos.y, event.pos.z];
+            let read = HookRead {
+                reason: event.reason,
+                default_result: event.default_result,
+                sky: event.level.brightness(host, mod_api::LightLayer::Sky, pos),
+                draw: event.random.next_long(),
+                nested: event.level.check_spawn_rules(
+                    host,
+                    event.kind,
+                    pos,
+                    event.reason,
+                    mod_api::LightOverride::Real,
+                ),
+            };
+            self.hooks.lock().unwrap().push(read);
+        }
+    }
+
+    /// `LevelRef::check_spawn_rules` (#6042) through a mod: a registered predicate reads the
+    /// fixed light and the caller's reason, `Real` reads the level's light, the hook's `level`
+    /// handle reads the real light under an override, `Any`'s tries draw one after another from
+    /// a copy of the level random that is never written back, and a listener that asks again
+    /// is refused instead of recursing.
+    #[test]
+    #[ignore = "daily"]
+    fn a_spawn_rule_check_reaches_registered_rules_and_listeners_but_not_itself() {
+        use mod_api::{LevelReadError, LightLayer, LightOverride, SpawnReason};
+        use sunrise_sim::mobs::spawn_rules::SpawnLevel;
+        let rules = Arc::new(Mutex::new(Vec::new()));
+        let hooks = Arc::new(Mutex::new(Vec::new()));
+        let probe = LightProbe {
+            rules: rules.clone(),
+            hooks: hooks.clone(),
+        };
+        mod_platform::testing::with_mods(
+            vec![mod_api::ModEntry::new("light-probe", Box::new(probe))].into(),
+            || {
+                with_game(|game| {
+                    game.world
+                        .chunks
+                        .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+                    game.world.health_rules.difficulty = sunrise_world::food::Difficulty::Normal;
+                    let at = [8, 64, 8];
+                    let real = {
+                        let natural = game.natural_level();
+                        (
+                            SpawnLevel::block_light(&natural, 8, 64, 8),
+                            SpawnLevel::sky_light(&natural, 8, 64, 8),
+                        )
+                    };
+                    let before = <(u64, Option<f64>)>::from(&*game.world.random);
+                    let level = game.level(game.dim.id()).unwrap();
+                    let host: &dyn Host = game;
+                    let real_sky = level.brightness(host, LightLayer::Sky, at);
+                    assert!(real_sky.is_some());
+                    let ask = |reason, light| {
+                        rules.lock().unwrap().clear();
+                        hooks.lock().unwrap().clear();
+                        level.check_spawn_rules(host, "minecraft:zombie", at, reason, light)
+                    };
+
+                    assert_eq!(
+                        ask(SpawnReason::Spawner, LightOverride::Level(3)),
+                        Ok(false)
+                    );
+                    assert_eq!(*rules.lock().unwrap(), [(SpawnReason::Spawner, 3, 3)]);
+                    {
+                        let hooks = hooks.lock().unwrap();
+                        assert_eq!(hooks.len(), 1, "the nested call ran no hook");
+                        let hook = &hooks[0];
+                        assert_eq!(hook.reason, SpawnReason::Spawner);
+                        assert!(!hook.default_result);
+                        assert_eq!(hook.sky, real_sky, "the hook's level reads the real light");
+                        assert_eq!(hook.nested, Err(LevelReadError::Unavailable));
+                    }
+
+                    assert_eq!(
+                        ask(SpawnReason::Natural, LightOverride::Level(15)),
+                        Ok(true)
+                    );
+                    assert_eq!(*rules.lock().unwrap(), [(SpawnReason::Natural, 15, 15)]);
+                    assert_eq!(hooks.lock().unwrap()[0].sky, real_sky);
+
+                    assert_eq!(
+                        ask(SpawnReason::Natural, LightOverride::Real),
+                        Ok(real.0 == 15)
+                    );
+                    assert_eq!(
+                        *rules.lock().unwrap(),
+                        [(SpawnReason::Natural, real.0, real.1)]
+                    );
+
+                    assert_eq!(ask(SpawnReason::Natural, LightOverride::Any), Ok(true));
+                    let lights: Vec<i32> = rules.lock().unwrap().iter().map(|r| r.1).collect();
+                    assert_eq!(
+                        lights,
+                        (0..=15).collect::<Vec<_>>(),
+                        "every level, in order"
+                    );
+                    let draws: Vec<i64> = hooks.lock().unwrap().iter().map(|h| h.draw).collect();
+                    let mut distinct = draws.clone();
+                    distinct.sort_unstable();
+                    distinct.dedup();
+                    assert_eq!(distinct.len(), 16, "the tries do not share rolls");
+                    assert!(
+                        hooks
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .all(|h| h.nested == Err(LevelReadError::Unavailable)),
+                        "every try's nested call is refused, not only the first"
+                    );
+                    assert_eq!(ask(SpawnReason::Natural, LightOverride::Any), Ok(true));
+                    let again: Vec<i64> = hooks.lock().unwrap().iter().map(|h| h.draw).collect();
+                    assert_eq!(again, draws, "an unchanged state replays the same rolls");
+                    assert_eq!(
+                        <(u64, Option<f64>)>::from(&*game.world.random),
+                        before,
+                        "the level random is not moved"
+                    );
+
+                    // `SpawnPlacements.checkSpawnRules` refuses a type not allowed in
+                    // Peaceful before its predicate: neither the registered rule nor the hook
+                    // runs, whatever the light.
+                    game.world.health_rules.difficulty = sunrise_world::food::Difficulty::Peaceful;
+                    rules.lock().unwrap().clear();
+                    hooks.lock().unwrap().clear();
+                    let host: &dyn Host = game;
+                    assert_eq!(
+                        level.check_spawn_rules(
+                            host,
+                            "minecraft:zombie",
+                            at,
+                            SpawnReason::Natural,
+                            LightOverride::Any
+                        ),
+                        Ok(false),
+                        "a zombie in Peaceful"
+                    );
+                    assert!(rules.lock().unwrap().is_empty(), "the rule is not asked");
+                    assert!(hooks.lock().unwrap().is_empty(), "nor the hook");
+                });
+            },
+        );
+    }
+
+    /// What `LentProbe`'s placement listener heard: its own `check_spawn_rules` answer, or None
+    /// when it was told not to ask.
+    type LentHeard = Arc<Mutex<Vec<Option<Result<bool, mod_api::LevelReadError>>>>>;
+    /// A `mob_spawn_placement_check` listener that asks `check_spawn_rules` from inside the
+    /// engine's pass when `.0` is set, and fails every check so no mob joins.
+    struct LentProbe(bool, LentHeard);
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for LentProbe {
+        fn mob_spawn_placement_check(
+            &self,
+            host: &dyn Host,
+            event: &mut mod_api::MobSpawnPlacementCheckEvent<'_>,
+        ) {
+            let pos = [event.pos.x, event.pos.y, event.pos.z];
+            let nested = self.0.then(|| {
+                event.level.check_spawn_rules(
+                    host,
+                    event.kind,
+                    pos,
+                    event.reason,
+                    mod_api::LightOverride::Real,
+                )
+            });
+            self.1.lock().unwrap().push(nested);
+            *event.result = mod_api::SpawnCheck::Fail;
+        }
+    }
+
+    /// `LevelRef::check_spawn_rules` (#6042) from a listener an engine pass calls: a spawner
+    /// block's tick (`BaseSpawner.serverTick`) holds the level random out of the level while
+    /// its spawn checks run, so the call is refused rather than copying the placeholder there,
+    /// and the level's live draws after the tick are the ones a tick without the call leaves.
+    #[test]
+    #[ignore = "daily"]
+    fn a_listener_inside_an_engine_pass_is_refused_and_the_live_draws_are_unchanged() {
+        use sunrise_core::random::{LegacyRandom, LevelRandom};
+        use sunrise_level::chunk::block_entity::{Next, SpawnData, Spawner};
+        use sunrise_level::containers::BlockEntity;
+        let run = |ask: bool| {
+            let heard = LentHeard::default();
+            let probe = LentProbe(ask, heard.clone());
+            let mut after = None;
+            mod_platform::testing::with_mods(
+                vec![mod_api::ModEntry::new("lent-probe", Box::new(probe))].into(),
+                || {
+                    with_game(|game| {
+                        game.options.dedicated = Some(Vec::new());
+                        game.world
+                            .chunks
+                            .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+                        game.world.health_rules.difficulty =
+                            sunrise_world::food::Difficulty::Normal;
+                        game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                            game.motion,
+                            Vec3::new(8.5, 64.0, 8.5),
+                        ));
+                        let mut mob = sunrise_core::nbt::Compound::new();
+                        mob.insert(
+                            "id".into(),
+                            sunrise_core::nbt::Tag::String("minecraft:zombie".into()),
+                        );
+                        let key = (8, 64, 8);
+                        let spawner = Spawner {
+                            spawn_delay: 0,
+                            next: Some(Next::Own(SpawnData {
+                                entity: mob,
+                                ..Default::default()
+                            })),
+                            ..Spawner::default()
+                        };
+                        game.world
+                            .block_entities
+                            .insert(key, BlockEntity::Spawner(Box::new(spawner)));
+                        // A known nonzero stream, not the seed-zero placeholder.
+                        game.world.random = LevelRandom::for_level(LegacyRandom::new(0x5eed_6042));
+                        game.tick_spawner(key).unwrap();
+                        let delay = match game.world.block_entities.get(&key) {
+                            Some(BlockEntity::Spawner(s)) => s.spawn_delay,
+                            _ => panic!("the spawner is gone"),
+                        };
+                        after = Some((
+                            <(u64, Option<f64>)>::from(&*game.world.random),
+                            delay,
+                            game.mobs.len(),
+                        ));
+                    });
+                },
+            );
+            (after.unwrap(), std::mem::take(&mut *heard.lock().unwrap()))
+        };
+        let (asked, asked_heard) = run(true);
+        let (plain, plain_heard) = run(false);
+        assert!(!asked_heard.is_empty(), "the tick ran its spawn checks");
+        assert!(
+            asked_heard
+                .iter()
+                .all(|h| *h == Some(Err(mod_api::LevelReadError::Unavailable))),
+            "{asked_heard:?}"
+        );
+        assert_eq!(asked_heard.len(), plain_heard.len());
+        assert_eq!(asked.2, 0, "every check failed");
+        assert_eq!(
+            asked, plain,
+            "the live stream and the spawner after the tick are the ones without the call"
+        );
+        assert_ne!(
+            asked.0,
+            <(u64, Option<f64>)>::from(&*LevelRandom::for_level(LegacyRandom::new(0x5eed_6042))),
+            "the tick drew from the live stream"
+        );
     }
 
     /// A cow (no jockey or rider rolls) spawns through the entity type's own path: constructed,

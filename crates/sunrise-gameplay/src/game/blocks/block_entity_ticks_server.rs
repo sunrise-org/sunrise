@@ -30,7 +30,7 @@ impl ServerGame<'_> {
     /// every player's tickets (`update_chunk_tickets`), its entities loaded
     /// (`ServerLevel.areEntitiesLoaded`).
     pub fn block_ticking_area(&self) -> impl Fn(i32, i32) -> bool + use<> {
-        let levels = self.server.tickets.0.levels();
+        let levels = self.server.chunk_ticking.tickets.levels();
         let pending = self.common.world.entities_pending.clone();
         move |x, z| block_ticking_at(&levels, &pending, x, z)
     }

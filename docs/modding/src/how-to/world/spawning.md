@@ -546,6 +546,37 @@ fn level_load(&self, host: &mut dyn mod_api::ServerHost, event: &mut mod_api::Le
 
 Only natural spawning reads the policy: spawners, trial spawners, patrols, sieges, phantoms, a new chunk's creatures and custom spawners keep their own rules. A change counts from the level's next spawn pass, and mobs already there stay. The policy is not saved. It survives parking and reopening a level within the same world session, but closing the world resets it. Set it in `level_load`. Reads work on any host and answer `None` on a client or for a stale handle; the writes need a `ServerHost` and return `false` there.
 
+`LevelRef::check_spawn_rules(host, kind, pos, reason, light)` runs the type's placement
+predicate (`SpawnPlacements.checkSpawnRules`), then `mob_spawn_placement_check`, without
+spawning anything. Use it before `spawn_entity` if the spawn should depend on those checks:
+`spawn_entity` does not run them. Pass a full id for `kind`. A type with no placement entry
+passes its vanilla rule; registered predicates and the hook still apply. At Peaceful difficulty
+a disallowed type such as a zombie returns `Ok(false)` before either callback, whatever `light`
+says.
+
+- `LightOverride::Real` reads the level's light.
+- `LightOverride::Level(n)` gives the predicate the same sky and block light at every position
+  it reads, including sky light used to decide whether it can see the sky. Values above
+  vanilla's `LightEngine.MAX_LEVEL` (15) are clamped to 15. This changes the light the checks
+  see rather than skipping the light checks.
+- `LightOverride::Any` tries 0 through 15 in order and stops at the first passing result after
+  the hook. This is what Apothic Spawners' “Ignore Light” uses.
+
+The override affects the predicate and thus `default_result`; the hook's `level` handle still
+reads the real level, including its light and sky visibility. The predicate and hook share one
+copy of the level random across all attempts. Each attempt draws after the one before it, but
+nothing is written back to the live stream, so calls at an unchanged state draw the same rolls.
+
+An unloaded position or unknown id returns `Ok(false)`. A stale handle returns `Err(Stale)`.
+The query returns `Err(Unavailable)` on a client, for a level not in place, inside another
+`check_spawn_rules` on the same thread, or while an engine pass holds the level random out of
+the level (for example, in a listener called by a spawner tick).
+
+```rust,ignore
+// Does the zombie's placement check pass at any light level?
+let ok = level.check_spawn_rules(host, "minecraft:zombie", pos, mod_api::SpawnReason::Spawner, mod_api::LightOverride::Any);
+```
+
 ## Raid handles
 
 Use `LevelRef::raid`, `raid_at` and `raids` to obtain raid handles. They resolve their

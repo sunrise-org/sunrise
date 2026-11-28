@@ -31,7 +31,7 @@ mod player_heart_type_tests {
     #[cfg(feature = "client")]
     fn add_player(game: &mut sunrise_client_gameplay::game::ClientGame<'_>) {
         let at = sunrise_core::geometry::Vec3::ZERO;
-        game.player = Some(sunrise_sim::motion::PlayerMotion::new(game.motion, at).unwrap());
+        game.player = Some(sunrise_sim::motion::PlayerMotion::new(game.motion, at));
     }
 
     /// `PlayerHeartTypeEvent`: the mod gets vanilla's pick and its answer is drawn; without a

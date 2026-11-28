@@ -1,0 +1,3 @@
+sunrise-render-shaderpack pack_post::blend_target_tests::final_writes_the_screen_without_blending lib daily gpu
+sunrise-render-shaderpack pack_post::blend_target_tests::only_blendable_formats_blend lib daily gpu
+sunrise-render-shaderpack pack_post::blend_target_tests::shadowcomp_blends_the_shadow_buffer_its_colortex_line_numbers lib daily gpu

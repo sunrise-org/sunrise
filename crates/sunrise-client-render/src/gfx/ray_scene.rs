@@ -94,7 +94,7 @@ pub(crate) struct RayScene {
     /// Whether the log said the store is at its largest.
     full_logged: bool,
     /// `Resident::removals` when the scene last dropped the sections no longer resident:
-    /// gfx.rs releases sections (unloaded columns, far terrain's fade-out) without `ray_mark`.
+    /// gfx.rs releases sections (unloaded columns) without `ray_mark`.
     removals: u64,
 }
 

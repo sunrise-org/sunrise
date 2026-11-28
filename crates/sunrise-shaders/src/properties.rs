@@ -26,6 +26,8 @@ pub struct Entry {
 pub struct Note {
     pub line: u32,
     pub message: String,
+    /// The key set again, for the note that a later entry replaces an earlier one.
+    pub repeated: Option<String>,
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -150,6 +152,7 @@ impl Properties {
                         "`{key}` is `{}`, not {takes}: Sunrise's HDR stays off",
                         entry.value
                     ),
+                    repeated: None,
                 });
             }
             Some(entry.value.as_str())
@@ -171,13 +174,14 @@ impl Properties {
     fn insert(&mut self, entry: Entry) {
         if let Some(at) = self.entries.iter().position(|e| e.key == entry.key) {
             let first = self.entries.remove(at).line;
-            self.note(
-                entry.line,
-                &format!(
+            self.notes.push(Note {
+                line: entry.line,
+                message: format!(
                     "`{}` is set again (first on line {first}); this one counts",
                     entry.key
                 ),
-            );
+                repeated: Some(entry.key.clone()),
+            });
         }
         self.entries.push(entry);
     }
@@ -186,6 +190,7 @@ impl Properties {
         self.notes.push(Note {
             line,
             message: message.to_owned(),
+            repeated: None,
         });
     }
 
@@ -356,7 +361,8 @@ mod tests {
             p.notes,
             [Note {
                 line: 6,
-                message: "not a key=value line".into()
+                message: "not a key=value line".into(),
+                repeated: None,
             }]
         );
     }
@@ -457,6 +463,7 @@ mod tests {
         let note = |line: u32| Note {
             line,
             message: format!("`#if {past}`: {}; read as false", too_deep()),
+            repeated: None,
         };
         assert_eq!(p.notes, [note(4), note(14)]);
     }
@@ -500,6 +507,7 @@ mod tests {
         let note = |line: u32, message: &str| Note {
             line,
             message: message.to_owned(),
+            repeated: None,
         };
         assert_eq!(
             p.notes,
@@ -541,6 +549,7 @@ mod tests {
         let note = |line: u32, message: &str| Note {
             line,
             message: message.to_owned(),
+            repeated: None,
         };
         assert_eq!(
             p.notes,

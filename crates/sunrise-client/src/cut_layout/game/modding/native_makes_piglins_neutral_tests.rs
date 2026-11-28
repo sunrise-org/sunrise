@@ -57,7 +57,7 @@ const GUEST: u32 = 12;
 /// A serving game with a survival host player, entity `PLAYER`, at `at`.
 fn serving(game: &mut sunrise_gameplay::game::ServerGame<'_>, at: Vec3) {
     game.options.dedicated = Some(Vec::new());
-    game.player = Some(PlayerMotion::new(game.motion, at).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, at));
     bind_local_player(game, PLAYER, u128::from(PLAYER));
     game.creative = false;
 }

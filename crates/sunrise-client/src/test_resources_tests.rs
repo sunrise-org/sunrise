@@ -1,10 +1,10 @@
 //! The required prepared-root boundary names every input it cannot use. These run in `verify`: they build
 //! their own temporary root and read no prepared data.
 
-use crate::test_resources::{
+use sunrise_core::prepared_profile::{Profile, SCHEMA, STAMP};
+use sunrise_core::prepared_test_support::{
     require_current_stamp, require_inputs, stamp_problems, unavailable_inputs,
 };
-use sunrise_core::prepared_profile::{Profile, SCHEMA, STAMP};
 
 fn scratch(name: &str) -> std::path::PathBuf {
     let root = std::env::temp_dir().join(format!(

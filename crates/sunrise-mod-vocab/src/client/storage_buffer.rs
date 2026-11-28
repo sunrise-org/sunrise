@@ -191,7 +191,8 @@ impl crate::__private::game::Fields for ReadbackTicket {
 ///
 /// A binding takes a range of at most the device's `max_storage_buffer_binding_size` bytes, its
 /// offset a multiple of `min_storage_buffer_offset_alignment`, its length a non-zero multiple of
-/// 4. The buffer itself may be as large as `max_buffer_size`.
+/// 4. The buffer itself may be as large as `max_buffer_size`. Both are in
+/// [`crate::RenderLimits`] (`host.render_capabilities().limits`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 // no wire: local client storage buffer range.
@@ -209,7 +210,8 @@ pub struct StorageBufferSlice {
 #[non_exhaustive]
 // no wire: local client storage buffer descriptor.
 pub struct StorageBufferDescriptor {
-    /// Size in bytes: at least 4, a multiple of 4 and at most the device's `max_buffer_size`.
+    /// Size in bytes: at least 4, a multiple of 4 and at most the device's `max_buffer_size`
+    /// ([`crate::RenderLimits::max_buffer_size`]).
     pub size: u64,
     /// Whether the buffer can also hold indirect draw or dispatch arguments (`wgpu`'s
     /// `BufferUsages::INDIRECT`; vanilla's `USAGE_INDIRECT_PARAMETERS`). Off by default.

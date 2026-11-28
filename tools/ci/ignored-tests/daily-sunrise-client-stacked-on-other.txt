@@ -1,7 +1,8 @@
-# The item_stacked_on_other decision tests use prepared resources.
+# The item_stacked_on_other decision tests use prepared resources. The crafting-table and
+# workstation packet tests also check container_menu refusal during the plain click.
+sunrise-client cut_layout::game::server_side::stacked_on_other_tests_server::a_lan_hub_click_is_decided_the_same_way lib daily resources
 sunrise-gameplay game::stacked_on_other_tests::a_cancelled_handled_click_sets_the_stacks_and_a_bad_stack_refuses_it lib daily resources
 sunrise-gameplay game::stacked_on_other_tests::a_failed_click_undoes_what_the_listener_wrote_and_applies_nothing lib daily resources
-sunrise-client cut_layout::game::server_side::stacked_on_other_tests_server::a_lan_hub_click_is_decided_the_same_way lib daily resources
 sunrise-gameplay game::stacked_on_other_tests::a_lan_inventory_click_is_decided_the_same_way lib daily resources
 sunrise-gameplay game::stacked_on_other_tests::a_listener_that_panics_after_a_committed_write_is_undone_and_the_next_click_works lib daily resources
 sunrise-gameplay game::stacked_on_other_tests::a_write_to_what_the_click_read_makes_it_stale lib daily resources

@@ -78,7 +78,7 @@ fn game<'a>(
     for x in 0..3 {
         game.load_ticking_neighbourhood(x, 0);
     }
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(24.5, 201.0, 12.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(24.5, 201.0, 12.5)));
     let net = NetConfig {
         announce: false,
         ..NetConfig::lan(0, "fence-leash-test".into(), 2)
@@ -193,7 +193,7 @@ fn a_fence_leash_pulls_a_pig_as_vanilla_does() {
         let i = pig(&mut game, uuid);
         let leash = game.mobs[i].extra.leash;
         let pending = game.mobs[i].extra.leash_pending;
-        let knot = game.server.knot_ids.get(&fence).copied();
+        let knot = game.server.knot_state.knot_ids.get(&fence).copied();
         let state = knot_state(fence);
         eprintln!(
             "tick-1 binding {uuid}: leash={leash:?} pending={pending:?} knot entity={knot:?} at {:?}",

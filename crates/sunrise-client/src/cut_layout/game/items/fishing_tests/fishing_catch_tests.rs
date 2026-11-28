@@ -79,7 +79,7 @@ fn run(mode: Option<u8>) -> (Vec<(String, u32)>, usize, i32, u32, i64, bool) {
                 sunrise_sim::save::LevelShape::OVERWORLD,
                 Some(Default::default()),
             ));
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)));
             game.server.lan_acting_uuid = Some(7);
             game.server.next_entity = 1000;
             game.level.seed = 12345;

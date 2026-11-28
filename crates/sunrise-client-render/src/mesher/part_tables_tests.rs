@@ -96,7 +96,7 @@ fn faces(tables: &MeshTables, parts: &PartTables) -> [Vec<u16>; 6] {
         parts,
         (false, false, true, false),
         &pad,
-        0x3F76E4,
+        || 0x3F76E4,
         &mut mesh,
         [0, 0, 0],
         &super::visibility_plan::NoMasks,

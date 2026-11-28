@@ -94,8 +94,6 @@ pub struct SamplerContext {
     caches: Option<Vec<cache::CacheCell>>,
     fields: WorldFields,
     sparse: bool,
-    /// Planes of y-fixed slices already sampled (`with_planes`).
-    planes: Option<std::collections::HashMap<slice::PlaneKey, Vec<f32>>>,
     /// Lattice samples kept by interpolated samplers' aligned volumes.
     capture: Option<Vec<LatticeSamples>>,
     /// Known lattice samples interpolated samplers may read instead of
@@ -128,9 +126,6 @@ impl SamplerContext {
     pub fn reset(&mut self) {
         self.caches = self.caches.as_ref().map(|_| Vec::new());
         self.fields = WorldFields::default();
-        if let Some(planes) = &mut self.planes {
-            planes.clear();
-        }
         self.capture = None;
         self.lattice = Vec::new();
     }

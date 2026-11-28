@@ -964,7 +964,7 @@ fn a_chat_message_is_cut_to_the_256_utf16_units_the_packet_holds() {
     assert_eq!(normalize_chat_message(&mixed), "b".repeat(255));
 }
 
-/// PvP & HUD's chat options: the time before each message, and a repeated message counted on
+/// chat options: the time before each message, and a repeated message counted on
 /// its own lines instead of filling the chat.
 #[test]
 fn timestamps_and_compact_chat_change_the_lines_not_the_messages() {
@@ -1008,7 +1008,7 @@ fn timestamps_and_compact_chat_change_the_lines_not_the_messages() {
     assert_eq!(shown(&chat), ["gg", "wp", "gg (x3)"]);
 }
 
-/// PvP & HUD's chat search: only the messages holding the query show, in any case; clearing
+/// chat search: only the messages holding the query show, in any case; clearing
 /// it brings every line back.
 #[test]
 fn the_chat_search_keeps_the_matching_messages() {

@@ -68,11 +68,39 @@ pub fn try_resolve_step_movement_oriented<S: std::borrow::Borrow<VoxelShape>, E>
     oriented: &[OrientedCollider],
     mut collect: impl FnMut(Aabb) -> Result<Vec<S>, E>,
 ) -> Result<Vec3, E> {
+    let mut shapes = Vec::new();
+    try_resolve_step_movement_oriented_into(
+        movement,
+        aabb,
+        max_step,
+        on_ground,
+        oriented,
+        &mut shapes,
+        |bounds, out| {
+            *out = collect(bounds)?;
+            Ok(())
+        },
+    )
+}
+
+/// [`try_resolve_step_movement_oriented`] reusing the caller's `shapes` buffer across queries
+/// so repeated entity moves allocate no scratch vector. `collect` appends the colliders for the
+/// requested bound into `shapes` (already cleared before each call).
+pub fn try_resolve_step_movement_oriented_into<S: std::borrow::Borrow<VoxelShape>, E>(
+    movement: Vec3,
+    aabb: Aabb,
+    max_step: f32,
+    on_ground: bool,
+    oriented: &[OrientedCollider],
+    shapes: &mut Vec<S>,
+    mut collect: impl FnMut(Aabb, &mut Vec<S>) -> Result<(), E>,
+) -> Result<Vec3, E> {
     let resolved = if movement.length_squared() == 0.0 {
         movement
     } else {
-        let shapes = collect(aabb.expand_towards(movement))?;
-        resolve_borrowed_shape_movement(movement, aabb, &shapes, oriented)
+        shapes.clear();
+        collect(aabb.expand_towards(movement), shapes)?;
+        resolve_borrowed_shape_movement(movement, aabb, shapes, oriented)
     };
     let landed = movement.y != resolved.y && movement.y < 0.0;
     if max_step > 0.0
@@ -88,19 +116,23 @@ pub fn try_resolve_step_movement_oriented<S: std::borrow::Borrow<VoxelShape>, E>
         if !landed {
             query = query.expand_towards(Vec3::new(0.0, -(1.0e-5_f32 as f64), 0.0));
         }
-        let shapes = collect(query)?;
-        for height in borrowed_step_heights(
+        shapes.clear();
+        collect(query, shapes)?;
+        let mut heights = StepHeights::take();
+        borrowed_step_heights_into(
             step_box,
-            &shapes,
+            shapes,
             oriented,
             Vec3::new(movement.x, 0.0, movement.z),
             max_step,
             resolved.y as f32,
-        ) {
+            &mut heights.0,
+        );
+        for &height in &heights.0 {
             let candidate = resolve_borrowed_shape_movement(
                 Vec3::new(movement.x, height as f64, movement.z),
                 step_box,
-                &shapes,
+                shapes,
                 oriented,
             );
             if candidate.horizontal_distance_squared() > resolved.horizontal_distance_squared() {
@@ -166,6 +198,23 @@ pub fn candidate_step_heights(
 
 thread_local! {
     static FOUND: std::cell::RefCell<Vec<f64>> = const { std::cell::RefCell::new(Vec::new()) };
+    static STEP_HEIGHTS: std::cell::RefCell<Vec<f32>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+struct StepHeights(Vec<f32>);
+
+impl StepHeights {
+    fn take() -> Self {
+        Self(STEP_HEIGHTS.with(|list| std::mem::take(&mut *list.borrow_mut())))
+    }
+}
+
+impl Drop for StepHeights {
+    fn drop(&mut self) {
+        self.0.clear();
+        STEP_HEIGHTS.with(|list| *list.borrow_mut() = std::mem::take(&mut self.0));
+    }
 }
 
 fn borrowed_step_heights<S: std::borrow::Borrow<VoxelShape>>(
@@ -176,7 +225,29 @@ fn borrowed_step_heights<S: std::borrow::Borrow<VoxelShape>>(
     max_step: f32,
     current_y: f32,
 ) -> Vec<f32> {
-    let mut heights = Vec::<f32>::with_capacity(4);
+    let mut heights = Vec::with_capacity(4);
+    borrowed_step_heights_into(
+        aabb,
+        shapes,
+        oriented,
+        horizontal,
+        max_step,
+        current_y,
+        &mut heights,
+    );
+    heights
+}
+
+fn borrowed_step_heights_into<S: std::borrow::Borrow<VoxelShape>>(
+    aabb: Aabb,
+    shapes: &[S],
+    oriented: &[OrientedCollider],
+    horizontal: Vec3,
+    max_step: f32,
+    current_y: f32,
+    heights: &mut Vec<f32>,
+) {
+    heights.clear();
     if !oriented.is_empty() {
         // Kept between moves: a step attempt on a collider allocates nothing for these.
         let mut found = FOUND.with(|c| std::mem::take(&mut *c.borrow_mut()));
@@ -211,7 +282,6 @@ fn borrowed_step_heights<S: std::borrow::Borrow<VoxelShape>>(
         }
     }
     heights.sort_unstable_by(f32::total_cmp);
-    heights
 }
 
 #[cfg(test)]

@@ -4,18 +4,29 @@ use std::{any::TypeId, collections::hash_map::Entry};
 use sunrise_mod_runtime::registry_keys::Names;
 
 impl PartRegistrar {
-    pub(crate) fn capability_parts() -> Parts {
+    pub(crate) fn capability_parts() -> (Parts, TypeIdentityTable) {
         let mut parts = Parts::default();
+        let mut type_identities = TypeIdentityTable::default();
         for (by, name, binding) in mod_vocab::__private::parts_installation::builtin_capabilities()
         {
-            let metadata = match by {
+            let (kind, metadata) = match by {
                 ProvidedBy::Block | ProvidedBy::BlockEntity => {
                     parts.block_capability_order.push(name);
-                    &mut parts.block_capability_metadata
+                    (
+                        TypeIdentityKind::BlockCapability,
+                        &mut parts.block_capability_metadata,
+                    )
                 }
-                ProvidedBy::Item => &mut parts.item_capability_metadata,
-                ProvidedBy::Entity => &mut parts.entity_capability_metadata,
+                ProvidedBy::Item => (
+                    TypeIdentityKind::ItemCapability,
+                    &mut parts.item_capability_metadata,
+                ),
+                ProvidedBy::Entity => (
+                    TypeIdentityKind::EntityCapability,
+                    &mut parts.entity_capability_metadata,
+                ),
             };
+            type_identities.seed(kind, name, TypeIdentity::typed(binding.0, binding.1));
             metadata.insert(
                 name,
                 CapabilityMetadata {
@@ -25,7 +36,7 @@ impl PartRegistrar {
                 },
             );
         }
-        parts
+        (parts, type_identities)
     }
 
     /// Registry requests already carry validated names, including forward references whose
@@ -62,14 +73,32 @@ impl PartRegistrar {
             ));
             return None;
         }
-        let (metadata, block_order) = match by {
+        let (kind, metadata, block_order) = match by {
             ProvidedBy::Block | ProvidedBy::BlockEntity => (
+                TypeIdentityKind::BlockCapability,
                 &mut self.parts.block_capability_metadata,
                 Some(&mut self.parts.block_capability_order),
             ),
-            ProvidedBy::Item => (&mut self.parts.item_capability_metadata, None),
-            ProvidedBy::Entity => (&mut self.parts.entity_capability_metadata, None),
+            ProvidedBy::Item => (
+                TypeIdentityKind::ItemCapability,
+                &mut self.parts.item_capability_metadata,
+                None,
+            ),
+            ProvidedBy::Entity => (
+                TypeIdentityKind::EntityCapability,
+                &mut self.parts.entity_capability_metadata,
+                None,
+            ),
         };
+        if let Err(error) = self.type_identities.claim(
+            kind,
+            name,
+            self.mod_id,
+            TypeIdentity::typed(binding.0, binding.1),
+        ) {
+            self.refused.push(error);
+            return None;
+        }
         match metadata.entry(name) {
             Entry::Vacant(entry) => {
                 if let Some(order) = block_order {
@@ -81,24 +110,7 @@ impl PartRegistrar {
                     proxyable: None,
                 }))
             }
-            Entry::Occupied(entry) => {
-                let known = entry.into_mut();
-                let (binding_type, handler) = binding;
-                let (existing_type, existing_handler) = known.binding;
-                if existing_type == binding_type {
-                    return Some(known);
-                }
-                let conflict = if existing_handler == handler {
-                    "incompatible handler or context types"
-                } else {
-                    "two handler types"
-                };
-                self.refused.push(format!(
-                    "capability {name} is answered with {conflict}, {existing_handler} by {} and {handler} by {}",
-                    known.owner, self.mod_id
-                ));
-                None
-            }
+            Entry::Occupied(entry) => Some(entry.into_mut()),
         }
     }
 

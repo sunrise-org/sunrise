@@ -49,8 +49,7 @@ fn campfire_game<'a>(
             f64::from(pos[1]),
             f64::from(pos[2]) + 2.5,
         ),
-    )
-    .unwrap();
+    );
     // `Player.canEat`: hungry, so the beef's own use can start.
     player.health.food.food = 6;
     game.player = Some(player);

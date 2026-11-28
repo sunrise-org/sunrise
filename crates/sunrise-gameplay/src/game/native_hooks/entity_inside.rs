@@ -19,13 +19,10 @@ pub mod sweep_tests {
             game.world.set(x, 100, 0, stone).unwrap();
         }
         if game.player.is_none() {
-            game.player = Some(
-                sunrise_sim::motion::PlayerMotion::new(
-                    game.motion,
-                    sunrise_core::geometry::Vec3::new(0.5, 100.0, 0.5),
-                )
-                .unwrap(),
-            );
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                sunrise_core::geometry::Vec3::new(0.5, 100.0, 0.5),
+            ));
         }
         game.player
             .as_mut()

@@ -615,7 +615,7 @@ pub(crate) mod combat_query_tests {
     };
 
     fn actor(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> mod_api::LivingRef {
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
         sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
         mod_api::LivingRef::new(game.entity(20).unwrap())
     }

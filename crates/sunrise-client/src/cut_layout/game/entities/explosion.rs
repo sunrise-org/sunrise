@@ -276,8 +276,7 @@ mod explicit_source_tests {
                 game.mobs.clear();
                 game.orbs.clear();
                 game.dropped.clear();
-                game.player =
-                    Some(PlayerMotion::new(game.motion, Vec3::new(10.5, 64.0, 8.5)).unwrap());
+                game.player = Some(PlayerMotion::new(game.motion, Vec3::new(10.5, 64.0, 8.5)));
                 let kind = game.res.mob_types().get("minecraft:husk").unwrap().clone();
                 let species = kind.species;
                 if mode == 2 || nested {

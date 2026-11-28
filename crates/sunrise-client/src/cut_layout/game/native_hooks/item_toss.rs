@@ -41,13 +41,10 @@ pub(crate) mod item_toss_tests {
         with_mods(mods.into(), || {
             sunrise_gameplay::game::native_entity_refs::tests::with_game(|game| {
                 game.options.dedicated = Some(Vec::new());
-                game.player = Some(
-                    sunrise_sim::motion::PlayerMotion::new(
-                        game.motion,
-                        sunrise_core::geometry::Vec3::ZERO,
-                    )
-                    .unwrap(),
-                );
+                game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                    game.motion,
+                    sunrise_core::geometry::Vec3::ZERO,
+                ));
                 let eye = [0.5, 65.0, 0.5];
                 let before = game.dropped.len();
                 let stone = ItemStack::new("minecraft:stone", 1);
@@ -145,13 +142,10 @@ pub(crate) mod item_toss_tests {
         with_mods(mods.into(), || {
             sunrise_gameplay::game::native_entity_refs::tests::with_game(|game| {
                 game.options.dedicated = Some(Vec::new());
-                game.player = Some(
-                    sunrise_sim::motion::PlayerMotion::new(
-                        game.motion,
-                        sunrise_core::geometry::Vec3::ZERO,
-                    )
-                    .unwrap(),
-                );
+                game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                    game.motion,
+                    sunrise_core::geometry::Vec3::ZERO,
+                ));
                 let dirt = ItemStack::new("minecraft:dirt", 1);
                 assert!(
                     game.throw_from_eyes(dirt, [0.5, 65.0, 0.5], false, true)

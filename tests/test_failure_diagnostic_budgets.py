@@ -1,9 +1,14 @@
 """Synthetic failure payloads only; no game or prepared-data execution."""
 import contextlib
+import ctypes
 import io
+import os
+import struct
+import subprocess
+import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from tools.ci import ignored_tests as ci
 
@@ -134,6 +139,109 @@ class Budgets(unittest.TestCase):
             )
         self.assertEqual(log.count('panicked at crates/example.rs:1:1'), 2)
         self.assertNotIn('crates/example.rs:3:1', log)
+
+    CHILD_SOURCE = ['assert_eq!(slots, 1, "child fixture failed");', 'panic!("child test process failed");']
+    CHILD_REPORT = ("running 1 test\ntest foo ... FAILED\n\nfailures:\n\n---- foo stdout ----\n"
+                    "thread 'foo' panicked at crates/example.rs:1:1:\nchild fixture failed\n\nfailures:\n    foo\n\n"
+                    "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.1s\n")
+    PARENT_START = ("     Running unittests src/lib.rs (target/debug/deps/example)\nrunning 1 test\ntest foo ... FAILED\n"
+                    "\nfailures:\n\n---- foo stdout ----\n")
+
+    def render_child(self, output):
+        with patch.object(ci, 'tracked_rust_paths', return_value={'crates/example.rs'}), \
+                patch.object(ci, 'source_lines', return_value=self.CHILD_SOURCE), \
+                patch.dict(ci._panic_locations, clear=True):
+            log = self.render(output)
+            return log, dict(ci._panic_locations)
+
+    def test_a_childs_panic_printed_before_its_parents_wrapper_panic_is_the_one_shown(self):
+        log, locations = self.render_child(
+            self.PARENT_START + self.CHILD_REPORT +
+            "thread 'foo' panicked at crates/example.rs:2:1:\nchild test process failed\n")
+        self.assertIn('  panicked at crates/example.rs:1:1\n', log)
+        self.assertIn('  panic reason: custom panic; message: child fixture failed\n', log)
+        self.assertIn('  panic source: assert_eq!(slots, 1, "child fixture failed");\n', log)
+        self.assertNotIn('crates/example.rs:2:1', log)
+        self.assertNotIn('child test process failed', log)
+        self.assertEqual(log.count('  failed test: foo\n'), 1)
+        self.assertEqual(log.count('panicked at crates/example.rs:1:1'), 1)
+        self.assertEqual(locations, {'foo': 'crates/example.rs:1:1'})
+
+    def test_a_childs_panic_inside_its_parents_panic_message_replaces_the_wrapper(self):
+        child = ("running 1 test\ntest foo ... FAILED\n\nfailures:\n\n---- foo stdout ----\n"
+                 "thread 'foo' panicked at crates/example.rs:1:1:\n"
+                 "assertion `left == right` failed: PRIVATE 987654\n  left: 987654\n right: 1\n\n"
+                 "failures:\n    foo\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out\n")
+        log, locations = self.render_child(
+            self.PARENT_START + "thread 'foo' panicked at crates/example.rs:2:1:\nfoo failed in its own process:\n" + child)
+        self.assertIn('  panicked at crates/example.rs:1:1\n', log)
+        self.assertIn('  panic reason: assertion equality failed; payload withheld (resource privacy)\n', log)
+        self.assertIn('  panic source: assert_eq!(slots, 1, "child fixture failed");\n', log)
+        self.assertNotIn('crates/example.rs:2:1', log)
+        for withheld in ('PRIVATE', '987654', 'its own process'):
+            self.assertNotIn(withheld, log)
+        self.assertEqual(log.count('  failed test: foo\n'), 1)
+        self.assertEqual(log.count('panicked at crates/example.rs:1:1'), 1)
+        self.assertEqual(locations, {'foo': 'crates/example.rs:1:1'})
+
+    def test_a_child_that_exits_without_panicking_shows_its_parents_static_message(self):
+        log, locations = self.render_child(
+            self.PARENT_START + "thread 'foo' panicked at crates/example.rs:2:1:\nchild test process failed\n")
+        self.assertIn('  panicked at crates/example.rs:2:1\n', log)
+        self.assertIn('  panic reason: custom panic; message: child test process failed\n', log)
+        self.assertNotIn('payload withheld', log)
+        self.assertEqual(locations, {'foo': 'crates/example.rs:2:1'})
+
+    def test_a_childs_report_does_not_override_the_first_target_or_a_caught_panic(self):
+        source = ['assert!(first);', 'panic!("a listener fails");', 'assert!(second);']
+        first = ("     Running unittests src/lib.rs (a)\nrunning 1 test\ntest same ... FAILED\n\nfailures:\n\n"
+                 "---- same stdout ----\nthread 'same' panicked at crates/example.rs:1:1:\nassertion failed: first\n"
+                 "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out\n")
+        second = ("     Running tests/b.rs (b)\nrunning 1 test\ntest same ... FAILED\n\nfailures:\n\n"
+                  "---- same stdout ----\nthread 'same' panicked at crates/example.rs:3:1:\nassertion failed: second\n"
+                  "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out\n")
+        with patch.object(ci, 'tracked_rust_paths', return_value={'crates/example.rs'}), \
+                patch.object(ci, 'source_lines', return_value=source):
+            log = self.render(first + second)
+            # Inside a child's own report, the last panic of its capture is still the one it failed on.
+            caught = self.render(
+                self.PARENT_START + "thread 'foo' panicked at crates/example.rs:3:1:\nwrapper\n"
+                "running 1 test\ntest foo ... FAILED\n\n---- foo stdout ----\n"
+                "thread 'foo' panicked at crates/example.rs:2:1:\na listener fails\n"
+                "thread 'foo' panicked at crates/example.rs:1:1:\nassertion failed: first\n")
+        self.assertEqual(log.count('panicked at crates/example.rs:1:1'), 2)
+        self.assertNotIn('crates/example.rs:3:1', log)
+        self.assertEqual(caught.count('  failed test: foo\n'), 1)
+        self.assertIn('panicked at crates/example.rs:1:1', caught)
+        self.assertNotIn('crates/example.rs:2:1', caught)
+        self.assertNotIn('crates/example.rs:3:1', caught)
+
+    def test_a_later_repeated_name_keeps_its_first_context_after_an_earlier_tests_child_run(self):
+        source = ['assert!(first);', 'panic!("child test process failed");', 'assert!(second);']
+        later = ("test same ... FAILED\ntest same ... FAILED\n\nfailures:\n\n"
+                 "---- same stdout ----\nthread 'same' panicked at crates/example.rs:1:1:\nassertion failed: first\n"
+                 "---- same stdout ----\nthread 'same' panicked at crates/example.rs:3:1:\nassertion failed: second\n")
+        with patch.object(ci, 'tracked_rust_paths', return_value={'crates/example.rs'}), \
+                patch.object(ci, 'source_lines', return_value=source), \
+                patch.dict(ci._panic_locations, clear=True):
+            # foo's child run ends with its summary; no `running N tests` precedes the later repeated captures.
+            log = self.render(self.PARENT_START + self.CHILD_REPORT +
+                              "thread 'foo' panicked at crates/example.rs:2:1:\nchild test process failed\n" + later)
+            locations = dict(ci._panic_locations)
+        self.assertEqual(locations, {'foo': 'crates/example.rs:1:1', 'same': 'crates/example.rs:1:1'})
+        self.assertEqual(log.count('  failed test: foo\n'), 1)
+        self.assertEqual(log.count('  failed test: same\n'), 2)
+        self.assertEqual(log.count('panicked at crates/example.rs:1:1'), 3)
+        self.assertNotIn('crates/example.rs:2:1', log)
+        self.assertNotIn('crates/example.rs:3:1', log)
+
+    def test_vulkan_driver_files_alone_marks_a_vulkan_driver_present(self):
+        with patch.dict(os.environ, {'VK_DRIVER_FILES': '/driver/icd.json'}), \
+                patch.object(ci, 'ICD_DIRS', ()):
+            os.environ.pop('VK_ICD_FILENAMES', None)
+            self.assertTrue(ci.has_vulkan())
+        with patch.dict(os.environ, clear=True), patch.object(ci, 'ICD_DIRS', ()):
+            self.assertFalse(ci.has_vulkan())
 
     def test_a_shown_panic_message_allows_bounded_rustc_codes_not_diagnostic_text(self):
         with patch.object(ci, 'tracked_rust_paths', return_value={'crates/example.rs'}), \
@@ -333,6 +441,179 @@ class Budgets(unittest.TestCase):
         annotations = ''.join(line + '\n' for line in log.getvalue().splitlines() if line.startswith('::error::'))
         self.assertLessEqual(len(annotations.encode()), 100)
         self.assertIn('problems not shown (shared total byte budget)', log.getvalue())
+
+
+class VulkanAdapters(unittest.TestCase):
+    """The one-line adapter log: synthetic Vulkan data and loaders, no driver needed."""
+
+    @staticmethod
+    def properties(name=b"llvmpipe\x07(LLVM 15.0.7,   256 bits)\xc3\xa9"):
+        buffer = bytearray(824)
+        struct.pack_into("<I", buffer, 0, (1 << 22) | (3 << 12) | 296)
+        struct.pack_into("<I", buffer, 16, 4)
+        buffer[20:20 + len(name)] = name
+        struct.pack_into("<I", buffer, 300, 16384)
+        struct.pack_into("<I", buffer, 320, 65536)
+        struct.pack_into("<I", buffer, 324, 128 * 1024 * 1024)
+        struct.pack_into("<I", buffer, 372, 16)
+        return bytes(buffer)
+
+    def loader(self, adapters, created=0):
+        """A stand-in for the system loader that reports `adapters` (VkPhysicalDeviceProperties bytes)."""
+        loader = MagicMock()
+        loader.vkCreateInstance.return_value = created
+
+        def enumerate_devices(_, count, devices):
+            if devices is None:
+                count._obj.value = len(adapters)
+            else:
+                for index in range(count._obj.value):
+                    devices[index] = index + 1
+            return 0
+
+        def get_properties(device, buffer):
+            ctypes.memmove(buffer, adapters[device - 1], len(adapters[device - 1]))
+
+        loader.vkEnumeratePhysicalDevices.side_effect = enumerate_devices
+        loader.vkGetPhysicalDeviceProperties.side_effect = get_properties
+        return loader
+
+    def test_an_adapter_is_one_sanitized_line_with_its_storage_limits(self):
+        loader = self.loader([self.properties()])
+        with patch.object(ci.ctypes, 'CDLL', return_value=loader):
+            lines = ci._probe_vulkan_adapters()
+        self.assertEqual(lines, [
+            'vulkan adapter[0]: name=llvmpipe (LLVM 15.0.7, 256 bits) type=cpu api=1.3.296 '
+            'max_storage_buffer_binding_size=134217728 (128 MiB) max_storage_buffers_per_shader_stage=16 '
+            'max_texture_dimension_2d=16384'])
+        self.assertTrue(all(32 <= ord(char) <= 126 for char in lines[0]))
+        loader.vkDestroyInstance.assert_called_once()
+
+    def test_at_most_four_adapters_are_shown_and_an_empty_name_is_unknown(self):
+        loader = self.loader([self.properties(b"\x01\x02")] * 6)
+        with patch.object(ci.ctypes, 'CDLL', return_value=loader):
+            lines = ci._probe_vulkan_adapters()
+        self.assertEqual(len(lines), 4)
+        self.assertTrue(lines[3].startswith('vulkan adapter[3]: name=unknown type=cpu '))
+        self.assertEqual(ci.vulkan_adapter_line(0, self.properties(b'x' * 200)).split(' type=')[0],
+                         'vulkan adapter[0]: name=' + 'x' * 80)
+
+    def test_failures_report_a_fixed_tag_and_never_raw_error_text(self):
+        secret = '/home/runner/PRIVATE/libvulkan.so'
+        failing = self.loader([])
+        failing.vkEnumeratePhysicalDevices.side_effect = RuntimeError(secret)
+        cases = (
+            ('loader-missing', patch.object(ci.ctypes, 'CDLL', side_effect=OSError(secret)), False),
+            ('instance-init-failed', patch.object(ci.ctypes, 'CDLL', return_value=self.loader([], created=-9)), False),
+            ('no-physical-devices', patch.object(ci.ctypes, 'CDLL', return_value=self.loader([])), True),
+            ('query-failed', patch.object(ci.ctypes, 'CDLL', return_value=failing), True),
+        )
+        for tag, loading, destroyed in cases:
+            with self.subTest(tag=tag), loading as load:
+                self.assertEqual(ci._probe_vulkan_adapters(), [f'vulkan adapter: unavailable ({tag})'])
+                if destroyed:
+                    load.return_value.vkDestroyInstance.assert_called_once()
+                elif tag == 'instance-init-failed':
+                    load.return_value.vkDestroyInstance.assert_not_called()
+
+    def test_a_failing_instance_cleanup_never_raises_or_shows_its_error_text(self):
+        secret = '/home/runner/PRIVATE/libvulkan.so'
+        healthy = self.loader([self.properties()])
+        failing = self.loader([])
+        failing.vkEnumeratePhysicalDevices.side_effect = RuntimeError(secret)
+        for loader, expected in (
+                (healthy, ci.vulkan_adapter_line(0, self.properties())),
+                (failing, 'vulkan adapter: unavailable (query-failed)')):
+            loader.vkDestroyInstance.side_effect = RuntimeError(secret)
+            with self.subTest(expected=expected[:30]), patch.object(ci.ctypes, 'CDLL', return_value=loader):
+                lines = ci._probe_vulkan_adapters()
+            self.assertEqual(lines, [expected])
+            self.assertNotIn(secret, ''.join(lines))
+            loader.vkDestroyInstance.assert_called_once()
+
+    def test_a_probe_that_crashes_by_signal_reports_a_fixed_tag_and_none_of_its_output(self):
+        secret = 'PRIVATE-DRIVER-OUTPUT'
+        die = "os.kill(os.getpid(), signal.SIGKILL)" if os.name == 'posix' else "os._exit(1)"
+        script = f"import os, signal, sys; print({secret!r}); sys.stdout.flush(); {die}"
+        with patch.object(ci, 'VULKAN_PROBE_SCRIPT', script):
+            lines = ci.vulkan_adapter_summaries()
+        self.assertEqual(lines, ['vulkan adapter: unavailable (probe-crashed)'])
+        self.assertNotIn(secret, ''.join(lines))
+
+    def test_a_probe_that_hangs_is_stopped_at_the_timeout(self):
+        with patch.object(ci, 'VULKAN_PROBE_SCRIPT', 'import time; time.sleep(30)'), \
+                patch.object(ci, 'VULKAN_PROBE_TIMEOUT', 0.1):
+            self.assertEqual(ci.vulkan_adapter_summaries(), ['vulkan adapter: unavailable (probe-timed-out)'])
+
+    def probe_prints(self, text):
+        with patch.object(ci, 'VULKAN_PROBE_SCRIPT', f'print({text!r})'):
+            return ci.vulkan_adapter_summaries()
+
+    def test_only_adapter_lines_survive_a_drivers_stdout_noise(self):
+        adapter = ci.vulkan_adapter_line(0, self.properties())
+        self.assertEqual(self.probe_prints('PRIVATE driver noise\n' + adapter + '\nmore noise'), [adapter])
+        # The lines of the most adapters the probe reports (every index it can print) all match.
+        every = [ci.vulkan_adapter_line(index, self.properties(name)) for index in range(ci.VULKAN_MAX_ADAPTERS)
+                 for name in (b'x', b'x' * 200, b'\x01\x02', b'a\x07b\xc3\xa9')]
+        self.assertTrue(all(ci.VULKAN_ADAPTER_LINE.match(line) for line in every))
+        self.assertEqual(self.probe_prints('\n'.join(every[::4] * 2)), every[::4])
+
+    def test_a_child_with_nothing_recognized_is_a_failed_query(self):
+        self.assertEqual(self.probe_prints('PRIVATE only noise\nvulkan adapter: unavailable (PRIVATE)'),
+                         ['vulkan adapter: unavailable (query-failed)'])
+        self.assertEqual(self.probe_prints(''), ['vulkan adapter: unavailable (query-failed)'])
+
+    def test_a_known_unavailable_tag_from_the_child_is_passed_on(self):
+        for tag in sorted(ci.VULKAN_UNAVAILABLE_TAGS):
+            line = f'vulkan adapter: unavailable ({tag})'
+            self.assertEqual(self.probe_prints('noise\n' + line), [line])
+
+    def test_a_probe_that_cannot_start_shows_no_error_text(self):
+        secret = '/home/runner/PRIVATE/python'
+        with patch.object(ci.subprocess, 'Popen', side_effect=OSError(secret)):
+            lines = ci.vulkan_adapter_summaries()
+        self.assertEqual(lines, ['vulkan adapter: unavailable (query-failed)'])
+        self.assertNotIn(secret, ''.join(lines))
+
+    def test_a_noisy_probe_is_capped_killed_and_reaped(self):
+        secret = 'PRIVATE-NOISE'
+        script = ("import sys\n"
+                  "try:\n"
+                  "    while True:\n"
+                  f"        sys.stdout.buffer.write({secret!r}.encode() * 1024); sys.stdout.buffer.flush()\n"
+                  "except OSError:\n"
+                  "    pass\n")
+        started, real = [], subprocess.Popen
+
+        def spy(*args, **kwargs):
+            started.append(real(*args, **kwargs))
+            return started[-1]
+
+        begun = time.monotonic()
+        with patch.object(ci, 'VULKAN_PROBE_SCRIPT', script), patch.object(ci.subprocess, 'Popen', side_effect=spy):
+            lines = ci.vulkan_adapter_summaries()
+        # Far under the timeout: the cap, not the clock, ended it.
+        self.assertLess(time.monotonic() - begun, ci.VULKAN_PROBE_TIMEOUT / 2)
+        self.assertEqual(lines, ['vulkan adapter: unavailable (probe-output-capped)'])
+        self.assertNotIn(secret, ''.join(lines))
+        self.assertEqual(len(started), 1)
+        self.assertIsNotNone(started[0].returncode)
+
+    def test_the_api_major_version_ignores_the_variant_bits(self):
+        properties = bytearray(self.properties())
+        struct.pack_into("<I", properties, 0, (7 << 29) | (1 << 22) | (3 << 12) | 296)
+        self.assertIn(' api=1.3.296 ', ci.vulkan_adapter_line(0, bytes(properties)))
+
+    def test_main_logs_the_adapters_only_where_a_vulkan_driver_is_present(self):
+        for vulkan in (True, False):
+            with self.subTest(vulkan=vulkan), patch.object(ci, 'has_vulkan', return_value=vulkan), \
+                    patch.object(ci, 'vulkan_adapter_summaries', return_value=['vulkan adapter: one line']) as probe, \
+                    patch.object(ci, 'known_failures', return_value={}), \
+                    patch.object(ci, 'run', return_value={'fine': True}), \
+                    contextlib.redirect_stdout(io.StringIO()) as log:
+                self.assertEqual(ci.main(['example']), 0)
+            self.assertEqual('vulkan adapter: one line\n' in log.getvalue(), vulkan)
+            self.assertEqual(probe.called, vulkan)
 
 
 class PublicText(unittest.TestCase):

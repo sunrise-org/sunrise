@@ -13,6 +13,7 @@ sunrise-border = { path = "../sunrise-border" }
 sunrise-game-data = { path = "../sunrise-game-data" }
 sunrise-command = { path = "../sunrise-command" }
 sunrise-core = { path = "../sunrise-core" }
+sunrise-entity-data = { path = "../sunrise-entity-data" }
 sunrise-items = { path = "../sunrise-items" }
 sunrise-java-properties = { path = "../sunrise-java-properties" }
 sunrise-level = { path = "../sunrise-level" }
@@ -31,6 +32,7 @@ flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs", 
 fs4 = { version = "1.1.0", default-features = false, features = ["sync"] }
 getrandom = "0.3"
 glam = "0.30"
+indexmap = "2"
 log = "0.4"
 mio = { version = "1.2.4", features = ["os-poll", "net"] }
 rayon = "1.10"
@@ -56,12 +58,14 @@ test-still-clock = []
 test-mob-kind = []
 tracker-send-bench = []
 rng-trace = ["sunrise-core/rng-trace"]
+net-trace = []
 
 [lints]
 workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+sunrise-core = { path = "../sunrise-core", features = ["test-support"] }
 mod_platform = { package = "sunrise-mod-api", path = "../sunrise-mod-api", features = ["testing"] }
 mod_api = { package = "sunrise-mod-vocab", path = "../sunrise-mod-vocab", features = ["testing"] }
 sunrise-items = { path = "../sunrise-items", features = ["test-support"] }

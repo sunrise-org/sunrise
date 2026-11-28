@@ -13,7 +13,7 @@ fn tie_player_mob(
     let mob = game.mobs.last().unwrap().id;
     assert!(game.set_leash(Target::Mob(mob), Holder::Player, None));
     assert!(game.use_knot(fence, false));
-    let knot = game.server.knot_ids[&fence];
+    let knot = game.server.knot_state.knot_ids[&fence];
     assert_ne!(knot, 0);
     // This assertion is also the allocation INSTALL mutant's observable failure.
     assert_eq!(game.natural_knot(knot), Some(fence));
@@ -58,7 +58,7 @@ fn natural_knot_owner_survives_active_parked_reset_and_retires_at_last_holder() 
         assert_eq!(game.resident_entities.knots[0].join, join);
         assert!(game.detach_leash(Target::Mob(second), false));
         assert_eq!(game.server_resident_entity(knot), EntityLookup::Missing);
-        assert!(!game.server.knot_ids.contains_key(&fence));
+        assert!(!game.server.knot_state.knot_ids.contains_key(&fence));
         assert!(game.resident_entities.knots.is_empty());
         assert!(matches!(
             game.server_resident_entity(nether_knot),

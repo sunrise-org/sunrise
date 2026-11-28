@@ -17,7 +17,7 @@ pub(crate) mod tests {
 
     use mod_api::EquipmentSlot;
 
-    use mod_api::client::first_person::Hand;
+    use mod_api::Hand;
 
     use sunrise_gameplay::game::commands::Target;
 
@@ -76,7 +76,7 @@ pub(crate) mod tests {
         use sunrise_core::random::RandomSource;
         use sunrise_sim::motion::PlayerMotion;
         super::super::native_entity_refs::tests::with_resident_game(|game| {
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
             let living = game.living(game.entity(20).unwrap()).unwrap();
             let mut stack = ItemStack::new("minecraft:diamond_sword", 1);
@@ -177,7 +177,7 @@ pub(crate) mod tests {
         use sunrise_core::random::RandomSource;
         use sunrise_sim::motion::PlayerMotion;
         super::super::native_entity_refs::tests::with_game(|game| {
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             let source = sunrise_sim::health::NO_ATTACK.player_source("minecraft:generic", 0);
             let mut armor: [Option<ItemStack>; 4] = std::array::from_fn(|_| None);
             for (i, name) in ["minecraft:diamond_helmet", "minecraft:diamond_chestplate"]
@@ -253,7 +253,7 @@ pub(crate) mod tests {
         use sunrise_sim::motion::PlayerMotion;
         use sunrise_world::attributes::{Modifier, Operation};
         super::super::native_entity_refs::tests::with_game(|game| {
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
             let living = game.living(game.entity(20).unwrap()).unwrap();
             let attributes = &mut game.player.as_mut().unwrap().attributes;
@@ -457,7 +457,7 @@ pub(crate) mod tests {
             assert!(armor.iter().any(|m| m.1 == 3.0), "{armor:?}");
 
             // A player's own map answers the same read.
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
             let player = game.living(game.entity(20).unwrap()).unwrap();
             let health = "minecraft:max_health";
@@ -515,7 +515,7 @@ pub(crate) mod tests {
             // The eight dragon parts must not overlap the player at ID 20.
             dragon.id = 40;
             game.dragon.replace(dragon);
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
             // The vanilla attribute defaults: a player and a zombie 20, an
             // armor stand the 20 the game seeds it with, the dragon its 200.
@@ -772,7 +772,7 @@ pub(crate) mod tests {
                 .unwrap()
                 .clone();
             game.mobs.push(Mob::new(15, zombie, Vec3::ZERO, 0.0));
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             game.player.as_mut().unwrap().entity_id = 20;
             // The host's own turn: the uuid is acting, no guest connection.
             sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
@@ -829,7 +829,7 @@ pub(crate) mod tests {
                 .clone();
             game.mobs.push(Mob::new(12, zombie, Vec3::ZERO, 0.0));
             game.mobs[0].needs_sync = false;
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             game.player.as_mut().unwrap().entity_id = 20;
             super::super::native_entity_refs::tests::bind_local_player(game, 20, 123);
             let player = game.living(game.entity(20).unwrap()).unwrap();
@@ -955,7 +955,7 @@ pub(crate) mod tests {
             let mut health = Vec::new();
             for absorption in [0.0, 8.0] {
                 game.server.combat.0 = Default::default();
-                let mut player = PlayerMotion::new(game.motion, Vec3::ZERO).unwrap();
+                let mut player = PlayerMotion::new(game.motion, Vec3::ZERO);
                 player.entity_id = 20;
                 player
                     .set_modifier(
@@ -1020,7 +1020,7 @@ pub(crate) mod tests {
             game.mobs.push(Mob::new(12, pig, Vec3::ZERO, 0.0));
             // Dying, mid death animation: not removed, but not alive.
             game.mobs[0].health = 0.0;
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             game.player.as_mut().unwrap().entity_id = 20;
             sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
             let mob_living = game.living(game.entity(12).unwrap()).unwrap();
@@ -1051,7 +1051,7 @@ pub(crate) mod tests {
         use sunrise_sim::mobs::Mob;
         use sunrise_sim::motion::PlayerMotion;
         super::super::native_entity_refs::tests::with_resident_game(|game| {
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
             game.selected = 3;
             let player = game.living(game.entity(20).unwrap()).unwrap();
@@ -1354,13 +1354,10 @@ pub(crate) mod tests {
     #[ignore = "daily"]
     fn player_mod_drop_and_drop_key_have_equivalent_motion() {
         super::super::native_entity_refs::tests::with_game(|game| {
-            game.player = Some(
-                sunrise_sim::motion::PlayerMotion::new(
-                    game.motion,
-                    sunrise_core::geometry::Vec3::ZERO,
-                )
-                .unwrap(),
-            );
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                sunrise_core::geometry::Vec3::ZERO,
+            ));
             game.world.chunks.insert(
                 (0, 0),
                 std::sync::Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)),
@@ -1417,9 +1414,10 @@ pub(crate) mod tests {
             };
             mod_platform::testing::with_mods(mods, || {
                 super::super::native_entity_refs::tests::with_game(|game| {
-                    game.player = Some(
-                        sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::ZERO).unwrap(),
-                    );
+                    game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                        game.motion,
+                        Vec3::ZERO,
+                    ));
                     super::super::native_entity_refs::tests::bind_local_player(game, 42, 123);
                     game.yaw = 0.0;
                     game.pitch = 0.0;
@@ -1575,7 +1573,7 @@ pub(crate) mod tests {
             }
 
             // A player's own answers: alive and awake, freezable, drowning.
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
             let player = game.living(game.entity(20).unwrap()).unwrap();
             {
@@ -1685,8 +1683,10 @@ pub(crate) mod tests {
             let host: &dyn Host = game;
             assert_eq!(sleeper.bed_orientation(host), None);
             // A player asleep in the same bed answers the same facing.
-            game.player =
-                Some(sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                Vec3::ZERO,
+            ));
             sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
             game.sleeping = Some([2, 63, 2]);
             let player = game.living(game.entity(20).unwrap()).unwrap();
@@ -1719,13 +1719,10 @@ pub(crate) mod tests {
             // The fixture leaves the guest without a body: give one, as a
             // joined player's server record keeps.
             game.server.lan.as_mut().unwrap().hub.update_guest(12, |g| {
-                g.motion = Some(Box::new(
-                    sunrise_sim::motion::PlayerMotion::new(
-                        game.common.motion,
-                        sunrise_core::geometry::Vec3::new(3.0, 64.0, 5.0),
-                    )
-                    .unwrap(),
-                ))
+                g.motion = Some(Box::new(sunrise_sim::motion::PlayerMotion::new(
+                    game.common.motion,
+                    sunrise_core::geometry::Vec3::new(3.0, 64.0, 5.0),
+                )))
             });
             let living = game.living(game.entity(12).unwrap()).unwrap();
             let host: &dyn Host = game;
@@ -1943,13 +1940,10 @@ pub(crate) mod tests {
             body.damage = 4;
             body.data_mut().custom_name = Some(sunrise_core::nbt::Tag::String("armor".into()));
             let saddle = ItemStack::new("minecraft:saddle", 1);
-            game.player = Some(
-                sunrise_sim::motion::PlayerMotion::new(
-                    game.motion,
-                    sunrise_core::geometry::Vec3::ZERO,
-                )
-                .unwrap(),
-            );
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                sunrise_core::geometry::Vec3::ZERO,
+            ));
             game.start_audio_capture();
             for (name, stack) in [("armor.body", &body), ("saddle", &saddle)] {
                 let slots = game.slots_named(&owner, name);

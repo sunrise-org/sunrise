@@ -91,7 +91,7 @@ pub(crate) fn with_hearts(
                         .insert((cx, cz), Arc::new(Chunk::empty(cx, cz)));
                 }
             }
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 65.0, 8.5)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 65.0, 8.5)));
             test(game, &calls);
         })
     });

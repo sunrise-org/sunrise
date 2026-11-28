@@ -13,8 +13,8 @@ const SHADOW_NAME: &str = "cut_layout::game::pack_layer_frame_tests::layer_rules
 const CASE: &str = "SUNRISE_PACK_LAYER_FRAME_CASE";
 
 const VERTEX: &str = "#version 120\nvoid main() {\n    gl_Position = ftransform();\n}\n";
-const RED: [u8; 4] = [255, 0, 0, 255];
-const GREEN: [u8; 4] = [0, 255, 0, 255];
+pub(super) const RED: [u8; 4] = [255, 0, 0, 255];
+pub(super) const GREEN: [u8; 4] = [0, 255, 0, 255];
 
 /// A fragment stage writing `rgb`, opaque: a pixel tells which program drew it.
 fn fragment(rgb: &str) -> String {
@@ -34,7 +34,7 @@ fn write_pack(root: &std::path::Path, rules: &str) {
     );
 }
 
-fn write_files(root: &std::path::Path, files: &[(&str, String)]) {
+pub(super) fn write_files(root: &std::path::Path, files: &[(&str, String)]) {
     let shaders = root.join("shaders");
     std::fs::create_dir_all(&shaders).unwrap();
     for (name, text) in files {
@@ -43,7 +43,7 @@ fn write_files(root: &std::path::Path, files: &[(&str, String)]) {
 }
 
 /// The frame's pixels, RGBA, and its width.
-fn drawn_frame(game: &mut ClientGame<'_>) -> (Vec<u8>, usize) {
+pub(super) fn drawn_frame(game: &mut ClientGame<'_>) -> (Vec<u8>, usize) {
     game.client.renderer.0.as_mut().unwrap().screenshot = Some(ScreenshotRequest {
         path: "unused.png".into(),
         size: None,
@@ -65,7 +65,7 @@ fn drawn_frame(game: &mut ClientGame<'_>) -> (Vec<u8>, usize) {
     (std::mem::take(&mut image.rgba), image.width as usize)
 }
 
-fn slabs_drawn(game: &mut ClientGame<'_>) -> [[u8; 4]; 2] {
+pub(super) fn slabs_drawn(game: &mut ClientGame<'_>) -> [[u8; 4]; 2] {
     let (pixels, width) = drawn_frame(game);
     let height = pixels.len() / 4 / width;
     let at =
@@ -74,7 +74,7 @@ fn slabs_drawn(game: &mut ClientGame<'_>) -> [[u8; 4]; 2] {
 }
 
 /// Meshes and uploads every section waiting, without drawing a frame (no pack is polled).
-fn settle(game: &mut ClientGame<'_>) {
+pub(super) fn settle(game: &mut ClientGame<'_>) {
     let started = std::time::Instant::now();
     loop {
         game.client_update_world();
@@ -87,7 +87,7 @@ fn settle(game: &mut ClientGame<'_>) {
 }
 
 /// The state of `name` with every `properties` pair.
-fn state(game: &ClientGame<'_>, name: &str, properties: &[(&str, &str)]) -> u32 {
+pub(super) fn state(game: &ClientGame<'_>, name: &str, properties: &[(&str, &str)]) -> u32 {
     let registry = game.pack.assets.registry;
     (0..registry.len() as u32)
         .find(|&i| {
@@ -106,7 +106,7 @@ fn slab(game: &ClientGame<'_>, name: &str, kind: &str) -> u32 {
 }
 
 /// Frames until the pack runs and every section meshed since it loaded is drawn.
-fn pack_frames<T>(game: &mut ClientGame<'_>, read: fn(&mut ClientGame<'_>) -> T) -> T {
+pub(super) fn pack_frames<T>(game: &mut ClientGame<'_>, read: fn(&mut ClientGame<'_>) -> T) -> T {
     for _ in 0..200 {
         drawn_frame(game);
         settle(game);
@@ -125,6 +125,20 @@ type Scene = (
 );
 
 fn scene(game: &mut ClientGame<'_>, flat: bool) -> Option<Scene> {
+    scene_of(game, flat, |game| {
+        [
+            slab(game, "minecraft:oak_slab", "bottom"),
+            slab(game, "minecraft:oak_slab", "top"),
+        ]
+    })
+}
+
+/// [`scene`] with the block states `blocks` gives north and south of the player.
+pub(super) fn scene_of(
+    game: &mut ClientGame<'_>,
+    flat: bool,
+    blocks: impl FnOnce(&ClientGame<'_>) -> [u32; 2],
+) -> Option<Scene> {
     let (reader, writer) = crate::game::remote::tests::connect_menu_test(game);
     game.client.remote.as_mut().unwrap().logged_in = true;
     let event_loop = frame_scene(game);
@@ -152,10 +166,7 @@ fn scene(game: &mut ClientGame<'_>, flat: bool) -> Option<Scene> {
     let player = game.player.as_mut().unwrap();
     player.position = sunrise_core::geometry::Vec3::new(8.5, 64.0, 8.5);
     game.previous_position = player.position;
-    let (bottom, top) = (
-        slab(game, "minecraft:oak_slab", "bottom"),
-        slab(game, "minecraft:oak_slab", "top"),
-    );
+    let [bottom, top] = blocks(game);
     // The title screen's streamer is paused; a server's columns are never generated here.
     game.client.streaming.paused = false;
     game.client.streaming.remote = true;

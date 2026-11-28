@@ -47,8 +47,7 @@ pub(crate) mod tests {
         super::super::native_entity_refs::tests::with_game(|game| {
             game.adv.tree = Arc::new(Tree::load(&scratch.join("data")));
             let origin = sunrise_core::geometry::Vec3::ZERO;
-            game.player =
-                Some(sunrise_sim::motion::PlayerMotion::new(game.motion, origin).unwrap());
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(game.motion, origin));
             let mut helmet = ItemStack::new("minecraft:iron_helmet", 1);
             helmet.damage = 164;
             game.armor[0] = Some(helmet);

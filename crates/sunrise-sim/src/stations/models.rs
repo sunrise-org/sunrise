@@ -2,7 +2,8 @@
 use super::ItemStack;
 /// One offer row as `EnchantmentLevelSetEvent` reports it: the server player
 /// whose table it is (UUID and entity id), the row (0 to 2), the power (the
-/// bookshelves counted), the item and the level `getEnchantmentCost` drew.
+/// bookshelves counted), the item and the level `getEnchantmentCost` drew,
+/// 0 when that is below the row's minimum (`slotsChanged` clears it first).
 #[derive(Clone, Debug, PartialEq)]
 // exhaustive: the game builds it with a literal; mods only read it
 pub struct EnchantmentRow<'a> {

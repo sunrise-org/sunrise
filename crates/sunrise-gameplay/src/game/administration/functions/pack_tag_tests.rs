@@ -51,9 +51,10 @@ fn a_packs_own_item_and_block_tags_admit_and_match_its_functions() {
          execute if block ~ ~ ~ #p:stopper run scoreboard players add #block p 1\n",
     );
     game.server.world_root = dir.clone();
-    game.player = Some(
-        sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(4.5, 200.0, 4.5)).unwrap(),
-    );
+    game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+        game.motion,
+        Vec3::new(4.5, 200.0, 4.5),
+    ));
     game.build_registries();
     game.set_allow_commands(true);
     game.world

@@ -440,6 +440,13 @@ impl Post {
         [j[0] * size[0] as f32 * 0.5, -j[1] * size[1] as f32 * 0.5]
     }
 
+    /// Tests: no target, as `prepare`'s out-of-memory fallback leaves it
+    /// (`TestHooks::fail_scaled_targets`).
+    #[cfg(feature = "test-support")]
+    pub(super) fn drop_target(&mut self) {
+        self.target = None;
+    }
+
     /// The world's colour and depth targets this frame, or `None` to draw
     /// it straight to the screen.
     /// `always`: a target even at scale 1 without anti-aliasing (a shader pack reads it).

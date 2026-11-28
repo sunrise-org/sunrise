@@ -18,7 +18,6 @@ pub use mod_api::{BlockRim, ColoredLight, EnchantmentEffects, PanelEvent, Screen
 use mod_api::{FluidStack, LogicalSide, TriState};
 use std::{sync::Arc, time::Duration};
 use sunrise_client::{
-    extras::Corner,
     hud::{HudBatch, rgba},
     keybinds,
     music::{Music, MusicLayer},

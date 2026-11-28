@@ -347,9 +347,13 @@ impl crate::game::ClientGame<'_> {
             Event::Joined {
                 registries,
                 datapacks,
+                custom_registries,
                 name,
                 uuid,
             } => {
+                if let Some(remote) = &mut self.client.remote {
+                    remote.custom_registries = custom_registries;
+                }
                 if let Err(error) = self.set_registries(registries) {
                     return self.refuse_remote_input(error);
                 }
@@ -406,11 +410,6 @@ impl crate::game::ClientGame<'_> {
                     remote.custom_books = true;
                 }
             }
-            Event::FarTerrain(offer) => {
-                if let Some(remote) = &mut self.client.remote {
-                    remote.far_terrain = Some(offer);
-                }
-            }
             Event::Cookie(task) => task.handle(),
             Event::Configuration(task) => {
                 if let Some(effect) = task.handle() {
@@ -430,28 +429,26 @@ impl crate::game::ClientGame<'_> {
                 // Minecraft.clearClientLevel -> updateLevelInEngines(null) stops
                 // sound immediately after the level-unload event fires.
                 self.stop_sounds_for_new_level();
-                // The server configuring us now (a proxy's next one)
-                // offers its own far terrain, or none, and announces its
-                // own features again.
+                // The new server announces its own features again.
                 if let Some(remote) = &mut self.client.remote {
                     remote.datapacks = Default::default();
+                    remote.custom_registries = Default::default();
                     remote.datapack_vanilla_values = None;
                     remote.has_logical_player = false;
                     remote.viewed.clear();
-                    remote.far_terrain = None;
                     remote.quiet_commands = false;
                     remote.custom_books = false;
                     remote.cauldron_entries = None;
                     remote.pending_cauldrons.get_mut().clear();
                 }
-                self.clear_lod();
-                if let Some(remote) = &self.client.remote {
-                    remote.session.reset_far_terrain();
-                }
                 self.remove_local_player_body();
                 self.client.post_effects.clear();
+                // clearClientLevel drops the LocalPlayer: the next login's new one has
+                // sent no input and no sprint yet (`Input.EMPTY`, `wasSprinting` false).
                 if let Some(r) = self.client.remote.as_mut() {
                     r.camera = None;
+                    r.last_input = 0;
+                    r.was_sprinting = false;
                 }
                 self.clear_spectated_entity_post_effect();
                 self.set_screen(Screen::Playing);
@@ -471,7 +468,11 @@ impl crate::game::ClientGame<'_> {
             Event::Reconfigured {
                 registries,
                 datapacks,
+                custom_registries,
             } => {
+                if let Some(r) = self.client.remote.as_mut() {
+                    r.custom_registries = custom_registries;
+                }
                 if let Err(error) = self.set_registries(registries) {
                     return self.refuse_remote_input(error);
                 }

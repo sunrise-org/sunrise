@@ -690,6 +690,28 @@ pub fn resume_after_drink(
     })
 }
 
+/// Resume after the owning game settled the tick's stabs ([`super::ai::Pause::Stab`]), unless
+/// settling them removed the mob.
+pub fn resume_after_stab(
+    mobs: &mut JoinList<Mob>,
+    index: usize,
+    w: &MobWorld,
+    level: &mut super::DamageLevel<'_>,
+    events: &mut Vec<super::MobEvent>,
+    movement: &mut Option<super::ai::MobMovement>,
+) -> super::ai::TickProgress {
+    if mobs[index].removed {
+        return super::ai::TickProgress::Complete(false);
+    }
+    tick_with(mobs, index, w, level, events, |m, w, level, events| {
+        let progress = super::ai::resume_after_stab(m, w, level, events, Some(movement));
+        if matches!(progress, super::ai::TickProgress::Complete(_)) {
+            super::neutral_anger::after_tick(m, w.game_time);
+        }
+        progress
+    })
+}
+
 /// Resume the paused tick after `living_breathe` with the current vehicle/navigation owner.
 pub fn resume_after_breathing(
     mobs: &mut JoinList<Mob>,
@@ -1023,6 +1045,7 @@ mod tests {
             |w, _| {
                 let w = MobWorld {
                     side: crate::motion::dry_side(),
+                    variant_tables: None,
                     passenger_objects: &retained,
                     ..w.clone()
                 };
@@ -1117,6 +1140,7 @@ mod tests {
                     let items = raiders(members);
                     let w = MobWorld {
                         side: crate::motion::dry_side(),
+                        variant_tables: None,
                         passenger_objects: &retained,
                         items: Some(&items),
                         ..w.clone()

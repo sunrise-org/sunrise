@@ -1,0 +1,17 @@
+# #6561 / #6276: generator tests that read prepared worldgen resources through prepared_test_root::prepared_root; each is #[ignore = "daily"] in its source.
+# PACKAGE TEST TARGET daily REASON, sorted.
+sunrise-world worldgen::generator::tests::a_chunk_holds_its_starts_whose_pieces_lie_elsewhere lib daily resources
+sunrise-world worldgen::generator::tests::a_level_stem_naming_an_unknown_generator_is_an_error lib daily resources
+sunrise-world worldgen::generator::tests::a_pack_level_stem_names_taller_noise_which_clamps_to_the_build_height lib daily resources
+sunrise-world worldgen::generator::tests::a_superflat_world_keeps_what_adjust_generation_settings_keeps lib daily resources
+sunrise-world worldgen::generator::tests::chunks_far_from_the_rings_do_not_search_them lib daily resources
+sunrise-world worldgen::generator::tests::concurrent_neighbours_share_results_and_survive_invalidation lib daily resources
+sunrise-world worldgen::generator::tests::decoration_is_shared_by_biome_source lib daily resources
+sunrise-world worldgen::generator::tests::end_identity_surface_matches_normal_surface_and_rejects_custom_rules lib daily resources
+sunrise-world worldgen::generator::tests::far_surface_matches_undecorated_land_and_keeps_end_void lib daily resources
+sunrise-world worldgen::generator::tests::local_carver_cache_is_worker_owned_and_eviction_preserves_terrain lib daily resources
+sunrise-world worldgen::generator::tests::may_start_never_skips_a_start_the_chunk_holds lib daily resources
+sunrise-world worldgen::generator::tests::released_caches_generate_the_same_chunks lib daily resources
+sunrise-world worldgen::generator::tests::ring_positions_are_shared_by_seed_and_dimension lib daily resources
+sunrise-world worldgen::generator::tests::stronghold_rings_match_vanilla lib daily resources
+sunrise-world worldgen::generator::tests::world_presets_use_their_own_noise_settings lib daily resources

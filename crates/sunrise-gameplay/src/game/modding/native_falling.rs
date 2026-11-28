@@ -1164,13 +1164,12 @@ mod tests {
                                 game.world.chunks.insert((x, z), Arc::new(chunk));
                             }
                         }
-                        game.server
-                            .tickets
-                            .0
-                            .update(Some(sunrise_sim::ticket_levels::Sources {
+                        game.server.chunk_ticking.tickets.update(Some(
+                            sunrise_sim::ticket_levels::Sources {
                                 forced: vec![(0, 0)],
                                 ..Default::default()
-                            }));
+                            },
+                        ));
                         let registry = game.pack.assets.registry;
                         let sand = registry.default_state("minecraft:sand").unwrap();
                         let air = registry.default_state("minecraft:air").unwrap();

@@ -1,6 +1,55 @@
 use super::*;
 
 #[test]
+fn prepared_health_load_validates_float_schema() {
+    let root = tempfile::tempdir().unwrap();
+    let types = ["minecraft:fall", "minecraft:stalagmite", "minecraft:starve"].map(|id| {
+        serde_json::json!({
+            "id": id,
+            "message_id": "test",
+            "exhaustion": "00000000",
+            "scaling": "never",
+            "effects": "hurt",
+            "death_message_type": "default",
+        })
+    });
+    fs::write(
+        root.path().join("damage-catalog.json"),
+        serde_json::json!({
+            "data_version": sunrise_core::version::DATA_VERSION,
+            "types": types,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let schema = root.path().join("player-float-ids.json");
+    for (absorption, message) in [
+        (7, "duplicate synchronized field ID 7"),
+        (255, "reserved synchronized field ID 255"),
+    ] {
+        fs::write(
+            &schema,
+            format!(r#"{{"health":7,"absorption":{absorption}}}"#),
+        )
+        .unwrap();
+        let error = HealthResources::load(root.path())
+            .err()
+            .unwrap()
+            .to_string();
+        assert_eq!(error, format!("{}: {message}", schema.display()));
+    }
+    fs::write(&schema, r#"{"health":7,"absorption":254}"#).unwrap();
+    let resources = HealthResources::load(root.path()).unwrap();
+    let mut player = PlayerHealth::initial(&resources, 36.0).unwrap();
+    assert_eq!((player.health(), player.absorption()), (36.0, 0.0));
+    let exposes = |values: Option<Vec<sunrise_world::synced_values::DataValue<f32>>>| {
+        values.map(|values| values.iter().map(|v| (v.id, v.value)).collect::<Vec<_>>())
+    };
+    assert_eq!(exposes(player.data.non_default()), Some(vec![(7, 36.0)]));
+    assert_eq!(exposes(player.data.take_dirty()), Some(vec![(7, 36.0)]));
+}
+
+#[test]
 #[ignore = "daily"]
 fn datapack_damage_new_world_drops_a_removed_resource_root_definition() {
     use sunrise_world::loot::PackOverlay;
@@ -92,78 +141,4 @@ fn datapack_damage_initial_snapshot_uses_the_prepared_worlds_features() {
     ]);
     assert!(prepared.id("demo:heat").is_some());
     fs::remove_dir_all(world).unwrap();
-}
-
-/// Ordinary player hurt, using a custom source and a frozen-registry tag reload.
-#[test]
-#[ignore = "daily"]
-fn datapack_damage_uses_custom_identity_armor_fire_and_reloaded_tags() {
-    use sunrise_world::loot::PackOverlay;
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../.local/sunrise-client")
-        .join(sunrise_core::VANILLA_VERSION);
-    let assets = crate::assets::Assets::load(&root).unwrap();
-    let resources = crate::motion::MotionResources::load(&root, &assets).unwrap();
-    let files = vec![
-        ("damage_type/demo:heated_air".into(), vec![br#"{"message_id":"heated_air","scaling":"never","exhaustion":0.25,"effects":"burning"}"#.to_vec()]),
-        ("tags/minecraft:damage_type/is_fire".into(), vec![br#"{"values":["demo:heated_air"]}"#.to_vec()]),
-        ("tags/minecraft:damage_type/bypasses_armor".into(), vec![br#"{"values":["demo:heated_air"]}"#.to_vec()]),
-    ];
-    let open = resources
-        .health
-        .with_packs(&root, &PackOverlay::new(&files), false)
-        .unwrap();
-    let id = open.damage.id("demo:heated_air").unwrap();
-    let player = || {
-        let mut p = PlayerMotion::new(&resources, sunrise_core::geometry::Vec3::ZERO).unwrap();
-        p.entity_id = 9701;
-        let key = p.attributes.key("minecraft:armor").unwrap();
-        let armor = p.attributes.get_instance(Some(key)).unwrap().unwrap();
-        p.attributes
-            .edit(&armor, |a, o| a.set_base_value(20.0, o))
-            .unwrap();
-        p
-    };
-    let rules = HealthRules::default();
-    let mut test_level = TestLevel::new(0);
-    let mut armored = player();
-    assert!(
-        armored
-            .hurt(&mut test_level.level(), &open, rules, id, 4.0)
-            .unwrap()
-    );
-    assert_eq!(armored.health.health(), 16.0);
-    assert_eq!(armored.health.food.exhaustion, 0.25);
-    assert_eq!(armored.hurt_log.last().unwrap().source, "demo:heated_air");
-    let mut resistant = player();
-    resistant.status.fire_resistance = true;
-    assert!(
-        !resistant
-            .hurt(&mut test_level.level(), &open, rules, id, 4.0)
-            .unwrap()
-    );
-    assert_eq!(resistant.health.health(), 20.0);
-    let mut item_rules = crate::enchant::Enchantments::default();
-    item_rules.bind_damage_catalog(&open.damage);
-    assert!(item_rules.damage_tags["minecraft:is_fire"].contains("demo:heated_air"));
-    // Disable the pack: the registered type remains, its added tags do not.
-    let reload = open.with_packs(&root, &PackOverlay::NONE, true).unwrap();
-    assert_eq!(reload.damage.id("demo:heated_air"), Some(id));
-    let mut after = player();
-    after.status.fire_resistance = true;
-    assert!(
-        after
-            .hurt(&mut test_level.level(), &reload, rules, id, 4.0)
-            .unwrap()
-    );
-    assert!(
-        after.health.health() > 16.0 && after.health.health() < 20.0,
-        "the same source now encounters armor and ignores fire resistance"
-    );
-    item_rules.bind_damage_catalog(&reload.damage);
-    assert!(!item_rules.damage_tags["minecraft:is_fire"].contains("demo:heated_air"));
-    assert!(
-        open.damage.in_tag(id, "minecraft:is_fire"),
-        "another snapshot remains unchanged"
-    );
 }

@@ -566,16 +566,24 @@ fn level_shapes(
     (shapes, stems.into_iter().map(Dim::from_id).collect())
 }
 
-/// The sea levels of the levels whose stem the mods or the data packs give: a mod's own
-/// (`DimensionSettings::sea_level`), else the `sea_level` of the noise settings their stem names,
-/// the packs' over the game's. The game's spawning, weather and maps then use them. A level of a
-/// generator that reads no noise settings has its built-in level's, and the three built-in levels
-/// too unless the packs replace their stem or their noise settings.
 fn set_level_sea_levels(
     overrides: &sunrise_world::worldgen::overrides::WorldgenOverrides,
     mods: &[sunrise_world::worldgen::overrides::ModDimension],
     resources: &std::path::Path,
 ) {
+    sunrise_world::level::set_sea_levels(resolve_level_sea_levels(overrides, mods, resources));
+}
+
+/// Resolves sea levels from level stems, preferring their noise settings (pack settings over
+/// game settings). If those supply no sea level, use the mod's explicit
+/// `DimensionSettings::sea_level`, if any; otherwise, superflat defaults to -63.
+/// For built-in levels still unresolved, use any pack replacement of their default noise
+/// settings. Unlisted levels fall back to their vanilla sea level at lookup.
+fn resolve_level_sea_levels(
+    overrides: &sunrise_world::worldgen::overrides::WorldgenOverrides,
+    mods: &[sunrise_world::worldgen::overrides::ModDimension],
+    resources: &std::path::Path,
+) -> Vec<(sunrise_core::LevelKey, i32)> {
     use sunrise_world::worldgen::overrides::{DIMENSIONS, NOISE_SETTINGS, stem_sea_level};
     let read = |id: &str| -> Option<serde_json::Value> {
         if let Some((_, json)) = overrides
@@ -632,7 +640,7 @@ fn set_level_sea_levels(
             levels.push((key, sea));
         }
     }
-    sunrise_world::level::set_sea_levels(levels);
+    levels
 }
 
 /// The levels' shapes the mods' and packs' worldgen entries give.
@@ -1909,7 +1917,7 @@ mod tests {
             level(
                 "test:inline",
                 r#"{"type":"test:inline","generator":{"type":"minecraft:noise","settings":{"sea_level":20}}}"#,
-                None,
+                Some(99),
             ),
             level(
                 "test:plain",
@@ -1922,15 +1930,19 @@ mod tests {
             &Default::default(),
             &sunrise_world::conditions::LoadConditions::vanilla(),
         );
-        set_level_sea_levels(&overrides, &mods, std::path::Path::new("."));
-        let sea = |id: &str| {
-            sunrise_world::level::sea_level_of(sunrise_core::LevelKey::parse(id).unwrap())
+        let levels = resolve_level_sea_levels(&overrides, &mods, std::path::Path::new("."));
+        let entry = |id: &str| {
+            let key = sunrise_core::LevelKey::parse(id).unwrap();
+            levels
+                .iter()
+                .find(|(level, _)| *level == key)
+                .map(|&(_, sea)| sea)
         };
-        assert_eq!(sea("test:own"), 10);
-        assert_eq!(sea("test:inline"), 20);
-        assert_eq!(sea("test:plain"), 63);
-        assert_eq!(sea("minecraft:the_nether"), 32);
-        sunrise_world::level::set_sea_levels(Vec::new());
+        // The noise settings the terrain is built with win over the mod's explicit 99.
+        assert_eq!(entry("test:own"), Some(10));
+        assert_eq!(entry("test:inline"), Some(20));
+        assert_eq!(entry("test:plain"), None);
+        assert_eq!(entry("minecraft:the_nether"), None);
     }
 
     #[test]
@@ -1995,20 +2007,52 @@ mod tests {
         &'static sunrise_world::registry::BlockRegistry,
         crate::game::functions::PackStack,
     ) {
+        use serde_json::json;
+        use std::collections::{BTreeMap, BTreeSet};
         use sunrise_assets::resource_source::ResourceRoot;
         use sunrise_level::datapack::DataPack;
+        use sunrise_world::{registry::BlockRegistry, worldgen::tags::TagDefinitions};
+
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("data/minecraft/worldgen/biome");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::create_dir_all(root.path().join("worldgen")).unwrap();
         for name in ["fixture", "plains"] {
             std::fs::write(dir.join(format!("{name}.json")), PACK_BIOME).unwrap();
         }
+        let worldgen = root.path().join("worldgen");
+        std::fs::create_dir_all(&worldgen).unwrap();
+        let air = ["minecraft:air", "minecraft:cave_air", "minecraft:void_air"];
+        let mut block_ids = BTreeSet::from(air);
+        let mut block_tags = BTreeMap::new();
+        let conventions = TagDefinitions::with_conventions("block").unwrap();
+        let definitions = conventions.definitions();
+        // Supply holders and the bundle's external tags without replacing the embedded tags.
+        for entry in definitions.values().flatten().map(|sourced| &sourced.entry) {
+            if !entry.required {
+                continue;
+            }
+            if !entry.tag {
+                block_ids.insert(entry.id.as_str());
+            } else if !definitions.contains_key(&entry.id) {
+                block_tags.insert(entry.id.as_str(), r#"{"values":[]}"#);
+            }
+        }
+        std::fs::write(
+            worldgen.join("block_tags.json"),
+            serde_json::to_vec(&block_tags).unwrap(),
+        )
+        .unwrap();
+        let (defaults, states): (BTreeMap<_, _>, Vec<_>) = block_ids
+            .into_iter()
+            .enumerate()
+            .map(|(index, id)| ((id, index), (id, air.contains(&id), false, "", id)))
+            .unzip();
+        let facts = json!({"defaults": defaults, "states": states}).to_string();
+        let blocks: &'static _ = Box::leak(Box::new(
+            BlockRegistry::from_facts_json(facts.as_bytes()).unwrap(),
+        ));
         let resources = ResourceRoot::directory(root.path().to_owned());
         let base = Arc::new(Biomes::load_for_server(&resources).unwrap());
-        let blocks: &'static _ = Box::leak(Box::new(sunrise_world::registry::BlockRegistry::from_facts_json(
-            br#"{"defaults":{"minecraft:air":0,"minecraft:cave_air":1,"minecraft:void_air":2},"states":[["a",true,false,"","minecraft:air"],["c",true,false,"","minecraft:cave_air"],["v",true,false,"","minecraft:void_air"]]}"#.as_slice(),
-        ).unwrap()));
         let stack = crate::game::functions::PackStack {
             builtin: None,
             content: DataPack::from_source("sunrise-content".into(), resources.data().clone()),
@@ -2189,6 +2233,57 @@ mod tests {
         .unwrap();
         assert!(admitted.table.contains("demo:incoming"));
         assert_eq!(conditions.check_errors(), Ok(()));
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn biome_admission_binds_convention_block_tags_with_prepared_resources() {
+        use serde_json::{Value, json};
+        use std::fs::File;
+        use sunrise_assets::resource_source::ResourceRoot;
+        use sunrise_level::datapack::DataPack;
+        use sunrise_world::{loot::PackOverlay, registry::BlockRegistry};
+
+        const BIOME: &str = "demo:convention_tags";
+        let root = crate::prepared_test_root::prepared_root(&[
+            sunrise_core::prepared_test_support::WORLDGEN_INPUTS,
+            &["block-behaviours.json"],
+        ]);
+        let blocks = Box::leak(Box::new(
+            BlockRegistry::from_facts_json(File::open(root.join("facts.json")).unwrap()).unwrap(),
+        ));
+        let resources = ResourceRoot::directory(root);
+        let base = Arc::new(Biomes::load_vanilla_for_server(&resources).unwrap());
+        let mut payload: Value = serde_json::from_str(PACK_BIOME).unwrap();
+        payload["features"] = json!([[{
+            "feature": {"type": "minecraft:no_op", "config": {}},
+            "placement": [{
+                "type": "minecraft:block_predicate_filter",
+                "predicate": {"type": "minecraft:matching_blocks", "blocks": "#c:barrels"}
+            }]
+        }]]);
+        let files = [(
+            format!("worldgen/biome/{BIOME}"),
+            vec![serde_json::to_vec(&payload).unwrap()],
+        )];
+        let stack = crate::game::functions::PackStack {
+            builtin: None,
+            content: DataPack::from_source("sunrise-content".into(), Default::default()),
+            packs: Vec::new(),
+            enabled: Vec::new(),
+            features: Vec::new(),
+        };
+        let admitted = WorldBiomeRegistry::load(
+            &base,
+            resources.prepared(),
+            blocks,
+            &stack,
+            &stack.data_packs(Vec::new()),
+            &PackOverlay::new(&files),
+            &Default::default(),
+        )
+        .unwrap();
+        assert!(admitted.table.contains(BIOME));
     }
 
     #[test]

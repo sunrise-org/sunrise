@@ -466,7 +466,7 @@ impl crate::game::ServerGame<'_> {
         for tag in &mut extras.block_entities {
             let pos = [tag.get("x"), tag.get("y"), tag.get("z")]
                 .map(|v| sunrise_sim::save::number(v).unwrap_or(0) as i32);
-            if let Some(g) = self.server.be_anims.gateway_servers.get(&pos)
+            if let Some(g) = self.server.be_anims.level.gateway_servers.get(&pos)
                 && let Some(age) = tag.get_mut("Age")
             {
                 *age = sunrise_core::nbt::Tag::Long(g.age);
@@ -839,7 +839,7 @@ impl crate::game::ServerGame<'_> {
             let mut tag = tag;
             let riders = self.take_passengers(&mut tag);
             a.live
-                .retain_supplier(&self.common.motion.attributes, "minecraft:armor_stand");
+                .retain_supplier(self.common.motion.attributes(), "minecraft:armor_stand");
             if let Some(state) = transferred {
                 self.adopt_transferred_entity_state(a.id, state);
             }
@@ -878,7 +878,7 @@ impl crate::game::ServerGame<'_> {
             // EnderDragon's constructor takes its id and its
             // parts' from the entity counter.
             d.live
-                .retain_supplier(&self.common.motion.attributes, "minecraft:ender_dragon");
+                .retain_supplier(self.common.motion.attributes(), "minecraft:ender_dragon");
             d.id = candidate_entity_id(self.server.next_entity);
             super::dragon::commit_dragon_and_part_ids(&mut self.server.next_entity);
             if let Some(state) = transferred {

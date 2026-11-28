@@ -2,8 +2,8 @@
 #![forbid(unsafe_code)]
 
 #[cfg(test)]
-#[used]
-static KEEP_TEST_PLATFORM: fn() = mod_platform::__private::test_platform::keep;
+mod_platform::__install_engine_test_platform!();
+
 #[macro_use]
 extern crate sunrise_gameplay_common;
 pub mod allays;
@@ -25,6 +25,7 @@ pub mod initial_spawn;
 pub mod lan;
 pub mod mob_level;
 pub mod mob_looting;
+pub mod rng_count;
 pub mod teleport_transition;
 pub mod tick_profile;
 pub mod trident;
@@ -33,3 +34,8 @@ pub mod wandering_trader;
 
 extern crate self as sunrise_gameplay;
 pub mod game;
+#[cfg(test)]
+#[path = "../../sunrise-core/src/prepared_test_root.rs"]
+pub(crate) mod prepared_test_root;
+#[cfg(test)]
+mod test_game_dir;

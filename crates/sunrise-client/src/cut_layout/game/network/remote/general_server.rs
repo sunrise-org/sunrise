@@ -145,7 +145,7 @@ pub(crate) mod tests {
                 let id = game.resident_entities.general.rows[0].id as i32;
                 add_guest(game);
                 let at = Vec3::new(0.5, 65.0, 0.5);
-                let mut body = PlayerMotion::new(game.motion, at).unwrap();
+                let mut body = PlayerMotion::new(game.motion, at);
                 game.server
                     .lan
                     .as_mut()

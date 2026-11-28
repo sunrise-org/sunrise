@@ -887,9 +887,10 @@ pub(crate) mod slot_mutation_tests {
     ) {
         let mut game_resources = None;
         let mut game = server_game(&mut game_resources);
-        game.player = Some(
-            sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(8.5, 65.0, 8.5)).unwrap(),
-        );
+        game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+            game.motion,
+            Vec3::new(8.5, 65.0, 8.5),
+        ));
         game.update_chunk_tickets();
         assert!(game.block_ticking_area()(A.0, A.2));
         for (pos, block) in blocks {
@@ -1117,10 +1118,10 @@ pub(crate) mod own_block_entity_tests {
                 game.world
                     .chunks
                     .insert((0, 0), Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)));
-                game.player = Some(
-                    sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(8.5, 65.0, 8.5))
-                        .unwrap(),
-                );
+                game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                    game.motion,
+                    Vec3::new(8.5, 65.0, 8.5),
+                ));
                 game.update_chunk_tickets();
                 let level = game.level(game.dim.id()).unwrap();
                 for &((x, y, z), block) in placed {

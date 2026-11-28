@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 OLD, NEW = "sunrise-mods", "sunrise-mod-package"
 OLD_PATH, NEW_PATH = "crates/" + OLD, "crates/" + NEW
 OWN_FILES = {"tools/rename_crate.py", "tests/test_rename_crate.py"}
-LOCKS = {"Cargo.lock", "crates/sunrise-mod-registry/Cargo.lock"}
+LOCKS = {"Cargo.lock"}
 PACKAGE_TOOLS = {"tools/pr_ready.py", "tests/test_pr_ready.py"}
 
 
@@ -41,7 +41,7 @@ def rewrite(path, source):
         source = source.replace("../sunrise-mods\"", "../sunrise-mod-package\"")
         source = source.replace("../sunrise-mods'", "../sunrise-mod-package'")
         source = source.replace("dependencies.sunrise-mods]", "dependencies.sunrise-mod-package]")
-    if path in {"crates/cargo-sunrise-mod/src/check.rs", "crates/sunrise-mod-registry/tests/submit.rs"}:
+    if path == "crates/cargo-sunrise-mod/src/check.rs":
         source = source.replace("../sunrise-mods/tests/", "../sunrise-mod-package/tests/")
     if path in LOCKS:
         source = source.replace('"sunrise-mods"', '"sunrise-mod-package"')
@@ -130,8 +130,7 @@ def main():
                 (ROOT / path).write_bytes(updated)
         if move:
             run("git", "mv", OLD_PATH, NEW_PATH)
-        for manifest in ["Cargo.toml", "crates/sunrise-mod-registry/Cargo.toml"]:
-            run("cargo", "metadata", "--offline", "--format-version", "1", "--manifest-path", manifest)
+        run("cargo", "metadata", "--offline", "--format-version", "1", "--manifest-path", "Cargo.toml")
     else:
         verify(args.verify)
     if args.report:

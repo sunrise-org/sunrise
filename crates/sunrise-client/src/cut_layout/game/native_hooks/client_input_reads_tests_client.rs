@@ -16,7 +16,7 @@ pub(crate) mod tests {
         with_client_game(|game| {
             let forward_mapping = game.vanilla_key_mapping("key.forward").unwrap();
             let attack_mapping = game.vanilla_key_mapping("key.attack").unwrap();
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             assert_eq!(
                 game.vanilla_key_mapping("key.not_a_mapping"),
                 Err(MappingError::Unknown {
@@ -83,7 +83,7 @@ pub(crate) mod tests {
     #[ignore = "daily"]
     fn stale_vanilla_mapping_ref_refuses_foreign_client() {
         with_client_game(|game| {
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             game.client.screen = Screen::Playing;
             game.client.title.0 = None;
             let old = game.vanilla_key_mapping("key.attack").unwrap();

@@ -25,7 +25,7 @@ pub(crate) fn with_fish(
     sunrise_gameplay::game::native_entity_refs::tests::with_game(|game| {
         game.creative = false;
         // The acting body is the guest's, not a second local player with the same ID.
-        let mut body = PlayerMotion::new(game.motion, Vec3::new(8.5, 66.0, 8.5)).unwrap();
+        let mut body = PlayerMotion::new(game.motion, Vec3::new(8.5, 66.0, 8.5));
         body.entity_id = 1;
         game.player = Some(body);
         game.server.lan_acting_entity = Some(1);

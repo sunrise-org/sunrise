@@ -4,6 +4,10 @@ use sunrise_gameplay_common::game::{
     combat_common::PlayerCredit, entity_memory::OffLevel, native_ticks,
 };
 use sunrise_gameplay_common::lan::mob_players::{GuestViews, acts_on_player};
+use sunrise_sim::mobs::{
+    ai::Pause,
+    player_selection::{PlayerSelection, TickPlayer},
+};
 
 /// Route each player event to the player selected when it was emitted.
 /// Untagged events retain the previous per-tick guest binding.
@@ -57,6 +61,78 @@ pub(in crate::game) fn route_player_events(
             k += 1;
         }
     }
+}
+
+/// Where one of a stab's events is settled: by the game, or as the guest it acts on.
+#[derive(Debug)]
+enum StabDelivery {
+    Host(MobEvent),
+    Guest(u32, u32, MobEvent),
+}
+
+/// `KineticWeapon.damageEntities` finishes each contact's `LivingEntity.stabAttack` in turn and
+/// broadcasts event 2 after them all: route each of the stab's events as
+/// [`route_player_events`] does at the end of a tick, keeping their order across the host and
+/// the guests.
+fn route_stab_events(
+    stabs: Vec<MobEvent>,
+    seen_guest: Option<u32>,
+    guest_ids: &[(u32, u32)],
+    mob: u32,
+) -> Vec<StabDelivery> {
+    let mut deliveries = Vec::with_capacity(stabs.len());
+    for event in stabs {
+        let mut one = vec![event];
+        let mut routed = Vec::new();
+        route_player_events(&mut one, 0, seen_guest, guest_ids, &mut routed, mob);
+        deliveries.extend(one.into_iter().map(StabDelivery::Host));
+        deliveries.extend(
+            routed
+                .into_iter()
+                .map(|(conn, mob, event)| StabDelivery::Guest(conn, mob, event)),
+        );
+    }
+    deliveries
+}
+
+/// The pauses whose callbacks can change the players a tick saw (a hurt, an equipment event, a
+/// stab that kills a guest): the tick's saved player selection is refreshed before it resumes.
+fn refreshes_selection(pause: Option<&Pause>) -> bool {
+    matches!(
+        pause,
+        Some(
+            Pause::AfterDamage(_)
+                | Pause::Equipment { .. }
+                | Pause::RegisterBehaviors { .. }
+                | Pause::Stab { .. }
+        )
+    )
+}
+
+/// The live view of `player`, a saved selection's entry, by identity after a callback: the one
+/// lent to the resumed tick for the guest it sees (`seen`), another guest's, or the host's
+/// (`host`). A guest the callback killed or took out of play has none, and the selection drops it.
+fn live_selection_view(
+    player: &TickPlayer,
+    seen: (Option<u32>, Option<&PlayerView>, Option<([i32; 4], u32)>),
+    guests: &[(u32, PlayerView)],
+    guest_slots: &sunrise_level::fast_hash::FxHashMap<u32, usize>,
+    guest_identity: impl Fn(u32) -> Option<([i32; 4], u32)>,
+    host: (Option<&PlayerView>, Option<([i32; 4], u32)>),
+) -> Option<PlayerView> {
+    let (seen_guest, active_player, active_identity) = seen;
+    let (view, identity) = if player.connection == seen_guest {
+        (active_player, active_identity)
+    } else if let Some(conn) = player.connection {
+        (
+            guest_slots.get(&conn).map(|&slot| &guests[slot].1),
+            guest_identity(conn),
+        )
+    } else {
+        host
+    };
+    view.filter(|_| identity.is_some_and(|(_, id)| id == player.entity_id))
+        .cloned()
 }
 
 /// Commit departures in the borrowed list, not when a tick merely proposes retention.
@@ -231,10 +307,6 @@ impl crate::game::ServerGame<'_> {
         let mut cursor = 0;
         // Sounds the tick's hits queued, appended to the level's queue once the level is dropped.
         let mut hit_sounds: Vec<super::NativeSound> = Vec::new();
-        use sunrise_sim::mobs::{
-            ai::Pause,
-            player_selection::{PlayerSelection, TickPlayer},
-        };
         let mut resume = None;
         // Keep the suspended move out of the ordinary tick's result.
         let mut movement = None;
@@ -641,30 +713,18 @@ impl crate::game::ServerGame<'_> {
                     // needs a player other than the one it sees.
                     let selection = if resuming {
                         let mut selection = resume_selection.take();
-                        if matches!(
-                            resume,
-                            Some(
-                                Pause::AfterDamage(_)
-                                    | Pause::Equipment { .. }
-                                    | Pause::RegisterBehaviors { .. }
-                            )
-                        ) && let Some(selection) = &mut selection
+                        if refreshes_selection(resume.as_ref())
+                            && let Some(selection) = &mut selection
                         {
                             selection.refresh_views(|player| {
-                                let (view, identity) = if player.connection == seen_guest {
-                                    (active_player.as_ref(), active_identity)
-                                } else if let Some(conn) = player.connection {
-                                    (
-                                        guest_slots.get(&conn).map(|&slot| &guests[slot].1),
-                                        self.guest_identity(conn),
-                                    )
-                                } else {
-                                    (base.player.as_ref(), base.player_identity)
-                                };
-                                view.filter(|_| {
-                                    identity.is_some_and(|(_, id)| id == player.entity_id)
-                                })
-                                .cloned()
+                                live_selection_view(
+                                    player,
+                                    (seen_guest, active_player.as_ref(), active_identity),
+                                    &guests,
+                                    &guest_slots,
+                                    |conn| self.guest_identity(conn),
+                                    (base.player.as_ref(), base.player_identity),
+                                )
                             });
                         }
                         selection
@@ -846,6 +906,14 @@ impl crate::game::ServerGame<'_> {
                                 &mut events,
                             )
                         }
+                        Some(Pause::Stab { .. }) => sunrise_sim::mobs::riders::resume_after_stab(
+                            &mut mobs,
+                            i,
+                            &w,
+                            &mut level,
+                            &mut events,
+                            &mut movement,
+                        ),
                         Some(Pause::Consumption { .. }) => {
                             sunrise_sim::mobs::riders::resume_after_consumption(
                                 &mut mobs,
@@ -1322,6 +1390,27 @@ impl crate::game::ServerGame<'_> {
                                             inside.join,
                                             effects,
                                         );
+                                    }
+                                    Pause::Stab { events: raised } => {
+                                        // `LivingEntity.stabAttack` hurts, pushes and slows the attacker
+                                        // before its `aiStep`: the item use's events land now, in order,
+                                        // each routed to the guest it acts on as at the end of a tick. The
+                                        // tick's earlier events wait for their usual delivery.
+                                        let stabs = events.split_off(events.len() - *raised);
+                                        for delivery in
+                                            route_stab_events(stabs, resume_guest, &guest_ids, id)
+                                        {
+                                            match delivery {
+                                                StabDelivery::Host(event) => {
+                                                    let _ = game.handle_mob_events(vec![event]);
+                                                }
+                                                StabDelivery::Guest(conn, mob, event) => {
+                                                    game.lan_guest_mob_events(&mut vec![(
+                                                        conn, mob, event,
+                                                    )]);
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -1899,3 +1988,7 @@ impl mod_api::InsideEntityAccess for GameMobInsideAccess<'_, '_> {
 thread_local! {
     pub static BORROWED_MOB_YIELDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
+
+#[cfg(test)]
+#[path = "stab_pause_tests.rs"]
+mod stab_pause_tests;

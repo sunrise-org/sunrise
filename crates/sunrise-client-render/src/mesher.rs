@@ -127,9 +127,6 @@ fn round_to_u16(v: f32) -> u16 {
 pub(crate) fn baked_uv(uv: [[f32; 2]; 4]) -> [[u16; 2]; 4] {
     uv.map(|uv| uv.map(|v| round_to_u16(v * UV_STEPS)))
 }
-/// Fixed-point steps per block of distant-terrain UVs (`TerrainVertex::tiled`),
-/// which span `[0, 2048)`: merged faces repeat their sprite once per block.
-pub const TILED_UV_STEPS: f32 = 32.0;
 impl TerrainVertex {
     pub fn new(pos: [f32; 3], uv: [f32; 2], layer: u16, color: u32, light: u16) -> Self {
         Self {
@@ -152,17 +149,6 @@ impl TerrainVertex {
         Self {
             pos,
             uv,
-            layer,
-            light,
-            color,
-        }
-    }
-    /// A vertex of a merged distant-terrain face, its UV in blocks from the
-    /// face's corner. Drawn with an instance UV scale of `1 / TILED_UV_STEPS`.
-    pub fn tiled(pos: [f32; 3], uv: [f32; 2], layer: u16, color: u32, light: u16) -> Self {
-        Self {
-            pos,
-            uv: uv.map(|v| round_to_u16(v * TILED_UV_STEPS)),
             layer,
             light,
             color,
@@ -443,7 +429,7 @@ impl TerrainSource {
 pub struct SectionMesh {
     pub solid: Vec<TerrainVertex>,
     /// One source per quad when a shader pack meshes terrain; independent of its sprite
-    /// and geometry. Empty on native/default meshes and on distant terrain.
+    /// and geometry. Empty on native/default meshes.
     pub solid_sources: Vec<TerrainSource>,
     /// The buckets `solid` is sorted in by the side its quads face: empty
     /// until `sort_solid`, which the meshing workers call; `solid` is in
@@ -451,10 +437,6 @@ pub struct SectionMesh {
     pub sides: Sides,
     pub translucent: Vec<TerrainVertex>,
     pub translucent_sources: Vec<TerrainSource>,
-    /// Whether `packed` holds far tile records (`lod::packed`) rather than
-    /// section records (`mesher::packed`): the two are read apart, by the base
-    /// vertex their draws use.
-    pub packed_far: bool,
     /// `solid` in the compact layout (`packed`), when the renderer reads it and it is
     /// smaller; empty otherwise. Made by `sort_solid`.
     pub packed: Vec<[u32; 6]>,
@@ -488,7 +470,6 @@ impl Default for SectionMesh {
             translucent: Vec::new(),
             translucent_sources: Vec::new(),
             packed: Vec::new(),
-            packed_far: false,
             solid_tints: Vec::new(),
             visibility: ALL_VISIBLE,
             block_entities: Vec::new(),
@@ -525,7 +506,6 @@ impl SectionMesh {
         self.translucent.clear();
         self.translucent_sources.clear();
         self.packed.clear();
-        self.packed_far = false;
         self.solid_tints.clear();
         self.block_entities.clear();
         self.lights.clear();
@@ -566,7 +546,6 @@ impl SectionMesh {
         );
         self.bounds = self.compute_bounds();
         self.packed.clear();
-        self.packed_far = false;
         if compact && quads > 0 && self.solid_tints.len() == quads {
             packed::layout_into(&self.solid, &self.solid_tints, &mut self.packed);
         }
@@ -1246,10 +1225,6 @@ impl MeshTables {
             .copied()
             .unwrap_or(false)
     }
-    /// HDR output's tier of a state (`hdr_tier`), for what meshes it elsewhere (the LOD tiles).
-    pub fn hdr_tier(&self, state: BlockStateId) -> u8 {
-        self.info.get(state.0 as usize).map_or(0, |i| i.tier)
-    }
     pub fn facts(&self, state: BlockStateId) -> Option<MeshFacts> {
         let i = self.info.get(state.0 as usize)?;
         Some(MeshFacts {
@@ -1636,8 +1611,7 @@ fn fill_run(
         }
         // A neighbour not loaded continues this chunk's edge column. As lit
         // air, the outermost chunks' water drew a wall toward it (fluids show
-        // both sides), a light sheet in the water where far terrain carries
-        // on. Vanilla draws no chunk without its neighbours.
+        // both sides). Vanilla draws no chunk without its neighbours.
         Source::Missing => match center {
             Some(c) => {
                 let ez = z.clamp(0, 15);
@@ -1693,6 +1667,8 @@ pub struct MeshScratch {
     model_slots: Vec<u32>,
     /// Faces of cells with attachments, with their dynamic cell keys in the chunk.
     extras: Vec<(CellFaces, u32)>,
+    /// Reusable biome-tint layer and colormap scratch buffers across sections.
+    tints: TintsScratch,
     /// The next section's extra-model tints (`Mesher::prepare_attached_tints`), taken by
     /// its mesh.
     pub(crate) attached_tints: Option<Arc<extra_models::AttachedTints>>,
@@ -1884,12 +1860,14 @@ impl Resolver {
 struct ModCells {
     cells: Vec<u32>,
     colors: Box<[u32; 256]>,
+    dirty: bool,
 }
 impl Default for ModCells {
     fn default() -> Self {
         Self {
             cells: Vec::new(),
             colors: Box::new([UNSET; 256]),
+            dirty: false,
         }
     }
 }
@@ -1906,6 +1884,8 @@ struct Layer {
     colors: [[u32; 256]; 4],
     /// The mods' resolvers' caches, by registration index, made when one is first asked.
     mods: Vec<ModCells>,
+    /// Indices into `mods` written in the current section so vanilla sections do not sweep `mods`.
+    dirty_mods: Vec<usize>,
 }
 impl Layer {
     /// The `cells` and `colors` caches of `resolver`. Takes the fields it lends, so `get` keeps
@@ -1914,6 +1894,7 @@ impl Layer {
         cells: &'l mut [Vec<u32>; 4],
         colors: &'l mut [[u32; 256]; 4],
         mods: &'l mut Vec<ModCells>,
+        dirty_mods: &mut Vec<usize>,
         resolver: Resolver,
     ) -> (&'l mut Vec<u32>, &'l mut [u32; 256]) {
         let vanilla = match resolver {
@@ -1927,11 +1908,38 @@ impl Layer {
                     mods.resize_with(index + 1, ModCells::default);
                 }
                 let caches = &mut mods[index];
+                if !caches.dirty {
+                    caches.dirty = true;
+                    dirty_mods.push(index);
+                }
                 return (&mut caches.cells, &mut caches.colors);
             }
         };
         (&mut cells[vanilla], &mut colors[vanilla])
     }
+    fn reset(&mut self, dim: usize) {
+        self.zoomed.clear();
+        self.zoomed.resize(dim * dim, NO_BIOME);
+        for cells in &mut self.cells {
+            cells.clear();
+        }
+        self.jitter.clear();
+        self.colors = [[UNSET; 256]; 4];
+        for index in self.dirty_mods.drain(..) {
+            let entry = &mut self.mods[index];
+            entry.cells.clear();
+            entry.colors.fill(UNSET);
+            entry.dirty = false;
+        }
+    }
+}
+/// Reusable heap allocations owned by [`MeshScratch`] and lent to [`Tints`] for each section.
+#[derive(Default)]
+struct TintsScratch {
+    layers: [Option<Box<Layer>>; 16],
+    asked_colors: Vec<(i32, u32)>,
+    sampled: crate::fast_hash::FxHashMap<(u16, [i32; 3]), Option<u32>>,
+    cells: crate::fast_hash::FxHashMap<(u16, [i32; 3]), Option<u32>>,
 }
 /// `ClientLevel.calculateBlockTint` behind a per-layer `BlockTintCache`: each
 /// block averages the colours of the biomes `BiomeManager.getBiome` picks (the
@@ -1946,6 +1954,8 @@ struct Tints<'a> {
     /// Chunk x, chunk z and the section's lowest block y.
     origin: [i32; 3],
     layers: [Option<Box<Layer>>; 16],
+    /// Bit `y` set once `layers[y]` has been initialized or reset for this section.
+    initialized_layers: u16,
     /// `uniform_biome`, once computed.
     uniform: Option<Option<u16>>,
     /// The block a mod's own source last coloured (section-local position and state) and its
@@ -1975,6 +1985,26 @@ impl<'a> Tints<'a> {
         radius: i32,
         origin: [i32; 3],
     ) -> Self {
+        Self::new_reusing(
+            region,
+            biomes,
+            zoom,
+            radius,
+            origin,
+            TintsScratch::default(),
+        )
+    }
+    fn new_reusing(
+        region: &'a [[Option<&'a Chunk>; 3]; 3],
+        biomes: &'a Biomes,
+        zoom: BiomeZoom,
+        radius: i32,
+        origin: [i32; 3],
+        mut scratch: TintsScratch,
+    ) -> Self {
+        scratch.asked_colors.clear();
+        scratch.sampled.clear();
+        scratch.cells.clear();
         Self {
             region,
             biomes,
@@ -1982,17 +2012,26 @@ impl<'a> Tints<'a> {
             radius: radius.clamp(0, 7),
             plains: biomes.id("minecraft:plains"),
             origin,
-            layers: Default::default(),
+            layers: scratch.layers,
+            initialized_layers: 0,
             uniform: None,
             asked: None,
-            asked_colors: Vec::new(),
+            asked_colors: scratch.asked_colors,
             attached: None,
             preparing: None,
             drawing_extras: false,
             colormaps: &[],
             water_colormap: None,
-            sampled: Default::default(),
-            cells: Default::default(),
+            sampled: scratch.sampled,
+            cells: scratch.cells,
+        }
+    }
+    fn into_scratch(self) -> TintsScratch {
+        TintsScratch {
+            layers: self.layers,
+            asked_colors: self.asked_colors,
+            sampled: self.sampled,
+            cells: self.cells,
         }
     }
     /// With the packs' colormaps of `tables`.
@@ -2174,19 +2213,32 @@ impl<'a> Tints<'a> {
         }
         let r = self.radius;
         let dim = (16 + 2 * r) as usize;
-        let layer = self.layers[y as usize].get_or_insert_with(|| {
-            Box::new(Layer {
-                zoomed: vec![NO_BIOME; dim * dim],
-                cells: Default::default(),
-                jitter: Vec::new(),
-                colors: [[UNSET; 256]; 4],
-                mods: Vec::new(),
-            })
-        });
+        let layer_idx = y as usize;
+        let layer_bit = 1u16 << layer_idx;
+        let layer = if self.initialized_layers & layer_bit != 0 {
+            self.layers[layer_idx].as_mut().unwrap()
+        } else {
+            self.initialized_layers |= layer_bit;
+            match &mut self.layers[layer_idx] {
+                Some(layer) => {
+                    layer.reset(dim);
+                    layer
+                }
+                slot => slot.insert(Box::new(Layer {
+                    zoomed: vec![NO_BIOME; dim * dim],
+                    cells: Default::default(),
+                    jitter: Vec::new(),
+                    colors: [[UNSET; 256]; 4],
+                    mods: Vec::new(),
+                    dirty_mods: Vec::new(),
+                })),
+            }
+        };
         let (cells, colors) = Layer::caches(
             &mut layer.cells,
             &mut layer.colors,
             &mut layer.mods,
+            &mut layer.dirty_mods,
             resolver,
         );
         let slot = (z * 16 + x) as usize;
@@ -2491,12 +2543,13 @@ impl Mesher<'_> {
                 .leaf
                 .prepare(self.leaf_culling, pad, &self.tables.info, region, base_y);
         }
-        let mut tints = Tints::new(
+        let mut tints = Tints::new_reusing(
             region,
             self.biomes,
             self.zoom,
             self.blend_radius,
             [center.x, center.z, base_y],
+            std::mem::take(&mut scratch.tints),
         )
         .with_colormaps(self.tables);
         tints.attached = attached;
@@ -2535,11 +2588,6 @@ impl Mesher<'_> {
                     if state.fluid.kind() != FluidKind::Empty && kept & visibility_plan::FLUID != 0
                     {
                         let start = [out.solid.len(), out.translucent.len()];
-                        let water = if PREPARE_TINTS {
-                            0xFF_FFFF
-                        } else {
-                            tints.water(x, y, z)
-                        };
                         let shade = (
                             self.nether_shading,
                             self.shader_pack_lighting,
@@ -2551,7 +2599,13 @@ impl Mesher<'_> {
                             self.part_tables,
                             shade,
                             pad,
-                            water,
+                            || {
+                                if PREPARE_TINTS {
+                                    0xFF_FFFF
+                                } else {
+                                    tints.water(x, y, z)
+                                }
+                            },
                             &mut out,
                             [x, y, z],
                             masks,
@@ -2664,6 +2718,7 @@ impl Mesher<'_> {
         if PREPARE_TINTS {
             scratch.attached_tints = tints
                 .preparing
+                .take()
                 .filter(|prepared| !prepared.colors.is_empty())
                 .map(Arc::new);
         } else {
@@ -2672,6 +2727,7 @@ impl Mesher<'_> {
             }
             out.finish_sprite_layers();
         }
+        scratch.tints = tints.into_scratch();
         out
     }
     fn prepare_rows<M: visibility_plan::CellMasks>(

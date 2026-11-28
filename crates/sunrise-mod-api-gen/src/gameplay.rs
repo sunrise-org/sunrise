@@ -191,10 +191,14 @@ impl HostRoute {
 
 impl Routing {
     pub(crate) fn load(root: &Path) -> Result<Self, String> {
+        Self::load_tracked(root, &mut crate::Inputs::default())
+    }
+
+    pub(crate) fn load_tracked(root: &Path, inputs: &mut crate::Inputs) -> Result<Self, String> {
         let path = root.join(ROUTING);
-        crate::rerun_if_changed(&path.display());
-        let text =
-            fs::read_to_string(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+        let text = inputs
+            .read_to_string(&path)
+            .map_err(|error| format!("{}: {error}", path.display()))?;
         toml::from_str(&text).map_err(|error| format!("{}: {error}", path.display()))
     }
 
@@ -203,7 +207,15 @@ impl Routing {
     }
 
     pub(crate) fn catalog(&self, root: &Path) -> Result<Catalog, String> {
-        let mut catalog = Catalog::load(root)?;
+        self.catalog_tracked(root, &mut crate::Inputs::default())
+    }
+
+    pub(crate) fn catalog_tracked(
+        &self,
+        root: &Path,
+        inputs: &mut crate::Inputs,
+    ) -> Result<Catalog, String> {
+        let mut catalog = Catalog::load_tracked(root, inputs)?;
         for hook in &mut catalog.hooks {
             if let Some(route) = self.hooks.get(&hook.name) {
                 hook.target.clone_from(&route.target);
@@ -281,13 +293,14 @@ pub fn audit_gameplay(root: &Path, out: &Path) -> Result<GameplayAudit, String> 
     Ok(audit)
 }
 
-pub(crate) fn generate(
+pub(crate) fn generate_tracked(
     root: &Path,
     package: GameplayPackage,
+    inputs: &mut crate::Inputs,
 ) -> Result<Vec<(&'static str, String)>, String> {
-    let routing = Routing::load(root)?;
-    let catalog = routing.catalog(root)?;
-    let areas = crate::host::load(root)?;
+    let routing = Routing::load_tracked(root, inputs)?;
+    let catalog = routing.catalog_tracked(root, inputs)?;
+    let areas = crate::host::load_tracked(root, inputs)?;
     let mut audit = GameplayAudit::default();
     let files = plan(&routing, &catalog, &areas, package, &mut audit)?;
     if !audit.issues.is_empty() {

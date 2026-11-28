@@ -744,7 +744,7 @@ pub(in crate::game) struct RemovalEffects<'a> {
     items: &'a Items,
     keep_contents: bool,
     drops: Vec<Option<ItemStack>>,
-    spawns: Vec<(ItemStack, [f64; 3])>,
+    spawns: Vec<(ItemStack, [f64; 3], Option<[f64; 3]>)>,
     experience: Vec<(u32, [f64; 3])>,
 }
 
@@ -809,12 +809,18 @@ impl mod_api::BlockRemovalEffects for RemovalEffects<'_> {
         &mut self,
         stack: mod_api::ItemStack,
         position: [f64; 3],
+        motion: Option<[f64; 3]>,
     ) -> Result<(), mod_api::BlockRemovalEffectError> {
         if !position.into_iter().all(f64::is_finite) {
             return Err(mod_api::BlockRemovalEffectError::NonFinitePosition);
         }
+        if let Some(motion) = motion
+            && !motion.into_iter().all(f64::is_finite)
+        {
+            return Err(mod_api::BlockRemovalEffectError::NonFiniteMotion);
+        }
         let stack = self.checked_stack(&stack)?;
-        self.spawns.push((stack, position));
+        self.spawns.push((stack, position, motion));
         Ok(())
     }
 
@@ -1313,7 +1319,7 @@ impl GameLevel<'_> {
                             neighbour_updates += 1;
                         }
                         let at = removal::jukebox_pop_position(&mut self.world.random, pos);
-                        self.spawn_removal_item(record, at);
+                        self.spawn_removal_item(record, at, None);
                         neighbour_updates += 1;
                     }
                 }
@@ -1333,7 +1339,11 @@ impl GameLevel<'_> {
                             self.world.block_entities.get_mut(&key)
                         && let Some(book) = l.book.take()
                     {
-                        self.spawn_removal_item(book, removal::lectern_book_position(pos, step));
+                        self.spawn_removal_item(
+                            book,
+                            removal::lectern_book_position(pos, step),
+                            None,
+                        );
                     }
                 }
                 PreRemove::ShulkerBox
@@ -1345,8 +1355,8 @@ impl GameLevel<'_> {
             for stack in effects.drops {
                 self.drop_item_stack(pos, stack);
             }
-            for (stack, at) in effects.spawns {
-                self.spawn_removal_item(stack, at);
+            for (stack, at, motion) in effects.spawns {
+                self.spawn_removal_item(stack, at, motion);
             }
             for (amount, at) in effects.experience {
                 self.award_orbs(at, amount);
@@ -1411,13 +1421,13 @@ impl GameLevel<'_> {
         }
         neighbour_updates
     }
-    /// ItemEntity(level, x, y, z, stack), followed by setDefaultPickUpDelay.
-    fn spawn_removal_item(&mut self, stack: ItemStack, pos: [f64; 3]) {
+    /// `ItemEntity` with random or explicit velocity, followed by `setDefaultPickUpDelay`.
+    fn spawn_removal_item(&mut self, stack: ItemStack, pos: [f64; 3], motion: Option<[f64; 3]>) {
         self.spill.spawns.push(Spawn {
             random: None,
             stack,
             pos,
-            motion: None,
+            motion,
             delay: 10,
         });
     }

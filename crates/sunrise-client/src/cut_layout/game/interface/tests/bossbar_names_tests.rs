@@ -55,13 +55,10 @@ fn game_with_two_guests<'a>(
     .unwrap();
     game.build_registries();
     game.set_allow_commands(true);
-    game.player = Some(
-        PlayerMotion::new(
-            game.motion,
-            sunrise_core::geometry::Vec3::new(10.5, 64.0, -3.25),
-        )
-        .unwrap(),
-    );
+    game.player = Some(PlayerMotion::new(
+        game.motion,
+        sunrise_core::geometry::Vec3::new(10.5, 64.0, -3.25),
+    ));
     game.lan_host(
         LanSettings {
             port: 0,

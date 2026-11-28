@@ -17,8 +17,10 @@ pub(in crate::game) mod tests {
         mod_platform::testing::with_mods(mods, || {
             with_game(|game| {
                 crate::game::native_entity_refs::tests::resolve_parts(game).unwrap();
-                game.player =
-                    Some(sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+                game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                    game.motion,
+                    Vec3::ZERO,
+                ));
                 crate::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
                 game.server_set_acting_use(true);
                 let player = game.living(game.entity(20).unwrap()).unwrap();

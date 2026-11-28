@@ -33,7 +33,6 @@ def main():
     harness.run_logged([*command, resources, inputs, build / "rust.jsonl"], build, "rust")
     harness.java_run(build, classes, dependencies, "VanillaBlockParticlesOracle", [inputs, build / "client.jsonl"], "client")
     count = hits = burst = 0
-    max_error = 0.0
     with (build / "client.jsonl").open() as native, (build / "rust.jsonl").open() as rust:
         for v, r in itertools.zip_longest(native, rust):
             assert v is not None and r is not None, "output length differs"
@@ -48,16 +47,16 @@ def main():
                         continue
                     assert len(vp) == len(rp) == 3
                     for expected, got in zip(vp, rp):
-                        error = abs(expected-got)
-                        max_error = max(max_error, error)
-                        assert error <= 1e-10, (rows[count], key, expected, got, error)
+                        # Both sides emit doubles (Particle.x/y/z; particles.rs [f64; 3]): bit for bit.
+                        difference = lab.float_difference(expected, got, 64)
+                        assert difference is None, (rows[count], key, expected, got, difference)
                     if key == "hits": hits += 1
                     else: burst += 1
             count += 1
     assert count == len(rows)
     base.ensure_sources_unchanged(paths, tested)
-    lab.write_json(build / "report.json", dict(cases=count, hits=hits, burst=burst, max_error=max_error, sources_sha256=tested, gameplay_facts_sha256=lab.digest(resources / "gameplay-facts.json", "sha256"), client_jar_sha256=lab.digest(jars["client"], "sha256"), scope="Actual ClientLevel mining and destruction enqueue positions/count/order, outline offsets, six hit faces, position RNG draws. Sprite/tint lookup is stubbed; particle-local RNG, velocities, ticks and complete framebuffer parity are not compared."))
-    print(f"{count:,} block-particle cases / {hits:,} mining crumbs / {burst:,} burst crumbs match vanilla; max error {max_error:g}")
+    lab.write_json(build / "report.json", dict(cases=count, hits=hits, burst=burst, sources_sha256=tested, gameplay_facts_sha256=lab.digest(resources / "gameplay-facts.json", "sha256"), client_jar_sha256=lab.digest(jars["client"], "sha256"), scope="Actual ClientLevel mining and destruction enqueue positions/count/order, outline offsets, six hit faces, position RNG draws. Sprite/tint lookup is stubbed; particle-local RNG, velocities, ticks and complete framebuffer parity are not compared."))
+    print(f"{count:,} block-particle cases / {hits:,} mining crumbs / {burst:,} burst crumbs match vanilla bit for bit")
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@
 //! installs the process's block-entity type table, so the test runs in a fresh process.
 use crate::{game::load_resources, settings::Settings};
 use mod_api::BlockEntityRef;
-use std::{path::PathBuf, sync::Arc};
+use std::sync::Arc;
 use sunrise_core::nbt::Tag;
 use sunrise_game_data::block_entity_types::{BlockEntityTypes, install};
 use sunrise_gameplay::game::ServerGame;
@@ -46,7 +46,7 @@ impl mod_api::Hooks for CrateMod {
 pub(super) fn with_crate(test: impl FnOnce(&mut ServerGame<'_>, BlockEntityRef)) {
     let mods: mod_api::Mods = vec![mod_api::ModEntry::new("fixture", Box::new(CrateMod))].into();
     mod_platform::testing::with_mods(mods, || {
-        let base = PathBuf::from(std::env::var_os("SUNRISE_TEST_RESOURCES").unwrap());
+        let base = crate::prepared_test_root::prepared_root(&[]);
         let home = std::env::current_dir().unwrap();
         let root = home.join("crate-resources");
         let mut content = Content::declared("fixture");

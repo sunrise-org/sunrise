@@ -159,8 +159,10 @@ fn spawner_batch(
     if installation == "admission-intra" {
         spawner.spawn_count = 1;
     }
-    game.player =
-        Some(sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(4.5, 64.0, z)).unwrap());
+    game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+        game.motion,
+        Vec3::new(4.5, 64.0, z),
+    ));
     let level = game.natural_level();
     let mut random = Attempts {
         doubles: [0.0, 0.0, 0.0, 0.0, dx, 0.0, 0.0, 0.0].into_iter(),

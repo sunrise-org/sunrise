@@ -673,7 +673,7 @@ mod tests {
         use sunrise_sim::motion::PlayerMotion;
         super::super::native_entity_refs::tests::with_client_game(|game| {
             let at = Vec3::new(0.5, 64.0, 0.5);
-            game.common.player = Some(PlayerMotion::new(game.common.motion, at).unwrap());
+            game.common.player = Some(PlayerMotion::new(game.common.motion, at));
             let mut cart = Minecart::new(71, CartKind::Tnt, Vec3::new(2.5, 64.0, 0.5));
             cart.fuse = 3;
             game.common.carts.push(cart);

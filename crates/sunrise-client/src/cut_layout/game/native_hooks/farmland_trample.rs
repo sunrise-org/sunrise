@@ -317,8 +317,7 @@ pub(crate) mod tests {
                     player.place(start);
                     player.first_good = start;
                     let mut body =
-                        PlayerMotion::new(game.motion, Vec3::new(start[0], start[1], start[2]))
-                            .unwrap();
+                        PlayerMotion::new(game.motion, Vec3::new(start[0], start[1], start[2]));
                     body.fall_distance = 6.0;
                     player.motion = Some(Box::new(body));
                     let health = player.health;

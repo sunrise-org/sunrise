@@ -69,7 +69,7 @@ fn same_mob_guest_attack_survives_movement_panic() {
                 }
 
                 let far = Vec3::new(12.0, 80.0, 12.0);
-                game.player = Some(PlayerMotion::new(game.motion, far).unwrap());
+                game.player = Some(PlayerMotion::new(game.motion, far));
                 let host = game.server.lan.as_mut().unwrap();
                 for (conn, position) in [
                     (TARGET_GUEST, [1.5, 80.0, 0.5]),

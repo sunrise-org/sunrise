@@ -54,7 +54,7 @@ pub(crate) mod guest_hit_tests {
     #[ignore = "daily"]
     fn an_effect_hit_on_a_guest_credits_the_mob_that_swung() {
         sunrise_gameplay::game::native_entity_refs::tests::with_game(|game| {
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 100.0, 0.5)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 100.0, 0.5)));
             for (id, kind, y) in [
                 (4, "minecraft:zombie", 90.0),
                 (5, "minecraft:cave_spider", 100.0),
@@ -82,7 +82,9 @@ pub(crate) mod guest_hit_tests {
                         attacker: Some(Who::Mob(5)),
                         from: Some(from),
                         direct: None,
-                        attacker_species: Some(Species::Bee),
+                        attacker_species: Some(sunrise_sim::mobs::species::vanilla_id(
+                            Species::Bee,
+                        )),
                     },
                 },
             ];

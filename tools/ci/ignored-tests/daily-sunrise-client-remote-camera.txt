@@ -1,1 +1,3 @@
 sunrise-client-gameplay game::client_side::remote_camera::tests::spectated_entities_pick_their_chain lib daily child-process
+sunrise-client-gameplay game::client_side::remote_camera::fog_blend_tests::a_removed_cameras_darkness_factor_stays_where_vanilla_left_it lib daily child-process
+sunrise-client-gameplay game::client_side::remote_camera::fog_blend_tests::the_shader_packs_night_vision_value_matches_vanilla_flicker lib daily child-process

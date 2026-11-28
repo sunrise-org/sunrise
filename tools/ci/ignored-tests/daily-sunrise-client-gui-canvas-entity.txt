@@ -1,0 +1,2 @@
+# GuiCanvas::entity (#6023): an item decorator canvas draws a mob in its pose and scissor; needs a Game with prepared resources.
+sunrise-client-gameplay game::host::draw::gui_canvas::tests::an_item_decorator_canvas_draws_a_mob_in_its_pose_and_scissor lib daily child-process

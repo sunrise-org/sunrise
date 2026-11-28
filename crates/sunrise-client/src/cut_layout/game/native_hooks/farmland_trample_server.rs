@@ -100,8 +100,7 @@ pub(crate) mod tests {
                             // The guest motion pass finishes a short fall by itself:
                             // `None` means no continuation and no return to the owning host.
                             let mut guest =
-                                PlayerMotion::new(game.motion, Vec3::new(1.5, LANDING_Y, 1.5))
-                                    .unwrap();
+                                PlayerMotion::new(game.motion, Vec3::new(1.5, LANDING_Y, 1.5));
                             guest.fall_distance = 0.125;
                             let (player_uuid, level, session_lock) =
                                 sunrise_gameplay_common::game::side_ops::world::WorldSideGameExt::side_game_side_meta(game);

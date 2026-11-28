@@ -27,10 +27,23 @@ pub fn too_deep() -> String {
 
 /// The value of a condition; `Err` says what is wrong with it.
 pub fn eval_condition(expr: &str, macros: &Macros) -> Result<i64, String> {
-    let (tokens, real) = tokens(
-        &resolve_defined(expr, |name| macros.is_defined(name))?,
-        macros,
-    )?;
+    eval_condition_noting(expr, macros, &mut |_| {})
+}
+
+/// [`eval_condition`], calling `lookup` with each name the evaluation looks up: each name a
+/// `defined` reads, and each identifier its expansion leaves, which counts as 0 (a name a macro
+/// pastes together included; one a macro drops never reaches it).
+pub fn eval_condition_noting(
+    expr: &str,
+    macros: &Macros,
+    lookup: &mut dyn FnMut(&str),
+) -> Result<i64, String> {
+    let lookup = std::cell::RefCell::new(lookup);
+    let resolved = resolve_defined(expr, |name| {
+        (lookup.borrow_mut())(name);
+        macros.is_defined(name)
+    })?;
+    let (tokens, real) = tokens(&resolved, macros, &mut *lookup.borrow_mut())?;
     let mut parser = Parser::new(&tokens, real);
     let value = parser.binary(0)?;
     match parser.tokens.get(parser.at) {
@@ -47,6 +60,7 @@ pub fn eval_line(expr: &str, macros: &Macros) -> Result<i64, String> {
     let (tokens, real) = tokens(
         &resolve_defined(expr, |name| macros.is_defined(name))?,
         macros,
+        &mut |_| {},
     )?;
     if real {
         return Err("a line number is an integer".into());
@@ -199,8 +213,12 @@ const OPS: [&str; 22] = [
     "<", ">", "&", "^", "|",
 ];
 
-fn tokens(expr: &str, macros: &Macros) -> Result<(Vec<Token>, bool), String> {
-    let expanded = macros.expand_condition(expr)?;
+fn tokens(
+    expr: &str,
+    macros: &Macros,
+    lookup: &mut dyn FnMut(&str),
+) -> Result<(Vec<Token>, bool), String> {
+    let expanded = macros.expand_condition_noting(expr, lookup)?;
     let mut out = Vec::new();
     let mut real = false;
     let mut rest = expanded.trim_start();
@@ -235,6 +253,7 @@ fn tokens(expr: &str, macros: &Macros) -> Result<(Vec<Token>, bool), String> {
         } else if is_ident_start(c) {
             // Not a macro: 0, as the C preprocessor counts it.
             let len = rest.find(|c: char| !is_ident(c)).unwrap_or(rest.len());
+            lookup(&rest[..len]);
             out.push(Token::Num(0.0));
             rest = &rest[len..];
         } else {
@@ -397,6 +416,30 @@ fn apply(op: &str, a: f64, b: f64, real: bool, quiet: bool) -> Result<f64, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The names an evaluation looks up: each `defined` operand and each name its expansion
+    /// leaves, a pasted one included, not an argument a macro drops nor a macro it expands;
+    /// with naga's rules, a `defined` the expansion makes too.
+    #[test]
+    fn the_names_a_condition_looks_up_are_noted() {
+        let noted = |m: &Macros, expr: &str| {
+            let mut names = Vec::new();
+            let value = eval_condition_noting(expr, m, &mut |n| names.push(n.to_owned()));
+            (value, names)
+        };
+        let mut m = Macros::default();
+        m.define_line("CAT(a, b) a##b").unwrap();
+        m.define_line("DROP(x) 2").unwrap();
+        m.define("ONE", "1");
+        let (value, names) = noted(&m, "defined(A) || CAT(B, C) + DROP(D) + ONE");
+        assert_eq!(value, Ok(1));
+        assert_eq!(names, ["A", "BC"]);
+        let mut checked = Macros::checked(usize::MAX);
+        checked.define_line("HAS defined E").unwrap();
+        let (value, names) = noted(&checked, "HAS");
+        assert_eq!(value, Ok(0));
+        assert_eq!(names, ["E"]);
+    }
 
     fn eval(expr: &str) -> Result<i64, String> {
         let mut m = Macros::default();

@@ -874,7 +874,7 @@ impl crate::game::ServerGame<'_> {
                 ],
             )
         };
-        let catalog = self.common.motion.attributes.clone();
+        let catalog = self.common.motion.attributes().clone();
         let key = catalog.id(attribute).ok_or_else(no_attribute)?;
         let map = self.generic_attributes(target).ok_or_else(no_attribute)?;
         if !map.has(key) {

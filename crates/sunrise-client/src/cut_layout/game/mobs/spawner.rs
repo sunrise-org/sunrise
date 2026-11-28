@@ -59,10 +59,10 @@ pub(crate) mod tests {
         mod_platform::testing::with_mods(mods, || {
             sunrise_gameplay::game::native_entity_refs::tests::with_game(|game| {
                 game.options.dedicated = Some(Vec::new());
-                game.player = Some(
-                    sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(8.5, 64.0, 8.5))
-                        .unwrap(),
-                );
+                game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                    game.motion,
+                    Vec3::new(8.5, 64.0, 8.5),
+                ));
                 for key in [far, near] {
                     let spawner = Spawner {
                         spawn_delay: 3,
@@ -141,10 +141,10 @@ pub(crate) mod tests {
                 (0, 0),
                 std::sync::Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)),
             );
-            game.player = Some(
-                sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(8.5, 64.0, 8.5))
-                    .unwrap(),
-            );
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                Vec3::new(8.5, 64.0, 8.5),
+            ));
             let key = (8, 64, 12);
             let spawner = Spawner {
                 spawn_delay: 3,

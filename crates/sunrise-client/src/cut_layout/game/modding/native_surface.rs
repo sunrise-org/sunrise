@@ -120,7 +120,7 @@ mod tests {
             let floor = BlockPos::new(5, 64, 5);
             // The player's ground travel reads the block through its motion world.
             let player = |game: &mut sunrise_gameplay::game::ServerGame<'_>| {
-                let mut player = PlayerMotion::new(game.motion, Vec3::new(5.5, 65.0, 5.5)).unwrap();
+                let mut player = PlayerMotion::new(game.motion, Vec3::new(5.5, 65.0, 5.5));
                 player.set_walking_speed_base(0.1).unwrap();
                 player.ground.on_ground = true;
                 player.velocity = Vec3::new(0.2, 0.0, 0.0);
@@ -377,7 +377,7 @@ mod tests {
             let registry = game.pack.assets.registry;
             let lime = registry.default_state("minecraft:lime_wool").unwrap();
             let level = game.level_ref(game.native_lifecycle.epoch().unwrap(), game.dim.key());
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             super::super::native_entity_refs::tests::bind_local_player(game, 100, 100);
             let player = game.entity(100).unwrap();
             calls.store(0, Ordering::SeqCst);

@@ -132,7 +132,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (name, text) in resources {
         tags.apply_json(&name, "vanilla", &text)?;
     }
-    let tags = tags.build(|name, _| registry.default_state(name).map(|_| name.to_owned()))?;
+    let tags = tags.bind(|name, _| registry.default_state(name).map(|_| name.to_owned()));
     assert!(tags.missing.is_empty());
     let definitions: BTreeMap<String, String> =
         serde_json::from_str(&fs::read_to_string(dir.join("survival-rules.json"))?)?;
@@ -203,8 +203,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (name, text) in fluid_resources {
         fluid_tags.apply_json(&name, "vanilla", &text)?;
     }
-    let fluid_tags =
-        fluid_tags.build(|name, _| FluidKind::from_name(name).map(|_| name.to_owned()))?;
+    let fluid_tags = fluid_tags.bind(|name, _| FluidKind::from_name(name).map(|_| name.to_owned()));
     assert!(fluid_tags.missing.is_empty());
     let fluids = FluidStateTable::new(&registry)?;
     let collision = Arc::new(BlockCollisionRegistry::new(Arc::new(collisions))?);

@@ -1120,11 +1120,7 @@ fn the_game_rules_read_back_as_set_and_a_default_world_reads_its_defaults() {
         spawn_monsters: Some(monsters),
         spawner_blocks_work: Some(spawners),
     };
-    let rules_of = |r: &Rules| {
-        start_of(&scratch, r, sunrise_options(0))
-            .game_rules
-            .unwrap()
-    };
+    let rules_of = |r: &Rules| start_of(&scratch, r, sunrise_options()).game_rules.unwrap();
 
     // Vanilla's defaults are non-zero and true: a misspelt name would read 0 and false.
     assert_eq!(
@@ -1174,20 +1170,12 @@ fn the_sunrise_options_read_back_as_given() {
     use sunrise_perf_format::v1::SunriseOptions;
     let scratch = Scratch::new("sunrise-options");
     let rules = crate::gamerules::GameRules::default();
-    let on = start_of(&scratch, &rules, sunrise_options(12)).sunrise_options;
+    let current = start_of(&scratch, &rules, sunrise_options()).sunrise_options;
     assert_eq!(
-        on,
+        current,
         Some(SunriseOptions {
             max_view_distance: Some(0),
-            lod_distance: Some(12),
-        })
-    );
-    let off = start_of(&scratch, &rules, sunrise_options(0)).sunrise_options;
-    assert_eq!(
-        off,
-        Some(SunriseOptions {
-            max_view_distance: Some(0),
-            lod_distance: Some(0),
+            lod_distance: None
         })
     );
     // A capture from before the far ring was removed still reads its distance.

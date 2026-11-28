@@ -23,7 +23,7 @@ fn game<'a>(
         .add_empty_chunk(ChunkPos::new(0, 0))
         .unwrap();
     assert!(game.run_command("forceload add 0 0"));
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 101.0, 8.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 101.0, 8.5)));
     game.selected = 0;
     game.set_mode_id(0);
     game

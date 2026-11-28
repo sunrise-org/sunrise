@@ -1745,6 +1745,7 @@ impl Entities {
         attachments: Option<&InitialAttachmentLookup<'_>>,
         mut kind: impl FnMut(&str) -> Option<i32>,
     ) {
+        let mut laps = crate::spans::laps();
         self.tick = self.tick.wrapping_add(1);
         let now = self.tick;
         self.probes.clear();
@@ -1851,6 +1852,7 @@ impl Entities {
             }
             self.probes[index].range = scaled_range(range, self.range_percent);
         }
+        laps.lap("lan_track_index");
         self.pairs.clear();
         self.pairs.resize(self.probes.len(), false);
         // The per-player sweep runs shared out (#8158): every player's flags,
@@ -2026,10 +2028,12 @@ impl Entities {
         let active: Vec<usize> = (0..self.probes.len())
             .filter(|&index| !self.quiet[index] || self.pairs[index])
             .collect();
+        laps.lap("lan_track_visibility");
         if self.send_apart(viewers.len(), active.len()) {
             self.send_on_threads(entities, riding, viewers, &active, attachments);
         } else {
             self.send_in_order(entities, riding, viewers, &active, attachments);
+            laps.lap("lan_track_diff_encode_fanout");
         }
         // ChunkMap.removeEntity for the ones no longer in the level.
         if self.states.len() > stamped {
@@ -2171,6 +2175,7 @@ impl Entities {
             probes,
             ..
         } = self;
+        let mut laps = crate::spans::laps();
         let mut made: Vec<Made> = states
             .of_indices_mut(active)
             .into_iter()
@@ -2236,6 +2241,7 @@ impl Entities {
                 }
             }
         }
+        laps.lap("lan_track_diff_encode");
         let made = &made;
         let mut clients: Vec<(&mut Viewer, &Vec<u8>)> = viewers.iter_mut().zip(&*flags).collect();
         sunrise_threads::par_chunks_mut(&mut clients, 4, |part| {
@@ -2272,6 +2278,7 @@ impl Entities {
                 }
             }
         });
+        laps.lap("lan_track_fanout");
     }
 }
 

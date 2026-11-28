@@ -37,8 +37,6 @@ struct WorkspaceCrate {
 
 impl OutsideSeam {
     pub(crate) fn read(root: &Path) -> Result<Self, String> {
-        let workspace_manifest = root.join("Cargo.toml");
-        crate::rerun_if_changed(&workspace_manifest.display());
         let manifest = crate::replace::manifest(root)?;
         let workspace_members = manifest
             .get("workspace")
@@ -58,7 +56,6 @@ impl OutsideSeam {
                 .as_str()
                 .ok_or("Cargo.toml: workspace member is not a path")?;
             let package_path = root.join(member);
-            crate::rerun_if_changed(&package_path.join("Cargo.toml").display());
             let package = crate::replace::manifest(&package_path)?;
             let package_name = package
                 .get("package")

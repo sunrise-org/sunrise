@@ -58,7 +58,7 @@ fn plugin_player_stack_follows_network_moves_and_local_carriers() {
     let (client, _server) = sunrise_protocol::connection::Pipe::pair();
     game.connect_local(client, "SeatTest").unwrap();
     game.client.remote.as_mut().unwrap().entity_id = 7;
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
     game.spawn_entity(40, "minecraft:player", [2.0, 64.0, 3.0], [0.0; 3]);
     game.spawn_entity(41, "minecraft:player", [0.0, 64.0, 0.0], [0.0; 3]);
     game.spawn_entity(42, "minecraft:area_effect_cloud", [0.0; 3], [0.0; 3]);
@@ -339,7 +339,7 @@ fn client_entity_move_fires_for_simulated_bodies_and_not_observed() {
         game.client
             .streaming
             .insert_remote(&mut game.common.world, Chunk::empty(0, 0));
-        let mut player = PlayerMotion::new(game.motion, Vec3::new(3.0, 64.0, 3.0)).unwrap();
+        let mut player = PlayerMotion::new(game.motion, Vec3::new(3.0, 64.0, 3.0));
         player.entity_id = 7;
         player.velocity = Vec3::new(0.2, 0.0, 0.0);
         game.common.player = Some(player);
@@ -423,7 +423,7 @@ fn entity_interpolate_to_steps_observed_boat_and_refuses_simulated_bodies() {
         game.client
             .streaming
             .insert_remote(&mut game.common.world, Chunk::empty(0, 0));
-        let mut player = PlayerMotion::new(game.motion, Vec3::new(1.0, 64.0, 1.0)).unwrap();
+        let mut player = PlayerMotion::new(game.motion, Vec3::new(1.0, 64.0, 1.0));
         player.entity_id = 7;
         game.common.player = Some(player);
         let boat_kind = game

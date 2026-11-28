@@ -50,7 +50,7 @@ fn riptide_ground_release_keeps_launch_velocity() {
                         } else {
                             Vec3::new(START.x, 65.0, START.z)
                         };
-                        let mut body = PlayerMotion::new(client.motion, start).unwrap();
+                        let mut body = PlayerMotion::new(client.motion, start);
                         body.entity_id = OWNER as i32;
                         body.ground.on_ground = grounded;
                         client.player = Some(body);

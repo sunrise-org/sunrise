@@ -168,7 +168,7 @@ fn a_pack_lightmap_with_an_older_larger_info_block_draws() {
         &|b| b == INFO_BLOCK,
     )
     .expect("the shaders translate");
-    let mut core = lightmap_for(&device, Some(&program), &[])
+    let mut core = lightmap_for(&device, Some(&program), &[], ShaderOrigin::Pack)
         .unwrap_or_else(|e| panic!("{e}"))
         .expect("the lightmap pipeline");
     core.set_readback(&device, true);
@@ -600,7 +600,7 @@ fn a_lightmap_shaders_blocks_count_for_the_stages_that_read_them() {
     let made = |vertex, fragment| {
         let (program, expressions) = expression_lightmap(vertex, fragment);
         let past = program.past_device_limit(&device.limits(), &[wgpu::TextureFormat::Rgba8Unorm]);
-        let made = lightmap_for(&device, Some(&program), &expressions)
+        let made = lightmap_for(&device, Some(&program), &expressions, ShaderOrigin::Pack)
             .unwrap_or_else(|e| panic!("{e}"))
             .is_some();
         (made, past)
@@ -620,18 +620,13 @@ fn a_lightmap_shaders_blocks_count_for_the_stages_that_read_them() {
     );
 }
 
-/// What F3's lightmap chart paints across the chart closing and opening again and fullbright
-/// turning on and off (the renderer's `lightmap_sample`): only pixels of the texture drawn now,
-/// never an old sample. No adapter needed: the chart's state alone.
+/// What F3's lightmap chart paints across the chart closing and opening again (the renderer's
+/// `lightmap_sample`): only pixels of the texture drawn now, never an old sample. No adapter needed: the chart's state alone.
 #[test]
 fn the_lightmap_chart_never_shows_a_stale_sample() {
     let mut chart = LightmapChart::new();
-    let pack = Drawn::now(false, true);
-    let (native, white) = (Drawn::now(false, false), Drawn::now(true, true));
-    assert_eq!(
-        (pack, native, white),
-        (Drawn::Pack, Drawn::Native, Drawn::Native)
-    );
+    let (pack, native) = (Drawn::now(true), Drawn::now(false));
+    assert_eq!((pack, native), (Drawn::Pack, Drawn::Native));
     assert_eq!(chart.shown(pack), None, "nothing read yet");
     // The chart open: a pack-drawn copy lands.
     chart.pixels = [9; 16 * 16 * 4];
@@ -643,66 +638,14 @@ fn the_lightmap_chart_never_shows_a_stale_sample() {
     chart.pixels = [10; 16 * 16 * 4];
     chart.pack_copied();
     assert_eq!(chart.shown(pack), Some(&[10; 16 * 16 * 4]));
-    // Fullbright on: the pack's copy is not the white texture drawn now, until the native path
-    // writes it.
-    assert_eq!(chart.shown(white), None);
+    // The native path's pixels replace the pack's copy, and are not the pack's texture.
+    assert_eq!(chart.shown(native), None);
     chart.native([255; 16 * 16 * 4]);
-    assert_eq!(chart.shown(white), Some(&[255; 16 * 16 * 4]));
-    // Fullbright off with the pack's shader: the white pixels are not its texture.
+    assert_eq!(chart.shown(native), Some(&[255; 16 * 16 * 4]));
     assert_eq!(chart.shown(pack), None);
     // Closing the chart leaves a native sample alone: it is current.
     chart.forget_pack();
     assert_eq!(chart.shown(native), Some(&[255; 16 * 16 * 4]));
-}
-
-/// Fullbright stops a pack's shader with copies mapped or still in flight: once it draws again,
-/// those copies are dropped as they land, and the chart reads only a copy made after.
-#[test]
-#[ignore = "daily"]
-fn copies_from_before_fullbright_are_never_read() {
-    let _gpu = crate::gfx::test_gpu::lock();
-    let Some((device, queue)) = device() else {
-        return;
-    };
-    let program = crate::core_shader::translate_core_with(
-        SCREENQUAD_VSH,
-        PROBE_FSH,
-        &[],
-        &|_| None,
-        &GLUE,
-        &|b| b == INFO_BLOCK,
-    )
-    .expect("the shaders translate");
-    let mut core = CoreLightmap::new(&device, &program, &[]).expect("the lightmap pipeline");
-    core.set_readback(&device, true);
-    let frame = |core: &mut CoreLightmap, info: &LightmapInfo, poll: bool| {
-        let (buffer, data) = core.uniforms([0; 48], info);
-        queue.write_buffer(buffer, 0, data);
-        let mut encoder = device.create_command_encoder(&Default::default());
-        let target = target(&device);
-        core.draw(
-            &mut encoder,
-            &target,
-            &target.create_view(&Default::default()),
-        );
-        queue.submit([encoder.finish()]);
-        (core.submitted().expect("a readback"))();
-        if poll {
-            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-        }
-    };
-    // One copy mapped, one in flight, when fullbright starts.
-    frame(&mut core, &PROBE, true);
-    frame(&mut core, &PROBE, false);
-    core.forget_copies();
-    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-    let mut pixels = [7u8; 16 * 16 * 4];
-    assert!(!core.collect(&mut pixels), "both dropped");
-    assert_eq!(pixels, [7; 16 * 16 * 4]);
-    // The pack draws again: its next copy is read (STATES[0]'s SkyFactor, 0, in blue).
-    frame(&mut core, &STATES[0], true);
-    assert!(core.collect(&mut pixels));
-    assert_eq!(pixels[2], 0);
 }
 
 /// The `notGamma` scale multiplies left to right as `lightmap.fsh` writes it. At 0.0015 Java's
@@ -710,4 +653,112 @@ fn copies_from_before_fullbright_are_never_read() {
 #[test]
 fn the_not_gamma_scale_multiplies_in_the_shaders_order() {
     assert_eq!(max_scaled(0.0015).to_bits(), 1_002_711_808);
+}
+
+/// A pack's custom lightmaps for the selection tests: the Overworld's, 32 rows (no night vision
+/// rows), every sky level 200 and every block level 0.
+struct Overworld(sunrise_optifine::lightmap::Lightmaps);
+
+impl crate::custom_lightmap::Lightmaps for Overworld {
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+    fn has(&self, world: i32) -> bool {
+        self.0.has(world)
+    }
+    fn pixels(
+        &self,
+        world: i32,
+        input: &crate::custom_lightmap::Input,
+    ) -> Option<crate::custom_lightmap::Pixels> {
+        self.0.pixels(
+            world,
+            &sunrise_optifine::lightmap::Input {
+                sky: input.sky,
+                lightning: input.weather.lightning,
+                flicker: input.flicker,
+                gamma: input.gamma,
+                night_vision: input.night_vision,
+                darkness: input.darkness,
+                rain: input.weather.rain,
+                thunder: input.weather.thunder,
+            },
+        )
+    }
+}
+
+fn overworld() -> Overworld {
+    use sunrise_optifine::lightmap::{Lightmaps, Picture, WorldLightmap};
+    let mut rgba = Vec::new();
+    for y in 0..32 {
+        let v = if y < 16 { 200 } else { 0 };
+        for _ in 0..16 {
+            rgba.extend([v, v, v, 255]);
+        }
+    }
+    let base = Picture::from_rgba(16, 32, &rgba).unwrap();
+    let world = WorldLightmap {
+        base,
+        rain: None,
+        thunder: None,
+    };
+    Overworld(Lightmaps {
+        worlds: [(0, world)].into(),
+    })
+}
+
+fn input(night_vision: bool) -> crate::custom_lightmap::Input {
+    crate::custom_lightmap::Input {
+        sky: 1.0,
+        flicker: 0.0,
+        gamma: 0.0,
+        night_vision,
+        darkness: 0.0,
+        weather: Default::default(),
+    }
+}
+
+fn weather(world: i32) -> Option<crate::custom_lightmap::Weather> {
+    Some(crate::custom_lightmap::Weather {
+        world: Some(world),
+        ..Default::default()
+    })
+}
+
+/// The renderer's selection with a real pack lightmap behind it: a pack's own
+/// shader, then the world's palette when it serves the frame, then the default (vanilla's shader
+/// where one is installed).
+#[test]
+fn the_light_texture_source_is_pack_shader_then_palette_then_default() {
+    let maps = overworld();
+    let maps = &maps;
+    let palette = |w, nv| move || palette_pixels(maps, w, input(nv));
+    let is_palette = |s: Source| matches!(s, Source::Palette(p) if p[0] == 200);
+    // The default shader installed: an eligible palette replaces it.
+    assert!(is_palette(Source::select(
+        Some(ShaderOrigin::Vanilla),
+        palette(weather(0), false)
+    )));
+    assert!(is_palette(Source::select(None, palette(weather(0), false))));
+    // A pack's override draws over the palette, which it doesn't ask for.
+    let never = || -> Option<[u8; 16 * 16 * 4]> { panic!("the palette is not asked for") };
+    assert_eq!(
+        Source::select(Some(ShaderOrigin::Pack), never),
+        Source::PackShader
+    );
+    // No palette for the world, no weather set for the frame, or night vision without the
+    // palette's rows: the default.
+    for (shader, w, nv) in [
+        (Some(ShaderOrigin::Vanilla), weather(-1), false),
+        (None, weather(1), false),
+        (None, None, false),
+        (Some(ShaderOrigin::Vanilla), weather(0), true),
+        (None, weather(0), true),
+    ] {
+        assert_eq!(
+            Source::select(shader, palette(w, nv)),
+            Source::Default,
+            "{shader:?} {w:?} {nv}"
+        );
+    }
 }

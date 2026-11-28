@@ -19,7 +19,7 @@ fn rail_world(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> std::path::P
     ));
     std::fs::create_dir_all(&scratch).unwrap();
     game.server.world_root = scratch.clone();
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 64.0, 12.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 64.0, 12.5)));
     game.build_registries();
     game.set_allow_commands(true);
     game.world

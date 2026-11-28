@@ -57,13 +57,26 @@ impl crate::game::ClientGame<'_> {
             mapped = clicks;
             Some(false)
         });
-        let frozen = found
+        let mut frozen = found
             .filter(|_| modeled)
             .filter(|frozen| stacked_listens_for_side(server, frozen))?;
         let handled = Rc::new(std::cell::Cell::new(false));
         let result = handled.clone();
+        // The click runs on the engine's menu at its own index...
         let (carried, resolved_slot, primary) =
             (frozen.carried.clone(), frozen.slot, frozen.primary);
+        // ...but the Parts are told the slot of the menu a `MenuRef` names. On a creative item or
+        // search tab that is the player's `InventoryMenu`, not the screen's `ItemPickerMenu`, whose
+        // hotbar slots 45..54 are the inventory menu's 36..45.
+        if self.creative_tab_open() {
+            frozen.slot = ops
+                .iter()
+                .zip(&mapped)
+                .find_map(|(&(game_slot, ..), &(menu_slot, ..))| {
+                    (menu_slot == frozen.slot as i32).then_some(game_slot)?
+                })
+                .and_then(|game_slot| Self::menu_slot_index("inventory", game_slot))?;
+        }
         let clicks = mapped;
         let pickup = self.stacked_pickup(
             local_pickup_id(),

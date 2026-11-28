@@ -16,7 +16,7 @@ use sunrise_world::registry::BlockStateId;
 fn a_ground_jump_awards_the_jump_statistic() {
     let mut resources = None;
     let mut game = server_game(&mut resources);
-    let mut player = PlayerMotion::new(game.motion, Vec3::new(2.5, 64.0, 2.5)).unwrap();
+    let mut player = PlayerMotion::new(game.motion, Vec3::new(2.5, 64.0, 2.5));
     player.ground.on_ground = true;
     {
         let meta =
@@ -66,7 +66,7 @@ fn a_ground_jump_awards_the_jump_statistic() {
 fn a_worn_out_helmet_awards_the_broken_statistic() {
     let mut resources = None;
     let mut game = server_game(&mut resources);
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 64.0, 2.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 64.0, 2.5)));
     let mut helmet = ItemStack::new("minecraft:leather_helmet", 1);
     helmet.damage = 54;
     game.armor[0] = Some(helmet);
@@ -119,7 +119,7 @@ fn sleeping_in_a_straw_bed_awards_its_own_statistic() {
     // `Level.isDarkOutside`: midnight, so a bed may be slept in.
     game.world.day_time = 18000;
     let straw = place_bed(&mut game, 2, "minecraft:straw_bed");
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 64.0, 3.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 64.0, 3.5)));
     game.try_sleep(straw);
     assert_eq!(
         game.sleeping,

@@ -238,6 +238,202 @@ const GROUPS: [(Group, &str); 6] = [
     (Group::Final, "final"),
 ];
 
+/// The path of program `name`'s `ext` stage in `folder` (`""`: the base folder): how the loader
+/// and the identity scan (`identity::asked`) name a stage file, whose presence both test with
+/// `Pack::exists`.
+pub(crate) fn stage_path(folder: &str, name: &str, ext: &str) -> String {
+    match folder {
+        "" => format!("{name}.{ext}"),
+        f => format!("{f}/{name}.{ext}"),
+    }
+}
+
+/// How `Loader::load` reads a program, by the stage files there are (`has` tells whether a path
+/// is there, as `Pack::exists` does); whether `program.<name>.enabled` turns it off is the
+/// loader's to look at. The loader takes its course from here, and the identity scan the stages
+/// it reads (`program_stages`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ProgramRead {
+    /// Nothing: no vertex or fragment stage, in a group with no compute programs alone.
+    Nothing,
+    /// Its compute programs alone (`compute_paths`): a `setup` program, or one of a
+    /// composite-style group without both its vertex and fragment stages.
+    Compute,
+    /// Skipped unread for its tessellation stage.
+    Tessellated,
+    /// Skipped unread for a geometry stage where the pass reads no geometry.
+    NoGeometry,
+    /// Its vertex, geometry and fragment stages.
+    Geometry,
+    /// Its vertex and fragment stages, then its compute programs in a composite-style group or
+    /// `final` (`computes_after_drawing`).
+    Drawn,
+}
+
+/// The groups whose programs may be compute programs alone.
+fn compute_only(group: Group) -> bool {
+    matches!(
+        group,
+        Group::Setup
+            | Group::Begin
+            | Group::Prepare
+            | Group::Deferred
+            | Group::Composite
+            | Group::ShadowComp
+    )
+}
+
+/// The groups whose drawn programs also run their compute programs.
+fn computes_after_drawing(group: Group) -> bool {
+    compute_only(group) || group == Group::Final
+}
+
+/// How `Loader::load` reads program `name` of `group` in `folder` (`ProgramRead`), `geometry`
+/// whether the pass reads a geometry stage (the shadow pass, with the renderer's geometry inputs).
+pub(crate) fn program_read(
+    has: impl Fn(&str) -> bool,
+    folder: &str,
+    name: &str,
+    group: Group,
+    geometry: bool,
+) -> ProgramRead {
+    let has = |ext: &str| has(&stage_path(folder, name, ext));
+    if group == Group::Setup || !has("fsh") || !has("vsh") {
+        return if compute_only(group) {
+            ProgramRead::Compute
+        } else {
+            ProgramRead::Nothing
+        };
+    }
+    if has("tcs") || has("tes") {
+        ProgramRead::Tessellated
+    } else if has("gsh") && !geometry {
+        ProgramRead::NoGeometry
+    } else if has("gsh") {
+        ProgramRead::Geometry
+    } else {
+        ProgramRead::Drawn
+    }
+}
+
+/// The compute stages `Loader::compute` reads for program `name` in `folder`: `<name>.csh` and
+/// `<name>_a.csh` to `<name>_z.csh`, those `has` finds.
+pub(crate) fn compute_paths(
+    has: impl Fn(&str) -> bool,
+    folder: &str,
+    name: &str,
+) -> Vec<(String, String)> {
+    let names = std::iter::once(name.to_owned()).chain(('a'..='z').map(|c| format!("{name}_{c}")));
+    names
+        .map(|n| {
+            let path = stage_path(folder, &n, "csh");
+            (n, path)
+        })
+        .filter(|(_, path)| has(path))
+        .collect()
+}
+
+/// The stage files `load_post` may read in `folder`, as paths in the pack, sorted: for each
+/// program it loads (the composite-style groups and their numbered programs, `final`,
+/// `shadowcomp` and its numbered programs, the gbuffers programs and their fallbacks, the
+/// shadow programs and the programs mods request, `mod_programs`), the stages `program_read`
+/// and `compute_paths` give, as `Loader::load` reads them; and for the shadow programs and
+/// `shadowcomp`, also the fragment stage `Loader::read_formats` reads when the shadow pass is
+/// off. Files are found as `Pack::exists` finds them (`Pack::files_in`). What depends on the
+/// pack's code or settings is not looked at, so every stage the loader may read is listed:
+/// whether `program.<name>.enabled` turns a program off, whether the shadow pass runs and with
+/// geometry inputs, which program of a fallback list draws, and whether a drawn program
+/// translates before its compute programs are read.
+pub fn program_stages(pack: &Pack, folder: &str, mod_programs: &[String]) -> Vec<String> {
+    let files: std::collections::HashSet<String> = (pack.files_in(folder).into_iter())
+        .map(|f| match folder {
+            "" => f,
+            d => format!("{d}/{f}"),
+        })
+        .collect();
+    let has = |path: &str| files.contains(path);
+    let numbered = |group: Group, base: &'static str| {
+        std::iter::once(base.to_owned())
+            .chain((1..=99).map(move |n| format!("{base}{n}")))
+            .map(move |name| (name, group))
+    };
+    let composite = (GROUPS.iter())
+        .flat_map(|&(group, base)| match group {
+            Group::Final => vec![(base.to_owned(), group)],
+            _ => numbered(group, base).collect(),
+        })
+        .chain(numbered(Group::ShadowComp, "shadowcomp"));
+    let gbuffers = (GBUFFERS.iter().flat_map(|list| list.iter()))
+        .filter(|name| !SHADOW_PROGRAMS.contains(name))
+        .map(|name| ((*name).to_owned(), Group::Gbuffers))
+        .chain(
+            mod_programs
+                .iter()
+                .map(|name| (name.clone(), Group::Gbuffers)),
+        );
+    let shadow = SHADOW_PROGRAMS.map(|name| (name.to_owned(), Group::Shadow));
+    let mut stages = Vec::new();
+    for (name, group) in composite.chain(gbuffers).chain(shadow) {
+        let path = |ext: &str| stage_path(folder, &name, ext);
+        let compute = || {
+            compute_paths(has, folder, &name)
+                .into_iter()
+                .map(|(_, p)| p)
+        };
+        match program_read(has, folder, &name, group, group == Group::Shadow) {
+            ProgramRead::Compute => stages.extend(compute()),
+            ProgramRead::Drawn => {
+                stages.extend([path("vsh"), path("fsh")]);
+                if computes_after_drawing(group) {
+                    stages.extend(compute());
+                }
+            }
+            ProgramRead::Geometry => stages.extend([path("vsh"), path("gsh"), path("fsh")]),
+            ProgramRead::Nothing | ProgramRead::Tessellated | ProgramRead::NoGeometry => {}
+        }
+        // `read_formats`, with the shadow pass off.
+        let formats = matches!(group, Group::Shadow | Group::ShadowComp);
+        if formats && has(&path("vsh")) && has(&path("fsh")) {
+            stages.push(path("fsh"));
+        }
+    }
+    stages.sort();
+    stages.dedup();
+    stages
+}
+
+/// The gbuffers and shadow programs, each list a program and the ones it falls back to.
+const GBUFFERS: [&[&str]; 18] = [
+    &WATER,
+    &TERRAIN,
+    &TERRAIN_SOLID,
+    &TERRAIN_CUTOUT,
+    &LINES,
+    &SKY,
+    &SKY_TEXTURED,
+    &ENTITIES,
+    &BLOCK,
+    &CLOUDS,
+    &HAND,
+    &HAND_WATER,
+    &WEATHER,
+    &ENTITIES_TRANSLUCENT,
+    &BEACON_BEAM,
+    &PARTICLES,
+    &DRAWN_ALONE,
+    &SHADOW_PROGRAMS,
+];
+
+/// The gbuffers programs with no fallback.
+const DRAWN_ALONE: [&str; 3] = [
+    "gbuffers_damagedblock",
+    "gbuffers_block_translucent",
+    "gbuffers_particles_translucent",
+];
+
+/// The shadow pass's programs (2.5).
+const SHADOW_PROGRAMS: [&str; 4] = ["shadow", "shadow_water", "shadow_entities", "shadow_block"];
+
 /// The stars' blend: added to the sky, their own alpha replacing the buffer's, as vanilla draws
 /// them (`RenderPipelines.STARS`, `BlendFunction.OVERLAY`). Iris 1.11.7 drew them so with a probe
 /// pack of ours (#10490): colour 0.25 × 0.5 over the disc's 1.0 read 1.125, alpha 0.5.
@@ -654,6 +850,10 @@ pub struct Post {
     pub config: Config,
     /// Programs skipped and why, as `program: message` or `file:line: message`.
     pub notes: Vec<String>,
+    /// Sunrise's HDR extension as this pack was served it (`GameInputs::hdr`): its `final`,
+    /// or the colortex0 copy that stands for it, writes linear light, and who owns the tone
+    /// curve. `None`: not served, the picture is the pack's as on any loader.
+    pub hdr: Option<crate::Tonemap>,
 }
 
 impl Post {
@@ -840,6 +1040,45 @@ pub struct GameInputs {
     /// `max_vertex_attributes`): a program whose varyings or vertex inputs take more is refused
     /// with a note, as the device could never build its pipeline. Default: wgpu's defaults.
     pub interface_limits: naga::front::glsl::InterfaceLimits,
+    /// Sunrise's HDR extension served to this pack (`Macros::define_sunrise_hdr`): `final`
+    /// writes linear light, translated as `Target::LinearWindow`, and the copy of colortex0
+    /// that stands for a missing `final` reads it so too (`Post::hdr`). `None`: not served.
+    pub hdr: Option<crate::Tonemap>,
+}
+
+/// `inputs` with `mc_chunkFade` (spec 5.1) at `-1.0` on every draw that isn't terrain: sky,
+/// celestial bodies, entities and block entities (with their particles, translucent and shadow
+/// draws), clouds, weather, lines, the hand, entities read vertex by vertex and mods' pipelines.
+/// Terrain's own inputs give the section's fade, and a terrain draw without it stays an error.
+/// A draw that gives its own value keeps it, and a program that declares the name keeps its
+/// declaration (`implicit_inputs`).
+fn off_terrain_fade(inputs: &GameInputs) -> GameInputs {
+    let mut out = inputs.clone();
+    let fade = |i: &mut GbuffersInputs| {
+        if !i.attributes.iter().any(|(n, _)| n == "mc_chunkFade") {
+            i.attributes
+                .push(("mc_chunkFade".to_owned(), "-1.0".to_owned()));
+        }
+    };
+    let draws = [
+        &mut out.sky,
+        &mut out.celestial,
+        &mut out.entities,
+        &mut out.clouds,
+        &mut out.weather,
+        &mut out.lines,
+        &mut out.hand,
+    ];
+    for i in draws.into_iter().flatten() {
+        fade(i);
+    }
+    if let Some(g) = &mut out.entity_geometry {
+        fade(&mut g.inputs);
+    }
+    for request in &mut out.mod_programs {
+        fade(&mut request.inputs);
+    }
+    out
 }
 
 /// Loads the post-processing programs of `folder` and, for the geometry `inputs` describes, the
@@ -872,6 +1111,7 @@ pub fn load_post(
     macros: &Macros,
     inputs: &GameInputs,
 ) -> Post {
+    let inputs = &off_terrain_fade(inputs);
     let limits = inputs.interface_limits;
     let mut post = Post {
         folder: folder.to_owned(),
@@ -929,6 +1169,7 @@ pub fn load_post(
         },
         config: Config::default(),
         notes: Vec::new(),
+        hdr: inputs.hdr,
     };
     // One file's work for every size's options, as for the file itself.
     let options = crate::with_options(pack, macros).for_file();
@@ -1004,6 +1245,7 @@ pub fn load_post(
                 .collect()
         };
         let target = match group {
+            Group::Final if inputs.hdr.is_some() => Target::LinearWindow,
             Group::Final => Target::Window,
             _ => Target::Buffers,
         };
@@ -1083,7 +1325,7 @@ pub fn load_post(
     let damaged_block = inputs
         .entities
         .as_ref()
-        .and_then(|i| gbuffers(&["gbuffers_damagedblock"], Group::Gbuffers, i))
+        .and_then(|i| gbuffers(&DRAWN_ALONE[..1], Group::Gbuffers, i))
         .map(|mut p| {
             p.blend = blend(properties, &p.name).unwrap_or(Some([
                 Factor::DstColor,
@@ -1115,10 +1357,10 @@ pub fn load_post(
     let particles = translucent(&PARTICLES, 0.1, &mut gbuffers_dyn);
     // Optional slots deliberately have no fallback chain: an absent, disabled or rejected
     // variant must leave the legacy material grouping and state intact.
-    let block_translucent = translucent(&["gbuffers_block_translucent"], 0.0, &mut gbuffers_dyn);
+    let block_translucent = translucent(&DRAWN_ALONE[1..2], 0.0, &mut gbuffers_dyn);
     let mixed = properties.get("particles.ordering").map(str::trim) == Some("mixed");
     let particles_translucent = mixed
-        .then(|| translucent(&["gbuffers_particles_translucent"], 0.1, &mut gbuffers_dyn))
+        .then(|| translucent(&DRAWN_ALONE[2..], 0.1, &mut gbuffers_dyn))
         .flatten();
     let beacon_beam = translucent(&BEACON_BEAM, 0.0, &mut gbuffers_dyn);
     // Clouds blend, as vanilla's do (OQ-23).
@@ -1394,7 +1636,7 @@ fn load_shadow(
         // (`shadowDistance` and `sunPathRotation` probed, #10490), and nothing else of them
         // (nothing else was probed). The other shadow programs' files were not probed; they are
         // read as `shadow`, formats only.
-        let names = ["shadow", "shadow_water", "shadow_entities", "shadow_block"]
+        let names = SHADOW_PROGRAMS
             .map(str::to_owned)
             .into_iter()
             .chain(std::iter::once("shadowcomp".to_owned()))
@@ -1563,16 +1805,16 @@ impl Loader<'_> {
     /// The pack has both stages of the program `name` in this folder, and doesn't turn it off
     /// (`program.<name>.enabled`), as `load` reads them.
     fn has(&self, name: &str) -> bool {
-        ["vsh", "fsh"].iter().all(|ext| match self.folder {
-            "" => self.pack.exists(&format!("{name}.{ext}")),
-            f => self.pack.exists(&format!("{f}/{name}.{ext}")),
-        }) && enabled(
-            self.properties,
-            self.folder,
-            name,
-            &self.options,
-            &self.switches,
-        )
+        ["vsh", "fsh"]
+            .iter()
+            .all(|ext| self.pack.exists(&stage_path(self.folder, name, ext)))
+            && enabled(
+                self.properties,
+                self.folder,
+                name,
+                &self.options,
+                &self.switches,
+            )
     }
 
     /// The program `name` translated by `translate`, or `None` when it is missing, disabled or
@@ -1583,12 +1825,20 @@ impl Loader<'_> {
         group: Group,
         translate: impl FnOnce(&Preprocessed, &Preprocessed) -> Result<Program, Vec<crate::Error>>,
     ) -> Option<PostProgram> {
-        let path = |ext: &str| match self.folder {
-            "" => format!("{name}.{ext}"),
-            f => format!("{f}/{name}.{ext}"),
-        };
+        let path = |ext: &str| stage_path(self.folder, &name, ext);
         let (vsh, fsh) = (path("vsh"), path("fsh"));
-        if group == Group::Setup || !self.pack.exists(&fsh) || !self.pack.exists(&vsh) {
+        let read = program_read(
+            |p| self.pack.exists(p),
+            self.folder,
+            &name,
+            group,
+            self.geometry.is_some(),
+        );
+        if read == ProgramRead::Nothing {
+            return None;
+        }
+        if read == ProgramRead::Compute {
+            // A program of compute stages only (`.csh` without `.vsh` and `.fsh`).
             let on = enabled(
                 self.properties,
                 self.folder,
@@ -1596,17 +1846,7 @@ impl Loader<'_> {
                 &self.options,
                 &self.switches,
             );
-            // A program of compute stages only (`.csh` without `.vsh` and `.fsh`).
-            let composite = matches!(
-                group,
-                Group::Setup
-                    | Group::Begin
-                    | Group::Prepare
-                    | Group::Deferred
-                    | Group::Composite
-                    | Group::ShadowComp
-            );
-            if !on || !composite {
+            if !on {
                 return None;
             }
             let compute = self.compute(&name);
@@ -1634,21 +1874,24 @@ impl Loader<'_> {
         ) {
             return None;
         }
-        let tessellated = self.pack.exists(&path("tcs")) || self.pack.exists(&path("tes"));
-        if tessellated {
-            self.post.notes.push(format!(
-                "{name}: uses a tessellation stage (unsupported); skipped"
-            ));
-            return None;
-        }
-        if self.pack.exists(&path("gsh")) {
-            let Some(inputs) = self.geometry.clone() else {
+        match read {
+            ProgramRead::Tessellated => {
+                self.post.notes.push(format!(
+                    "{name}: uses a tessellation stage (unsupported); skipped"
+                ));
+                return None;
+            }
+            ProgramRead::NoGeometry => {
                 self.post.notes.push(format!(
                     "{name}: uses a geometry stage (supported for the shadow pass's terrain and entities only); skipped"
                 ));
                 return None;
-            };
-            return self.load_geometry(name.clone(), group, &vsh, &path("gsh"), &fsh, &inputs);
+            }
+            ProgramRead::Geometry => {
+                let inputs = self.geometry.clone()?;
+                return self.load_geometry(name.clone(), group, &vsh, &path("gsh"), &fsh, &inputs);
+            }
+            ProgramRead::Nothing | ProgramRead::Compute | ProgramRead::Drawn => {}
         }
         let vertex = self.preprocess(&vsh);
         let fragment = self.preprocess(&fsh);
@@ -1694,15 +1937,10 @@ impl Loader<'_> {
                     .fold(0, |m, (i, _)| m | 1 << i)
             }
         };
-        let compute = match group {
-            Group::Setup
-            | Group::Begin
-            | Group::Prepare
-            | Group::Deferred
-            | Group::Composite
-            | Group::Final
-            | Group::ShadowComp => self.compute(&name),
-            _ => Vec::new(),
+        let compute = if computes_after_drawing(group) {
+            self.compute(&name)
+        } else {
+            Vec::new()
         };
         Some(PostProgram {
             buffer_blends: buffer_blends(self.properties, &name),
@@ -1724,10 +1962,7 @@ impl Loader<'_> {
     /// enabled: those of its fragment shader, as [`Self::load`] reads them; with `shadow`, its
     /// shadow settings too.
     fn read_formats(&mut self, name: &str, shadow: bool) {
-        let path = |ext: &str| match self.folder {
-            "" => format!("{name}.{ext}"),
-            f => format!("{f}/{name}.{ext}"),
-        };
+        let path = |ext: &str| stage_path(self.folder, name, ext);
         let (vsh, fsh) = (path("vsh"), path("fsh"));
         let on = enabled(
             self.properties,
@@ -1748,9 +1983,12 @@ impl Loader<'_> {
     }
 
     /// Stage file `path` through the preprocessor; the pack's images declared without a format
-    /// (GLSL lets a write-only image omit it) get the one `image.*` gives them.
+    /// (GLSL lets a write-only image omit it) get the one `image.*` gives them. A rewrite that
+    /// changes the line count is recorded as a refusal on the stage file.
     fn preprocess(&self, path: &str) -> Preprocessed {
-        let pp = preprocess(self.pack, path, self.macros);
+        #[cfg(test)]
+        tests::STAGES_READ.with_borrow_mut(|read| read.push(path.to_owned()));
+        let mut pp = preprocess(self.pack, path, self.macros);
         if self.post.images.is_empty() || !pp.code().contains("image") {
             return pp;
         }
@@ -1790,7 +2028,13 @@ impl Loader<'_> {
                 }
             })
             .collect();
-        pp.with_code(lines.join("\n"))
+        match pp.with_code("image format rewrite", lines.join("\n")) {
+            Ok(out) => out,
+            Err(error) => {
+                pp.refuse(error.message);
+                pp
+            }
+        }
     }
 
     /// A program with a geometry stage, folded into its vertex stage. A refusal notes the
@@ -1865,22 +2109,15 @@ impl Loader<'_> {
     /// Translation refusals are noted with their authored position and stage when known.
     fn compute(&mut self, name: &str) -> Vec<(String, ComputeProgram)> {
         let mut out = Vec::new();
-        let names =
-            std::iter::once(name.to_owned()).chain(('a'..='z').map(|c| format!("{name}_{c}")));
-        for name in names {
-            let path = match self.folder {
-                "" => format!("{name}.csh"),
-                f => format!("{f}/{name}.csh"),
-            };
-            if !self.pack.exists(&path)
-                || !enabled(
-                    self.properties,
-                    self.folder,
-                    &name,
-                    &self.options,
-                    &self.switches,
-                )
-            {
+        let paths = compute_paths(|p| self.pack.exists(p), self.folder, name);
+        for (name, path) in paths {
+            if !enabled(
+                self.properties,
+                self.folder,
+                &name,
+                &self.options,
+                &self.switches,
+            ) {
                 continue;
             }
             let pp = self.preprocess(&path);
@@ -1932,13 +2169,14 @@ fn default_draw_buffers(shadow: bool) -> Vec<u32> {
     if shadow { (0..8).collect() } else { vec![0] }
 }
 
+/// `pp`'s refusals, located.
 fn diagnostics(pp: &Preprocessed) -> Vec<String> {
-    located(pp, &pp.diagnostics)
+    located(pp, pp.diagnostics())
 }
 
 /// `pp`'s warnings (conditions read as false, unbalanced conditionals), located.
 fn warnings(pp: &Preprocessed) -> Vec<String> {
-    located(pp, &pp.warnings)
+    located(pp, pp.warnings())
 }
 
 fn located(pp: &Preprocessed, list: &[crate::preprocess::Diagnostic]) -> Vec<String> {
@@ -2035,13 +2273,7 @@ fn scale(properties: &Properties, program: &str, group: Group) -> [f32; 3] {
 
 /// Whether the pack names the `HIGHER_SHADOWCOLOR` feature, required or optional, in any case.
 fn higher_shadowcolor(properties: &Properties) -> bool {
-    ["iris.features.required", "iris.features.optional"]
-        .iter()
-        .filter_map(|k| properties.get(k))
-        .any(|v| {
-            v.split_whitespace()
-                .any(|w| w.eq_ignore_ascii_case("HIGHER_SHADOWCOLOR"))
-        })
+    crate::macros::listed_features(properties).any(|f| f == "HIGHER_SHADOWCOLOR")
 }
 
 /// `flip.<program>.<buffer>=<bool>` keys of one program.
@@ -3027,6 +3259,91 @@ blend.composite1.colortex3 = ONE ONE ONE ONE
         );
     }
 
+    /// With `FADE_VARIABLE` answered, a pack's entity, block, hand and sky programs that read
+    /// `mc_chunkFade` without declaring it translate: off terrain it is `-1.0` (spec 5.1). One
+    /// that declares the name keeps its own declaration.
+    #[test]
+    fn non_terrain_programs_read_the_fade_as_minus_one() {
+        let vsh = "#version 130\nout float fade;\nvoid main() {\n\
+                   gl_Position = gl_Vertex;\n\
+                   #ifdef IRIS_FEATURE_FADE_VARIABLE\nfade = mc_chunkFade;\n#else\nfade = 0.5;\n#endif\n}\n";
+        let fsh = "#version 130\nin float fade;\nvoid main() { gl_FragData[0] = vec4(fade); }\n";
+        let declared = "#version 130\nuniform float mc_chunkFade;\nout float fade;\n\
+                        void main() { gl_Position = gl_Vertex; fade = mc_chunkFade; }\n";
+        let pack = Pack::from_zip_bytes(
+            "fade.zip",
+            zip(&[
+                (
+                    "shaders/shaders.properties",
+                    "iris.features.optional = FADE_VARIABLE\n",
+                ),
+                ("shaders/gbuffers_entities.vsh", vsh),
+                ("shaders/gbuffers_entities.fsh", fsh),
+                ("shaders/gbuffers_hand.vsh", vsh),
+                ("shaders/gbuffers_hand.fsh", fsh),
+                ("shaders/gbuffers_skybasic.vsh", vsh),
+                ("shaders/gbuffers_skybasic.fsh", fsh),
+                ("shaders/gbuffers_block.vsh", declared),
+                ("shaders/gbuffers_block.fsh", fsh),
+            ]),
+        )
+        .unwrap();
+        let mut macros = Macros::standard();
+        let (properties, _) = crate::read_properties(&pack, &mut macros);
+        assert!(macros.is_defined("IRIS_FEATURE_FADE_VARIABLE"));
+        let game = crate::GbuffersInputs {
+            declarations: "layout(location = 0) in vec3 hz_v_pos;".into(),
+            body: "    hz_Vertex = vec4(hz_v_pos, 1.0);\n    hz_Color = vec4(1.0);\n".into(),
+            ..Default::default()
+        };
+        let inputs = GameInputs {
+            entities: Some(game.clone()),
+            hand: Some(game.clone()),
+            sky: Some(game),
+            ..Default::default()
+        };
+        let post = load_post(&pack, "", &properties, &macros, &inputs);
+        // The vertex stage holds the `-1.0` it reads.
+        let minus_one = |p: &Option<PostProgram>| {
+            let program = p.as_ref().and_then(|p| p.program.as_ref());
+            program.is_some_and(|program| {
+                (program.vertex.entry_points.iter()).any(|e| {
+                    e.function.expressions.iter().any(|(_, x)| {
+                        matches!(x, naga::Expression::Literal(naga::Literal::F32(v)) if *v == -1.0)
+                    })
+                }) || (program.vertex.global_expressions.iter()).any(|(_, x)| {
+                    matches!(x, naga::Expression::Literal(naga::Literal::F32(v)) if *v == -1.0)
+                }) || program.vertex.functions.iter().any(|(_, f)| {
+                    f.expressions.iter().any(|(_, x)| {
+                        matches!(x, naga::Expression::Literal(naga::Literal::F32(v)) if *v == -1.0)
+                    })
+                })
+            })
+        };
+        let read: Vec<(&str, bool)> = [
+            ("entities", &post.entities),
+            ("hand", &post.hand),
+            ("sky", &post.sky),
+        ]
+        .into_iter()
+        .map(|(name, p)| (name, minus_one(p)))
+        .collect();
+        assert_eq!(
+            read,
+            [("entities", true), ("hand", true), ("sky", true)],
+            "{:?}",
+            post.notes
+        );
+        let block = post.block.as_ref().and_then(|p| p.program.as_ref());
+        let own = block.is_some_and(|p| {
+            p.interface
+                .uniforms
+                .iter()
+                .any(|u| u.name == "mc_chunkFade")
+        });
+        assert!(own, "{:?}", post.notes);
+    }
+
     /// The shadow pass runs when a program reads a shadow buffer or `shadow.enabled` says so;
     /// then `shadow`, `shadow_water` and the `shadowcomp` series load, writing shadowcolor0/1.
     #[test]
@@ -3919,6 +4236,7 @@ blend.composite1.colortex3 = ONE ONE ONE ONE
             entity_geometry: None,
             mod_programs: Vec::new(),
             interface_limits: Default::default(),
+            hdr: None,
         };
         let post = load_post(&pack, "", &Properties::default(), &macros, &inputs);
         let (terrain, water) = (post.terrain.unwrap(), post.water.unwrap());
@@ -4089,12 +4407,145 @@ blend.composite1.colortex3 = ONE ONE ONE ONE
         assert!(post.config.buffers[12].clear);
     }
 
+    thread_local! {
+        /// The stage files the loader preprocessed on this thread (`Loader::preprocess`).
+        pub(super) static STAGES_READ: std::cell::RefCell<Vec<String>> =
+            std::cell::RefCell::default();
+    }
+
+    /// The stage files the identity scan reads (`program_stages`) are those the loader reads,
+    /// with the shadow pass on and off and with geometry inputs and without (`load_post`, its
+    /// stages recorded as it preprocesses them): no more, no less. Among them, each the scan once
+    /// got wrong one way or the other: a drawn program's compute stage read (`composite_a.csh`,
+    /// `final.csh` beside `final.vsh` and `final.fsh`) and a lone `final.csh`'s not; a `setup`
+    /// program read as compute programs alone, its `setup.vsh` and `setup.fsh` not; a lone
+    /// compute program (`deferred.csh`, `deferred_b.csh`); a shadow program with a tessellation
+    /// stage, whose fragment stage the loader reads for its buffer formats while the shadow pass
+    /// is off, and a tessellated composite program read not at all; a shadow program's geometry
+    /// stage, a gbuffers program's not (skipped whole); a gbuffers program's `csh`, a root file
+    /// no program reads, a mod's requested program, and `shadowcomp`.
+    #[test]
+    fn program_stages_are_the_stages_the_loader_reads() {
+        let vsh = "#version 330\nvoid main() { gl_Position = vec4(0.0); }\n";
+        let fsh =
+            "#version 330\nlayout(location = 0) out vec4 c;\nvoid main() { c = vec4(1.0); }\n";
+        let gsh = "#version 330\nlayout(triangles) in;\nlayout(triangle_strip, max_vertices = 3) out;\n\
+                   void main() {}\n";
+        let csh = "#version 430\nlayout(local_size_x = 1) in;\nvoid main() {}\n";
+        let mut files: Vec<(String, &str)> = Vec::new();
+        for name in [
+            "composite",
+            "final",
+            "setup",
+            "shadow",
+            "composite2",
+            "gbuffers_terrain",
+            "gbuffers_water",
+            "shadow_water",
+            "shadowcomp",
+            "gbuffers_mod_glow",
+        ] {
+            files.push((format!("{name}.vsh"), vsh));
+            files.push((format!("{name}.fsh"), fsh));
+        }
+        for (file, text) in [
+            ("composite_a.csh", csh),
+            ("final.csh", csh),
+            ("setup.csh", csh),
+            ("deferred.csh", csh),
+            ("deferred_b.csh", csh),
+            ("prepare1.fsh", fsh),
+            ("shadow.tcs", vsh),
+            ("composite2.tcs", vsh),
+            ("composite2.csh", csh),
+            ("gbuffers_terrain.gsh", gsh),
+            ("shadow_water.gsh", gsh),
+            ("gbuffers_water.csh", csh),
+            ("unused.vsh", vsh),
+            ("world1/final.csh", csh),
+        ] {
+            files.push((file.to_owned(), text));
+        }
+        let pack = |properties: &str| {
+            let mut all: Vec<(String, &str)> = files
+                .iter()
+                .map(|(p, t)| (format!("shaders/{p}"), *t))
+                .collect();
+            all.push(("shaders/shaders.properties".into(), properties));
+            let all: Vec<(&str, &str)> = all.iter().map(|(p, t)| (p.as_str(), *t)).collect();
+            Pack::from_zip_bytes("P.zip", crate::pack::tests::zip(&all)).unwrap()
+        };
+        let mods = ["gbuffers_mod_glow".to_owned()];
+        let gbuffers = GbuffersInputs::default();
+        let mut read = std::collections::BTreeSet::new();
+        for shadow in ["true", "false"] {
+            for geometry in [true, false] {
+                let pack = pack(&format!("shadow.enabled = {shadow}\n"));
+                let macros = Macros::standard();
+                let (properties, _) = crate::read_properties(&pack, &mut macros.clone());
+                let inputs = GameInputs {
+                    terrain: Some(gbuffers.clone()),
+                    entities: Some(gbuffers.clone()),
+                    terrain_geometry: geometry.then(crate::GeometryInputs::default),
+                    entity_geometry: geometry.then(crate::GeometryInputs::default),
+                    mod_programs: vec![ModPackProgramRequest {
+                        slot: 0,
+                        programs: mods.to_vec(),
+                        group: Group::Gbuffers,
+                        default_blend: None,
+                        inputs: gbuffers.clone(),
+                    }],
+                    ..Default::default()
+                };
+                STAGES_READ.with_borrow_mut(Vec::clear);
+                load_post(&pack, "", &properties, &macros, &inputs);
+                read.extend(STAGES_READ.with_borrow_mut(std::mem::take));
+            }
+        }
+        let read: Vec<String> = read.into_iter().collect();
+        let scanned = program_stages(&pack(""), "", &mods);
+        assert_eq!(scanned, read);
+        assert_eq!(
+            scanned,
+            [
+                "composite.fsh",
+                "composite.vsh",
+                "composite_a.csh",
+                "deferred.csh",
+                "deferred_b.csh",
+                "final.csh",
+                "final.fsh",
+                "final.vsh",
+                "gbuffers_mod_glow.fsh",
+                "gbuffers_mod_glow.vsh",
+                "gbuffers_water.fsh",
+                "gbuffers_water.vsh",
+                "setup.csh",
+                "shadow.fsh",
+                "shadow_water.fsh",
+                "shadow_water.gsh",
+                "shadow_water.vsh",
+                "shadowcomp.fsh",
+                "shadowcomp.vsh",
+            ]
+        );
+        // A lone `final.csh` (in `world1`, where `final` has no other stage) isn't read.
+        assert!(program_stages(&pack(""), "world1", &[]).is_empty());
+        assert!(
+            !program_stages(&pack(""), "", &[])
+                .iter()
+                .any(|f| f.contains("mod_glow"))
+        );
+    }
+
     #[test]
     fn sunrises_test_pack_loads() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/packs/post-test");
         let pack = Pack::open(&dir).unwrap();
-        let macros = Macros::standard();
-        let properties = Properties::parse(&pack.read_text("shaders.properties").unwrap(), &macros);
+        // As the game reads it: `read_properties`, then the programs with the macros it leaves.
+        let mut macros = Macros::standard();
+        let (properties, notes) = crate::read_properties(&pack, &mut macros);
+        assert!(notes.is_empty(), "{notes:?}");
         let post = load_post(
             &pack,
             &dimension_folder(&pack, 0),
@@ -4216,6 +4667,9 @@ mod lifecycle_tests;
 
 #[cfg(test)]
 mod buffer_blend_tests;
+
+#[cfg(test)]
+mod blend_key_tests;
 
 #[cfg(test)]
 mod material_variant_tests;

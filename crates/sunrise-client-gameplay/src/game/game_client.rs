@@ -126,12 +126,6 @@ impl crate::game::ClientGame<'_> {
         use sunrise_level::camera_math::CameraType::FirstPerson;
         match self.client.posed_rotation {
             Some((yaw, pitch, roll)) => camera_rotation_rolled(FirstPerson, yaw, pitch, roll),
-            None if self.client.studio.flying() => camera_rotation_rolled(
-                FirstPerson,
-                self.client.studio.freecam.yaw,
-                self.client.studio.freecam.pitch,
-                -self.client.studio.freecam.roll,
-            ),
             None => camera_rotation(self.client.camera_type, self.common.yaw, self.common.pitch),
         }
     }
@@ -1324,7 +1318,6 @@ impl crate::game::ClientGame<'_> {
         self.common.sleep_timer = 0;
         self.client_clear_entities();
         self.set_screen(Screen::Playing);
-        self.clear_lod();
         self.client.pending_uploads.0.clear();
         if let Some(r) = self.client.renderer.0.as_mut() {
             r.clear_sections(self.common.world.layout());
@@ -1475,9 +1468,6 @@ impl crate::game::ClientGame<'_> {
                             return Ok(());
                         }
                         let overlay = self.observed_overlay_now();
-                        if self.observed_screen_view().is_none() && self.studio_mouse_dragged(w) {
-                            return Ok(());
-                        }
                         let button = if self.pad_synthetic_input() {
                             if self.client.pad.0.menu.held[0] {
                                 Some(MouseButton::Left)
@@ -1526,9 +1516,6 @@ impl crate::game::ClientGame<'_> {
                         }
                     }
                 }
-                WindowEvent::MouseWheel { .. }
-                    if self.client.screen == Screen::Playing
-                        && self.client.replay.driver.is_some() => {}
                 WindowEvent::MouseWheel { delta, .. } => {
                     let (raw_x, raw_y) = match delta {
                         MouseScrollDelta::LineDelta(x, y) => (f64::from(x), f64::from(y)),
@@ -1716,7 +1703,6 @@ impl crate::game::ClientGame<'_> {
                         Screen::WorldOptions if d != 0.0 => self.world_options_scroll(d),
                         Screen::ServerLinks if d != 0.0 => self.server_links_scroll(d),
                         Screen::DebugOptions if d != 0.0 => self.debug_options_scroll(d),
-                        Screen::HudEditor if d != 0.0 => self.hud_editor_scroll(f64::from(d)),
                         Screen::Advancements => self.advancements_scroll(scroll[0] as f32, d),
                         _ => false,
                     };
@@ -1948,7 +1934,6 @@ impl crate::game::ClientGame<'_> {
                         );
                     }
                     self.client.upload_pace.frame(elapsed);
-                    self.studio_fly(elapsed);
                     // Arrow-key camera controls belong to gameplay; chat and
                     // other screens use the same keys for their own navigation.
                     if self.client.screen == Screen::Playing
@@ -2251,7 +2236,6 @@ impl crate::game::ClientGame<'_> {
         self.input_hud_begin();
         self.client.subtitles.deferred.set(false);
         let mut batch = HudBatch::new(size, self.client.settings.gui_scale_inputs());
-        batch.glint_colour = self.pvp_glint_texel();
         // GlobalSettingsUniform's GameTime, for a resource pack's text shader.
         batch.game_time = ((self.common.world.game_time.rem_euclid(24000)) as f32
             + self.common.clock.fraction() as f32)
@@ -2338,7 +2322,7 @@ impl crate::game::ClientGame<'_> {
                 self.draw_preset_editor(&mut batch);
             }
             // ScreenEvent.Render.Post over the title's own screens: a mod draws
-            // over them here (a pack browser over Create New World, say), and the
+            // over them here (a banner over Create New World, say), and the
             // toasts still come after, as over any screen.
             self.publish_screen_regions(&batch, None);
             self.draw_title_screen_with_post_hook(&mut batch);
@@ -2357,12 +2341,9 @@ impl crate::game::ClientGame<'_> {
         let camera = self.camera_player();
         let (wi, hi) = (w as i32, h as i32);
         let mut gui_canceled = false;
-        let replaying = self.client.replay.playing();
-        if !replaying {
-            self.native_render_gui_pre(&mut gui_canceled);
-        }
+        self.native_render_gui_pre(&mut gui_canceled);
         // F1 hides vanilla drawing; RenderGuiEvent.Pre instead cancels the layer walk.
-        let hide_hud = self.client.chat_ui.hide_gui || replaying;
+        let hide_hud = self.client.chat_ui.hide_gui;
         let show_hud = !hide_hud && !gui_canceled;
         // A screen that keeps the in-game UI defers subtitles to its background,
         // even under F1. With no screen, Gui draws them after the debug overlay.
@@ -2377,7 +2358,7 @@ impl crate::game::ClientGame<'_> {
                 None
             },
         );
-        let dispatch_hud = !gui_canceled && !replaying;
+        let dispatch_hud = !gui_canceled;
         self.client.hud_layer_next = dispatch_hud.then_some(0);
         self.client.chat_ui.room = self.hud_room(w, h, show_hud);
         let mut guide_from = 0;
@@ -2386,8 +2367,7 @@ impl crate::game::ClientGame<'_> {
                 self.draw_spyglass(&mut batch);
                 guide_from = batch.vertices.len();
             }
-            // Combat feel Legacy hides the attack indicator unless the player keeps it.
-            let indicator = if show_hud && !self.pvp_hides_attack_indicator() {
+            let indicator = if show_hud {
                 self.client.settings.attack_indicator
             } else {
                 0
@@ -2417,14 +2397,7 @@ impl crate::game::ClientGame<'_> {
                         crosshair_attack.map(|(strength, _)| strength),
                         full,
                     );
-                    // The custom crosshair takes the sprite's place (the first draw); the
-                    // attack indicator stays.
-                    if g.custom_crosshair() {
-                        g.draw_custom_crosshair(batch, wi, hi);
-                        hud_layout::paint(batch, &g.client.gui.atlas, &draws[1..]);
-                    } else {
-                        hud_layout::paint(batch, &g.client.gui.atlas, &draws);
-                    }
+                    hud_layout::paint(batch, &g.client.gui.atlas, &draws);
                 }
             });
             self.gui_layer(VanillaGuiLayer::Hotbar, &mut batch, &mut |g, batch| {
@@ -2459,8 +2432,7 @@ impl crate::game::ClientGame<'_> {
                 }
             });
             self.gui_layer(VanillaGuiLayer::Effects, &mut batch, &mut |g, batch| {
-                // The PvP & HUD effects widget takes the icons' place.
-                if show_hud && !g.pvp_effects_shown() {
+                if show_hud {
                     g.draw_effect_icons(batch);
                 }
             });
@@ -2769,7 +2741,6 @@ impl crate::game::ClientGame<'_> {
             Screen::CommandBlock => self.draw_command_block(&mut batch),
             Screen::BlockEditor => self.draw_block_editor(&mut batch),
             Screen::DebugOptions => self.draw_debug_options(&mut batch),
-            Screen::HudEditor => self.draw_hud_editor(&mut batch),
             Screen::Inventory => {
                 let from = batch.vertices.len();
                 if self.draw_inventory(&mut batch) {
@@ -2799,7 +2770,6 @@ impl crate::game::ClientGame<'_> {
             self.draw_sign_editor(&mut batch);
             self.draw_book(&mut batch);
         }
-        self.draw_studio_bars(&mut batch);
         if show_hud {
             self.draw_pad_guide(&mut batch, guide_from);
         }
@@ -4244,7 +4214,7 @@ impl crate::game::ClientGame<'_> {
                 post_blend.accumulate(weight, post_of(b));
             }
         }
-        let (rain, thunder) = self.view_weather(alpha as f32);
+        let (rain, thunder) = self.weather_levels(alpha as f32);
         // What the packs' attribute expressions read (only a pack's stack has any).
         let mut polytone_frame = None;
         if self.client.client_pack.environments.is_some()
@@ -4279,7 +4249,7 @@ impl crate::game::ClientGame<'_> {
             biome_name.clone_from(&info.name);
             (*temperature, *downfall) = (info.temperature, info.downfall);
             (*frame_rain, *frame_thunder) = (rain, thunder);
-            (*game_time, *day_time) = (self.common.world.game_time, self.view_day_time());
+            (*game_time, *day_time) = (self.common.world.game_time, self.common.world.day_time);
             *render_distance = effective_render_distance;
             *sky_type = match self.dimension_type().skybox {
                 sunrise_world::dimension_type::Skybox::Overworld => 1,
@@ -4310,26 +4280,15 @@ impl crate::game::ClientGame<'_> {
             environment.set_frame(&frame);
             polytone_frame = Some(&frame);
         }
-        let fixed_time = self
-            .client
-            .settings
-            .extras
-            .pvp
-            .tweaks
-            .time
-            .filter(|_| self.own_view())
-            .map(|_| self.view_day_time());
         let sample_clock = |clock: &str| {
-            fixed_time.unwrap_or_else(|| {
-                self.client.remote.as_ref().map_or_else(
-                    || self.common.command_clock_time(clock),
-                    |remote| remote.named_clock_time(clock),
-                )
-            })
+            self.client.remote.as_ref().map_or_else(
+                || self.common.command_clock_time(clock),
+                |remote| remote.named_clock_time(clock),
+            )
         };
         let mut sky = environment.sample_with_clock(
             &sunrise_level::environment::Sample {
-                day_time: self.view_day_time(),
+                day_time: self.common.world.day_time,
                 rain,
                 thunder,
                 blend: Some(&blend),
@@ -4340,7 +4299,9 @@ impl crate::game::ClientGame<'_> {
             &sample_clock,
         );
         self.end_flash_sky(&mut sky, alpha);
-        if self.common.flash > 0 && !self.client.settings.file.bool("hideLightningFlashes") {
+        let lightning =
+            self.common.flash > 0 && !self.client.settings.file.bool("hideLightningFlashes");
+        if lightning {
             // ClientLevel's flash layer while skyFlashTime > 0: the sky colour
             // moves 22% of the way to (0.8, 0.8, 1.0).
             let flash = [0.8, 0.8, 1.0];
@@ -4352,8 +4313,7 @@ impl crate::game::ClientGame<'_> {
         // FishingHookRenderer's line, then DebugRenderer: chunk borders and
         // hitboxes (F3+G, F3+B).
         let mut lines = self.fishing_line(alpha, size);
-        let mut g = self.debug_gizmos(alpha as f32, camera.to_array());
-        self.studio_camera_path(&mut g);
+        let g = self.debug_gizmos(alpha as f32, camera.to_array());
         lines.extend(g.lines);
         let on_top = g.on_top;
         pr.lap("pr_debug");
@@ -4446,7 +4406,7 @@ impl crate::game::ClientGame<'_> {
         } else {
             sunrise_client::gfx::cull_fov(fov_degrees, (self.client.settings.fov as i32) as f32)
         };
-        let camera_effects = fov::camera_effects_enabled(title, self.client.studio.flying());
+        let camera_effects = !title;
         let bob = if !camera_effects {
             glam::Mat4::IDENTITY
         } else {
@@ -4457,10 +4417,12 @@ impl crate::game::ClientGame<'_> {
         } else {
             self.spinning_matrix(alpha as f32)
         };
-        let terrain_distance = self.terrain_distance();
-        let distance = (terrain_distance * 16) as f32;
-        let depth_far =
-            sunrise_client::camera::depth_far(terrain_distance, self.client.settings.cloud_range);
+        let render_distance_chunks = self.effective_render_distance();
+        let distance = (render_distance_chunks * 16) as f32;
+        let depth_far = sunrise_client::camera::depth_far(
+            render_distance_chunks,
+            self.client.settings.cloud_range,
+        );
         let mods_read_camera = !mod_api::__private::mods().is_empty();
         let view_transform = if camera_effects
             && self.common.player.is_some()
@@ -4559,7 +4521,7 @@ impl crate::game::ClientGame<'_> {
         // renderer keeps the bytes in each reading core pipeline's blocks, which write them to
         // the GPU when that pipeline uploads its blocks for its draw; a post pass writes them
         // when it draws.
-        let (sun_angle, day_time) = (sky.sun_angle, self.view_day_time());
+        let (sun_angle, day_time) = (sky.sun_angle, self.common.world.day_time);
         let player = (self.common.player.as_ref()).map_or(camera.to_array(), |p| {
             [p.position.x, p.position.y, p.position.z]
         });
@@ -4615,6 +4577,7 @@ impl crate::game::ClientGame<'_> {
         // The pack is chosen before entity geometry, so a pack that starts this frame
         // keeps block-entity models in the CPU stream instead of dropping them.
         let mut pack_inputs = if title {
+            self.shader_pack_title_frame();
             Default::default()
         } else {
             self.shader_pack_inputs(camera, eye.map_or(camera, |e| e.0), alpha as f32, &sky)
@@ -4664,7 +4627,13 @@ impl crate::game::ClientGame<'_> {
         } else {
             (Vec::new(), Vec::new(), None)
         };
-        self.custom_sky_frame([camera.x, camera.y, camera.z], &sky, (rain, thunder), title);
+        self.custom_sky_frame(
+            [camera.x, camera.y, camera.z],
+            &sky,
+            (rain, thunder),
+            lightning,
+            title,
+        );
         pr.lap("pr_celestial");
         let (mut hand, hand_items) = if title || self.scoping() {
             Default::default()
@@ -4703,7 +4672,6 @@ impl crate::game::ClientGame<'_> {
         if !title {
             self.eye_geometry(camera, &mut entities);
         }
-        self.outline_fill(&outline, camera, &mut entities);
         pr.lap("pr_screen_end");
         let weather = if !title && self.can_have_weather() && self.client.settings.sunrise.weather {
             sunrise_level::spans::time("weather", || self.weather_geometry(camera, alpha))
@@ -4856,7 +4824,6 @@ impl crate::game::ClientGame<'_> {
             outline,
             outline_after_terrain,
             outline_high_contrast: self.client.settings.file.bool("highContrastBlockOutline"),
-            pvp: self.pvp_render_frame(),
             debug_lines: &debug_lines,
             debug_lines_on_top: &debug_lines_on_top,
             debug_crosshair: &debug_crosshair,
@@ -5203,9 +5170,6 @@ impl crate::game::ClientGame<'_> {
                 self.sign_edit_click(size)
             });
         }
-        if self.studio_mouse_input(pressed, button) {
-            return Ok(true);
-        }
         if matches!(self.client.screen, Screen::Inventory | Screen::Creative)
             && let Some(key) = self
                 .client
@@ -5219,10 +5183,7 @@ impl crate::game::ClientGame<'_> {
             // Neither edge of a bound button is an ordinary slot click.
             return Ok(true);
         }
-        if pressed
-            && (self.sort_mouse_press(button)
-                || self.hud_editor_key_press(&sunrise_client::keybinds::mouse_name(button)))
-        {
+        if pressed && self.sort_mouse_press(button) {
             return Ok(true);
         }
         // AbstractContainerScreen.mouseClicked (also Creative's fallback) handles
@@ -5265,12 +5226,6 @@ impl crate::game::ClientGame<'_> {
             Screen::ServerLinks if left_press => self.server_links_click()?,
             Screen::DebugOptions if left_press => self.debug_options_click(),
             Screen::DebugOptions if left => self.debug_options_release(),
-            Screen::HudEditor
-                if pressed && matches!(button, MouseButton::Left | MouseButton::Right) =>
-            {
-                self.hud_editor_press(!left)
-            }
-            Screen::HudEditor if left => self.hud_editor_release(),
             Screen::ConfirmLink if left_press => self.confirm_link_click(),
             Screen::DemoIntro if left_press => self.demo_intro_click(),
             Screen::DialogWarning if left_press => self.dialog_warning_click()?,
@@ -5331,7 +5286,6 @@ impl crate::game::ClientGame<'_> {
             Screen::Advancements if left => self.advancements_drag(),
             Screen::Stats if left => self.stats_drag(),
             Screen::DebugOptions if left => self.debug_options_drag(),
-            Screen::HudEditor if left => self.hud_editor_drag(),
             Screen::WorldOptions if left => self.world_options_drag(),
             Screen::Options if left => self.options_drag()?,
             Screen::Creative => {

@@ -176,9 +176,6 @@ impl PlayIo {
             C::CustomPayload(p) if p.channel == "minecraft:brand" => {
                 return brand_event(&p).map_or(BundleStep::Continue, BundleStep::Event);
             }
-            C::CustomPayload(p) if p.channel == crate::lod_net::CHANNEL => {
-                PlayIoAction::FarTile(p.data)
-            }
             C::CustomPayload(payload) => return BundleStep::Payload(payload),
             other => return BundleStep::Event(Event::Packet(Box::new(other))),
         };

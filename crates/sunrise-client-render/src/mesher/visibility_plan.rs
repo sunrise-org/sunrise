@@ -64,7 +64,7 @@ pub(crate) const MAX_RESIDENT_VISIBILITY_BYTES: usize =
     super::mod_geometry::MAX_IN_FLIGHT_BYTES * 3 / 4;
 
 /// What the mesher reads of a section's visibility, by padded cell index (`pi`).
-pub(super) trait CellMasks {
+pub trait CellMasks {
     /// False for [`NoMasks`]: every visibility step is skipped at compile time.
     const ACTIVE: bool;
     /// The kept bits ([`FACES`], [`MODEL`], [`FLUID`]) of padded cell `padded`.

@@ -7,7 +7,7 @@ use mod_api::{
     LevelRandomHost, LevelRef, LevelTicksHost, LevelWriteHost, LightLayer, PartStateError,
     ParticleOptions, RandomDraw, SoundSource, Tags,
 };
-use sunrise_core::{random::RandomSource, ticks::TickPriority};
+use sunrise_core::random::RandomSource;
 use sunrise_gameplay_common::game::api_values::{TryIntoApi, TryIntoEngine};
 use sunrise_gameplay_common::game::creatures::NativeSound;
 use sunrise_gameplay_common::game::journal_level_effects::PendingWrite;
@@ -310,7 +310,22 @@ impl LevelRandomHost for JournalLevelWrite<'_, '_> {
 
 impl LevelTicksHost for JournalLevelWrite<'_, '_> {
     #[inline]
-    fn schedule_block_tick(&mut self, [x, y, z]: [i32; 3], block: BlockKey, delay: i32) -> bool {
+    fn schedule_block_tick(&mut self, pos: [i32; 3], block: BlockKey, delay: i32) -> bool {
+        self.schedule_block_tick_with_priority(pos, block, delay, mod_api::TickPriority::Normal)
+    }
+    #[inline]
+    fn schedule_fluid_tick(&mut self, pos: [i32; 3], fluid: &str, delay: i32) -> bool {
+        self.schedule_fluid_tick_with_priority(pos, fluid, delay, mod_api::TickPriority::Normal)
+    }
+    /// `scheduleTick(pos, block, delay, priority)`, queued when the transaction commits; the
+    /// delay counts from the commit. False for a chunk with no tick container.
+    fn schedule_block_tick_with_priority(
+        &mut self,
+        [x, y, z]: [i32; 3],
+        block: BlockKey,
+        delay: i32,
+        priority: mod_api::TickPriority,
+    ) -> bool {
         let pos = BlockPos::new(x, y, z);
         let Some(block) = sunrise_gameplay_common::game::api_values::behavior_block(
             block,
@@ -319,18 +334,38 @@ impl LevelTicksHost for JournalLevelWrite<'_, '_> {
             return false;
         };
         let level = super::Dim::from_id(self.level.dimension_id());
+        let priority = sunrise_gameplay_common::game::api_values::engine_tick_priority(priority);
         self.game.block_ticks.blocks.chunk(pos.chunk()).is_some()
-            && self.queue(PendingWrite::BlockTick(level, pos, block, delay))
+            && self.queue(PendingWrite::BlockTick(level, pos, block, delay, priority))
     }
-    #[inline]
-    fn schedule_fluid_tick(&mut self, [x, y, z]: [i32; 3], fluid: &str, delay: i32) -> bool {
+    /// `scheduleTick(pos, fluid, delay, priority)`, queued when the transaction commits.
+    fn schedule_fluid_tick_with_priority(
+        &mut self,
+        pos: [i32; 3],
+        fluid: &str,
+        delay: i32,
+        priority: mod_api::TickPriority,
+    ) -> bool {
+        FluidKind::from_name(fluid)
+            .is_some_and(|fluid| self.schedule_fluid_kind_tick(pos, fluid, delay, priority))
+    }
+}
+
+impl JournalLevelWrite<'_, '_> {
+    /// `scheduleTick(pos, fluid, delay, priority)` of an engine fluid, queued when the transaction
+    /// commits; the delay counts from the commit. False for a chunk with no tick container.
+    pub(super) fn schedule_fluid_kind_tick(
+        &mut self,
+        [x, y, z]: [i32; 3],
+        fluid: FluidKind,
+        delay: i32,
+        priority: mod_api::TickPriority,
+    ) -> bool {
         let pos = BlockPos::new(x, y, z);
-        let Some(fluid) = FluidKind::from_name(fluid) else {
-            return false;
-        };
         let level = super::Dim::from_id(self.level.dimension_id());
+        let priority = sunrise_gameplay_common::game::api_values::engine_tick_priority(priority);
         self.game.block_ticks.fluids.chunk(pos.chunk()).is_some()
-            && self.queue(PendingWrite::FluidTick(level, pos, fluid, delay))
+            && self.queue(PendingWrite::FluidTick(level, pos, fluid, delay, priority))
     }
 }
 
@@ -557,24 +592,25 @@ impl ServerGame<'_> {
     /// or draining unrelated queued effects.
     fn publish_level_effect(&mut self, write: PendingWrite, deliver_now: bool) {
         match write {
-            PendingWrite::BlockTick(level, pos, block, delay) => {
+            PendingWrite::BlockTick(level, pos, block, delay, priority) => {
                 let _ = self.with_effect_level(level, |game| {
                     game.common.block_ticks.schedule_block(
                         game.common.world.game_time,
                         pos,
                         block,
                         delay,
-                        TickPriority::Normal,
+                        priority,
                     );
                 });
             }
-            PendingWrite::FluidTick(level, pos, fluid, delay) => {
+            PendingWrite::FluidTick(level, pos, fluid, delay, priority) => {
                 let _ = self.with_effect_level(level, |game| {
-                    game.common.block_ticks.schedule_fluid(
+                    game.common.block_ticks.schedule_fluid_with_priority(
                         game.common.world.game_time,
                         pos,
                         fluid,
                         delay,
+                        priority,
                     );
                 });
             }

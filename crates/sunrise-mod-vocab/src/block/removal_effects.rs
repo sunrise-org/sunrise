@@ -11,6 +11,8 @@ pub enum BlockRemovalEffectError {
     Stack(StackWriteError),
     /// At least one position coordinate was not finite.
     NonFinitePosition,
+    /// At least one component of the supplied initial motion was not finite.
+    NonFiniteMotion,
 }
 
 /// Append-only access to the retiring block entity's side effects.
@@ -32,11 +34,19 @@ pub trait BlockRemovalEffects {
     /// `Some` must contain a non-air stack. A refused stack consumes no draws.
     fn drop_slot(&mut self, stack: Option<ItemStack>) -> Result<(), BlockRemovalEffectError>;
 
-    /// Spawn a non-air stack at the given finite position with the default pickup delay.
+    /// Spawn a non-air stack at `position` with a pickup delay of 10 ticks.
+    /// `None` uses the random velocity of vanilla's five-argument `ItemEntity` constructor.
+    /// `Some(motion)` uses the given velocity, like the eight-argument constructor, without
+    /// drawing random numbers for motion. Neither path draws from the level random.
+    ///
+    /// Refusals are checked in order: [`BlockRemovalEffectError::NonFinitePosition`],
+    /// [`BlockRemovalEffectError::NonFiniteMotion`] (for `Some`), then
+    /// [`BlockRemovalEffectError::Stack`]. A refused call consumes no draws.
     fn spawn_item(
         &mut self,
         stack: ItemStack,
         position: [f64; 3],
+        motion: Option<[f64; 3]>,
     ) -> Result<(), BlockRemovalEffectError>;
 
     /// Award experience at the given finite position through `ExperienceOrb.award`.

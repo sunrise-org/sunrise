@@ -548,7 +548,7 @@ Each mob and player in view gets the render hook pair once a frame, NeoForge's
 
 This is the order within one entity. In the ordered body pass, the hooks run at each body's slot in
 level join order, interleaved with general entity renderer submissions. The local body is not
-submitted while the camera follows another entity (except in studio freecam). The `entity_outline`
+submitted while the camera follows another entity. The `entity_outline`
 queries for mobs, players and dropped items also follow this pass's join order; projectiles are
 queried in a later pass. The ender dragon and end crystals draw at their slots without adding
 these hooks or outline queries.
@@ -639,6 +639,12 @@ has unrepresentable metadata; deep local text has no serialization depth cap.
 Kept text retains its glyphs, including obfuscated glyph choices,
 until it is drawn again. Resource reload invalidates kept geometry.
 
+`keep` holds a draw until the block's state, its block entity, its light, the resource packs or
+the font's glyph cache change. A kept draw that goes 100 ticks without being drawn is dropped and
+submitted again when the block is next drawn. A draw that fills the frame's entity quad batch is
+never kept, even one that fits exactly, because it may have been cut short; a later frame with
+room extracts it again.
+
 Spinning parts use the client's animation clock: level-running texture ticks plus an
 animation phase, not the camera's partial tick or the server's day time. Pausing and
 `/tick freeze` hold the animation where it was and resume without a jump; `/tick step`
@@ -670,9 +676,10 @@ To draw a texture of your own (a dynamic texture a mod made), get a render type 
 `RenderAssets::entity_solid`, `entity_cutout` or `entity_translucent` with the texture's id and call
 `BlockEntityDrawContext::textured_quad(render_type, corners, uv, tint)`. Unlike `quad`, the UVs are
 in the texture's own unit square (0 to 1), not texels of 16. The same texture gives the same render
-type, so keep it. Light and `unlit` apply as for `quad`. The call returns false, drawing nothing,
-for an id that is not a live dynamic texture, a first-person hand draw or a coordinate that is not
-finite. A texture released after the quad was submitted draws the missing texture. Resource-stack
+type, so keep it. Light and `unlit` apply as for `quad`. Both calls return `true` when they append
+the quad to the current draw; `false` appends nothing. `textured_quad` returns false for an id that
+is not a live dynamic texture, a first-person hand or arm draw (`render_hand`, `render_arm`), a
+coordinate that is not finite or a batch with no room left. A texture released after the quad was submitted draws the missing texture. Resource-stack
 textures are not accepted. Under a shader pack these quads are drawn by the
 pack's entity program (the block entity program in a block entity's draw) with the texture bound
 as the entity texture.

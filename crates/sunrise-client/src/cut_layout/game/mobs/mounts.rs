@@ -25,7 +25,7 @@ pub(crate) mod tests {
         use sunrise_sim::mobs::Mob;
         use sunrise_sim::motion::PlayerMotion;
         super::super::native_entity_refs::tests::with_game(|game| {
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
             game.mobs.push(Mob::new(21, kind, Vec3::ZERO, 0.0));
             game.riding = Some(21);

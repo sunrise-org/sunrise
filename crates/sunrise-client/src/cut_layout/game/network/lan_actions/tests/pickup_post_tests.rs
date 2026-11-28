@@ -422,13 +422,10 @@ fn pre_pickup_edits_and_removals_match_on_host_and_guest() {
             game.ui.dispatcher = sunrise_gameplay_common::game::chat_common::SessionDispatcher(
                 Arc::new(sunrise_command::vanilla::build_for(false, true)),
             );
-            game.player = Some(
-                sunrise_sim::motion::PlayerMotion::new(
-                    game.motion,
-                    sunrise_core::geometry::Vec3::new(1.5, 64.0, 1.5),
-                )
-                .unwrap(),
-            );
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                sunrise_core::geometry::Vec3::new(1.5, 64.0, 1.5),
+            ));
             game.level.player_uuid = Some(sunrise_sim::lan::playerdata::uuid_ints(7));
             game.server.lan_acting_uuid = Some(7);
             game.server.lan_acting_name = Some("pickup_post".into());

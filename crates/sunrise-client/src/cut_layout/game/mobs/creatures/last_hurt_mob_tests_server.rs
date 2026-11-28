@@ -50,7 +50,7 @@ fn last_hurt_mob_follows_the_attacking_entity() {
             .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
         assert!(game.entity_ticking_area()(1, 0));
         game.world.game_time = 6000;
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 80.0, 0.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 80.0, 0.5)));
         bind_local_player(game, PLAYER, 123);
         game.player.as_mut().unwrap().health.tick_count = PLAYER_AGE;
         add_mob(game, PIG, "minecraft:pig", 4.0);

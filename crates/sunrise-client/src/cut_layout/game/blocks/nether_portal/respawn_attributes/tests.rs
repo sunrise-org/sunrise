@@ -83,7 +83,7 @@ fn a_new_player_after_a_portal_keeps_the_old_ones_modifiers() {
             keep: 3,
         }))
         .unwrap();
-        let armor = game.motion.attributes.id("minecraft:armor").unwrap();
+        let armor = game.motion.attributes().id("minecraft:armor").unwrap();
         game.handle_packet(C::UpdateAttributes(play::UpdateAttributes {
             id: 7,
             values: vec![AttributeSnapshot {

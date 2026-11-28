@@ -342,7 +342,7 @@ pub(crate) mod attribute_modifier_command_tests {
     #[ignore = "daily"]
     fn a_command_modifier_is_saved_with_the_player() {
         with_game(|game| {
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)));
             game.reset_entity_residency();
             game.native_lifecycle
                 .begin_open(Some(mod_api::Authority::IntegratedServer));
@@ -373,7 +373,7 @@ pub(crate) mod attribute_modifier_command_tests {
                 _ => false,
             };
             assert!(holds, "saved attributes: {saved:?}");
-            let mut back = PlayerMotion::new(game.motion, Vec3::ZERO).unwrap();
+            let mut back = PlayerMotion::new(game.motion, Vec3::ZERO);
             back.apply_saved_attributes(Some(&saved)).unwrap();
             assert_eq!(
                 back.attribute("minecraft:step_height").unwrap(),

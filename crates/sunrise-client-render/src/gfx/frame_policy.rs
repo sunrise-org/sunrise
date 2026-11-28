@@ -66,7 +66,15 @@ pub(super) fn overlay_format(
 }
 
 /// Whether Sunrise's tone curve (`Hdr::tonemap`) runs on this frame: on the layered frame's
-/// world.
-pub(super) fn sunrise_tone_curve(layered: bool, world: bool) -> bool {
-    layered && world
+/// world, unless the shader pack that draws it owns the curve (`pack_tonemap`: served Sunrise's
+/// HDR with `sunrise.hdr.tonemap = pack`, its `final` already writes what the display shows).
+pub(super) fn sunrise_tone_curve(layered: bool, world: bool, pack_tonemap: bool) -> bool {
+    layered && world && !pack_tonemap
+}
+
+/// Whether the shader pack whose post passes drew this frame owns the tone curve: `drawn` is
+/// its `PackPost::hdr`, `None` when no pack's passes drew it (no pack, or the world drawn without
+/// them). Only a pack served Sunrise's HDR with `sunrise.hdr.tonemap = pack` does.
+pub(super) fn pack_owns_tone_curve(drawn: Option<Option<sunrise_shaders::Tonemap>>) -> bool {
+    drawn == Some(Some(sunrise_shaders::Tonemap::Pack))
 }

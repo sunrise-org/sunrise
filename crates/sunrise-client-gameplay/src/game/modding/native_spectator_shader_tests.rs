@@ -71,7 +71,7 @@ fn a_mods_entity_type_puts_its_chain_on_while_spectated() {
         );
         with_client_game(|game| {
             let _server = logged_client(game);
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
 
             add_entity(game, 31, "minecraft:cow");
             game.remote_set_camera(31);

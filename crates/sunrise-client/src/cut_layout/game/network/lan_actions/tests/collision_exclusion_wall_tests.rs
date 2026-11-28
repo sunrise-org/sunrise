@@ -67,7 +67,7 @@ fn a_block_in_a_players_exclusions_does_not_push_it_out() {
     sunrise_gameplay::game::native_guest_turn_tests::with_guests(|game| {
         walled(game);
         let mut body =
-            sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(3.5, 64.0, 5.5)).unwrap();
+            sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(3.5, 64.0, 5.5));
         let nudge = |game: &sunrise_gameplay::game::ServerGame<'_>,
                      body: &sunrise_sim::motion::PlayerMotion| {
             sunrise_gameplay_common::game::closest_space_nudge(

@@ -121,7 +121,7 @@ fn an_oozing_player_swirls_slime_ball_crumbs() {
     with_game(|g| {
         let oozing = sunrise_level::brewing::effect("oozing").unwrap().id;
         g.potions.effects.add(EffectInstance::new(oozing, 400, 0));
-        g.player = Some(PlayerMotion::new(g.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+        g.player = Some(PlayerMotion::new(g.motion, Vec3::new(0.5, 64.0, 0.5)));
         // `ParticleEngine.add` records what the level is asked for instead of
         // drawing it, so the swirls are read exactly.
         g.client.particles.0.requested = Some(Vec::new());

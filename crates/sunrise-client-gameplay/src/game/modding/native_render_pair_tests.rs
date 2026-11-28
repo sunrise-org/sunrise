@@ -715,7 +715,7 @@ fn a_culled_entity_is_asked_neither_hook() {
 #[cfg(test)]
 fn admit_own_player(game: &mut crate::game::ClientGame<'_>, spectator: bool) {
     let at = sunrise_core::geometry::Vec3::new(0.5, 64.0, 0.5);
-    let mut player = sunrise_sim::motion::PlayerMotion::new(game.common.motion, at).unwrap();
+    let mut player = sunrise_sim::motion::PlayerMotion::new(game.common.motion, at);
     player.entity_id = 4321;
     game.common.player = Some(player);
     game.common.previous_position = at;

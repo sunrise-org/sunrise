@@ -21,7 +21,7 @@ impl ClientGame<'_> {
     }
 
     /// What the HUD shows on a `w` x `h` GUI px view this frame, as keep-outs: the boss bars
-    /// while the HUD shows (`show_hud`: not F1, not Replay Studio), as wide as the bar or its
+    /// while the HUD shows (`show_hud`: not F1), as wide as the bar or its
     /// widest name.
     pub(in crate::game::client_side) fn hud_room(&self, w: f32, h: f32, show_hud: bool) -> Room {
         let mut room = Room::new(w, h);

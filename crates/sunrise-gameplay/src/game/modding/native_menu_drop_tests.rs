@@ -10,7 +10,7 @@ fn a_stack_is_thrown_from_the_eyes_as_player_drop_does() {
 
     with_game(|game| {
         // A body to throw from: `with_game` makes none.
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)));
         let stone = ItemStack::new("minecraft:stone", 3);
         let before = game.dropped.len();
         let id = game.drop_stack_from_eyes(stone.clone(), true).unwrap();

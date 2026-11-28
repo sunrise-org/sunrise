@@ -525,14 +525,20 @@ pub(crate) mod h255_mob_piston_ground_tests {
                         .unwrap();
                 }
             }
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)));
             game.load_ticking_neighbourhood(0, 0);
             game.creative = true;
             assert!(game.run_command("fill 0 199 0 31 199 31 stone"));
             game.world.random.set_seed(255);
             game.update_chunk_tickets();
             assert!(crate::game::ticking_chunk(&game.world, 0, 0));
-            assert!(game.server.tickets.0.levels().block_ticking(0, 0));
+            assert!(
+                game.server
+                    .chunk_ticking
+                    .tickets
+                    .levels()
+                    .block_ticking(0, 0)
+            );
             test(&mut game);
         });
     }

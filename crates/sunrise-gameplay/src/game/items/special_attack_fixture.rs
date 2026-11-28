@@ -19,7 +19,7 @@ impl crate::game::ServerGame<'_> {
             .as_str()
             .ok_or("special attack target missing")?;
         let creative = op["creative"].as_bool().unwrap_or(false);
-        let mut player = PlayerMotion::new(self.common.motion, Vec3::new(0.5, 0.0, -2.0))?;
+        let mut player = PlayerMotion::new(self.common.motion, Vec3::new(0.5, 0.0, -2.0));
         player.invulnerable = creative;
         player.may_fly = creative;
         player.ground.on_ground = true;

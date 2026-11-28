@@ -915,6 +915,78 @@ mod facts_tests {
                 facts.is_redstone_conductor(state("minecraft:red_shulker_box")),
                 None
             );
+            // getLightDampening: opaque cubes stop all 15, water and leaves 1, glass and air none.
+            assert_eq!(facts.light_dampening(stone), Some(15));
+            assert_eq!(facts.light_dampening(state("minecraft:water")), Some(1));
+            assert_eq!(
+                facts.light_dampening(state("minecraft:oak_leaves")),
+                Some(1)
+            );
+            assert_eq!(facts.light_dampening(state("minecraft:glass")), Some(0));
+            assert_eq!(facts.light_dampening(air), Some(0));
+            // isSuffocating: the block's own predicate. Stone and mud yes, glass, leaves and a
+            // moving piston no, a piston until it is extended; a shulker box needs its block entity.
+            let pistons = |extended: &str| {
+                mod_api::prelude::BlockStatesHost::block_state_id(
+                    &*game,
+                    &format!("minecraft:piston[extended={extended}]"),
+                )
+                .unwrap()
+            };
+            assert_eq!(facts.is_suffocating(stone), Some(true));
+            assert_eq!(facts.is_suffocating(state("minecraft:mud")), Some(true));
+            assert_eq!(facts.is_suffocating(state("minecraft:glass")), Some(false));
+            assert_eq!(
+                facts.is_suffocating(state("minecraft:oak_leaves")),
+                Some(false)
+            );
+            assert_eq!(
+                facts.is_suffocating(state("minecraft:moving_piston")),
+                Some(false)
+            );
+            assert_eq!(facts.is_suffocating(pistons("false")), Some(true));
+            assert_eq!(facts.is_suffocating(pistons("true")), Some(false));
+            assert_eq!(
+                facts.is_suffocating(state("minecraft:red_shulker_box")),
+                None
+            );
+            // isValidSpawn: stone takes any mob, a bottom slab none, leaves only ocelots and
+            // parrots, ice only polar bears, magma only fire immune types, glowstone (light 15)
+            // none; an entity type with no spawn species has no answer.
+            let spawns = |name: &str, entity: &str| facts.is_valid_spawn(state(name), entity);
+            assert_eq!(spawns("minecraft:stone", "minecraft:zombie"), Some(true));
+            assert_eq!(spawns("minecraft:stone", "minecraft:cow"), Some(true));
+            assert_eq!(
+                spawns("minecraft:stone_slab", "minecraft:zombie"),
+                Some(false)
+            );
+            assert_eq!(
+                spawns("minecraft:oak_leaves", "minecraft:zombie"),
+                Some(false)
+            );
+            assert_eq!(
+                spawns("minecraft:oak_leaves", "minecraft:ocelot"),
+                Some(true)
+            );
+            assert_eq!(
+                spawns("minecraft:oak_leaves", "minecraft:parrot"),
+                Some(true)
+            );
+            assert_eq!(spawns("minecraft:ice", "minecraft:zombie"), Some(false));
+            assert_eq!(spawns("minecraft:ice", "minecraft:polar_bear"), Some(true));
+            assert_eq!(
+                spawns("minecraft:magma_block", "minecraft:zombie"),
+                Some(false)
+            );
+            assert_eq!(
+                spawns("minecraft:magma_block", "minecraft:blaze"),
+                Some(true)
+            );
+            assert_eq!(
+                spawns("minecraft:glowstone", "minecraft:zombie"),
+                Some(false)
+            );
+            assert_eq!(spawns("minecraft:stone", "minecraft:item"), None);
             // SoundType.STONE: its break event, at volume and pitch 1.
             let sound = facts.sound(stone).unwrap();
             assert_eq!(sound.break_sound.as_str(), "minecraft:block.stone.break");

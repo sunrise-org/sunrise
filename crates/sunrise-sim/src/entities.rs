@@ -31,12 +31,7 @@ pub fn move_applies(wanted: Vec3, moved: Vec3) -> bool {
     moved_sq > 1.0e-7 || wanted.length_squared() - moved_sq < 1.0e-7
 }
 
-/// `SlimeBlock.stepOn`: a slow walk or slide on slime drags the horizontal
-/// speed (`0.4 + |dy| * 0.2`); a fast vertical speed leaves it alone.
-pub fn slime_step_on_scale(velocity_y: f64) -> Option<f64> {
-    let abs_delta_y = velocity_y.abs();
-    (abs_delta_y < 0.1).then_some(0.4 + abs_delta_y * 0.2)
-}
+pub use crate::motion::slime_step_on_scale;
 
 pub mod arrows;
 mod fluids;

@@ -279,9 +279,10 @@ mod tests {
             guest.position = [1.5, 64.0, 1.5];
             guest.on_ground = true;
             guest.loaded = true;
-            guest.motion = Some(Box::new(
-                PlayerMotion::new(game.motion, Vec3::new(1.5, 64.0, 1.5)).unwrap(),
-            ));
+            guest.motion = Some(Box::new(PlayerMotion::new(
+                game.motion,
+                Vec3::new(1.5, 64.0, 1.5),
+            )));
             guest.offhand = Some(ItemStack::new("minecraft:bow", 1));
             let uuid = guest.uuid;
             game.server.lan.as_mut().unwrap().hub.guests.push(guest);
@@ -377,7 +378,7 @@ mod tests {
                     guest.position = [at.x, at.y, at.z];
                     guest.on_ground = true;
                     guest.loaded = true;
-                    let mut body = PlayerMotion::new(game.motion, at).unwrap();
+                    let mut body = PlayerMotion::new(game.motion, at);
                     body.entity_id = guest.entity_id;
                     guest.motion = Some(Box::new(body));
                     let uuid = guest.uuid;
@@ -449,9 +450,10 @@ mod tests {
             guest.position = [1.5, 64.0, 1.5];
             guest.on_ground = false;
             guest.loaded = true;
-            guest.motion = Some(Box::new(
-                PlayerMotion::new(game.motion, Vec3::new(1.5, 64.0, 1.5)).unwrap(),
-            ));
+            guest.motion = Some(Box::new(PlayerMotion::new(
+                game.motion,
+                Vec3::new(1.5, 64.0, 1.5),
+            )));
             let uuid = guest.uuid;
             game.server.lan.as_mut().unwrap().hub.guests.push(guest);
             let player = game.player(uuid).unwrap();

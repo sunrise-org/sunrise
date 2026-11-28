@@ -1150,12 +1150,10 @@ impl crate::game::ClientGame<'_> {
     /// A connection's screen is over the world: connecting, reconfiguring, or
     /// the level loading screen, a portal's included (`remote_overlay`).
     pub(in crate::game::client_side) fn remote_screen_up(&self) -> bool {
-        !self.client.replay.playing()
-            && self
-                .client
-                .remote
-                .as_ref()
-                .is_some_and(|r| self.common.player.is_none() || r.level_load.is_active())
+        self.client
+            .remote
+            .as_ref()
+            .is_some_and(|r| self.common.player.is_none() || r.level_load.is_active())
     }
     /// The `SetPassengers` bookkeeping of the tracked entities.
     pub(in crate::game::client_side) fn remote_seat_passengers(

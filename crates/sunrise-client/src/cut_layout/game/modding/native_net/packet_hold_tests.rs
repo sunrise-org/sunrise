@@ -366,7 +366,7 @@ fn held_pressure_refuses_send_play_and_cross_passage_without_moving() {
         let start = sunrise_core::geometry::Vec3::new(0.5, 65.0, 8.25);
         let velocity = sunrise_core::geometry::Vec3::new(0.0, -0.0784, 0.25);
         let prev = sunrise_core::geometry::Vec3::new(0.5, 65.0, 8.0);
-        let mut player = sunrise_sim::motion::PlayerMotion::new(game.motion, start).unwrap();
+        let mut player = sunrise_sim::motion::PlayerMotion::new(game.motion, start);
         player.velocity = velocity;
         game.player = Some(player);
         game.previous_position = prev;

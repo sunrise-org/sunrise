@@ -87,7 +87,7 @@ mod tests {
             sunrise_gameplay::game::native_entity_refs::tests::with_game(|game| {
                 // The player in place, admitted as a joined one is, so its handle resolves.
                 let at = sunrise_core::geometry::Vec3::new(0.5, 64.0, 0.5);
-                let mut body = sunrise_sim::motion::PlayerMotion::new(game.motion, at).unwrap();
+                let mut body = sunrise_sim::motion::PlayerMotion::new(game.motion, at);
                 body.entity_id = 7;
                 game.player = Some(body);
                 game.bind_local_player_residency();

@@ -22,5 +22,9 @@ fn main() {
         std::fs::write(out_dir.join(format!("{area}_fixtures.rs")), includes)
             .expect("writing Part fixture includes");
     }
-    sunrise_mod_api_gen::generate_api_parts(&root, &out_dir).expect("generating the Part modules");
+    for path in sunrise_mod_api_gen::generate_api_parts(&root, &out_dir)
+        .expect("generating the Part modules")
+    {
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
 }

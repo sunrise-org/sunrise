@@ -555,8 +555,8 @@ impl ClientGame<'_> {
             view_distance: Some(s.render_distance.max(0) as u32),
             loaded_view_distance: Some(self.client.streaming.radius.max(0) as u32),
             simulation_distance: Some(s.simulation_distance.max(0) as u32),
-            far_terrain_distance: Some(self.lod_distance()),
-            far_terrain_active: Some(self.client.lod.0.is_some()),
+            far_terrain_distance: None,
+            far_terrain_active: None,
             graphics_preset: s.graphics_preset.clone(),
         }
     }

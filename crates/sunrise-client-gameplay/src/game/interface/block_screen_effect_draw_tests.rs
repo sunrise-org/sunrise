@@ -124,7 +124,7 @@ pub(in crate::game::client_side) fn burning_player(game: &mut crate::game::Clien
         (0, 0),
         Arc::new(Chunk::with_layout(0, 0, game.common.world.layout())),
     );
-    let mut player = PlayerMotion::new(game.common.motion, Vec3::ZERO).unwrap();
+    let mut player = PlayerMotion::new(game.common.motion, Vec3::ZERO);
     player.position = Vec3::new(0.5, 64.0, 0.5);
     player.fire_ticks = 100;
     game.common.player = Some(player);
@@ -641,7 +641,7 @@ fn a_dead_players_water_overlay_uses_the_last_sample_after_removal() {
         remote.level_load.finish();
         game.client.screen = Screen::Playing;
         game.client.camera_type = CameraType::FirstPerson;
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 64.0, 8.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 64.0, 8.5)));
         let chunk = Chunk::with_layout(0, 0, game.world.layout());
         game.client
             .streaming

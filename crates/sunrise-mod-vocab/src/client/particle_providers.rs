@@ -1,7 +1,7 @@
 //! Typed logical-client sprite factories and the owned instances they create.
 
-use super::particle_types::TypedParticleOptions;
 use crate::callback_owner::{CallbackOwner, CallbackValue};
+use crate::world::particle_types::TypedParticleOptions;
 use crate::{BlockState, LightLayer, ParticleBlend, ParticleKey, ParticleType, RandomSource};
 use std::{collections::HashMap, marker::PhantomData, sync::Arc};
 

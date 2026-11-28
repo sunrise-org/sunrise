@@ -63,7 +63,9 @@ impl crate::game::ServerGame<'_> {
     /// tick (`/tick freeze`) leaves the potions where they are
     /// (`TickRateManager.isEntityFrozen`); players' effects still run.
     pub(in crate::game) fn tick_effects(&mut self, running: bool) {
-        self.tick_mob_effects();
+        crate::rng_count::in_consumer(crate::rng_count::Consumer::PlayerEffects, || {
+            self.tick_mob_effects()
+        });
         if running {
             self.tick_thrown_potions();
             self.tick_potion_clouds();
@@ -785,7 +787,7 @@ impl crate::game::ServerGame<'_> {
                 if let Some(player) = self.common.player.as_ref() {
                     let mut cancel = false;
                     let reads = || crate::game::server_side::entity_server::hit_reads_of!(self);
-                    let healed = sunrise_sim::health::LivingLend::player(
+                    let healed = sunrise_sim::mobs::LivingLend::player(
                         player.entity_id,
                         &player.attributes,
                         &player.health.data,

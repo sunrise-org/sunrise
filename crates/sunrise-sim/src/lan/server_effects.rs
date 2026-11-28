@@ -30,7 +30,7 @@ pub enum ServerParticleData {
         burst_impulse_base: f32,
     },
     Vibration {
-        source: mod_api::client::particles::PositionSource,
+        source: mod_api::PositionSource,
         ticks: i32,
     },
     Item(ItemStack),
@@ -133,7 +133,7 @@ impl ServerParticle {
         }
     }
 
-    pub fn vibration(source: mod_api::client::particles::PositionSource, ticks: i32) -> Self {
+    pub fn vibration(source: mod_api::PositionSource, ticks: i32) -> Self {
         Self {
             ty: ParticleType::Vibration,
             data: ServerParticleData::Vibration { source, ticks },
@@ -192,8 +192,8 @@ pub fn server_particle_ok(particle: &ServerParticle) -> bool {
             &particle.data,
             ServerParticleData::Vibration { source, .. }
                 if match source {
-                    mod_api::client::particles::PositionSource::Block(_) => true,
-                    mod_api::client::particles::PositionSource::Entity { y_offset, .. } => {
+                    mod_api::PositionSource::Block(_) => true,
+                    mod_api::PositionSource::Entity { y_offset, .. } => {
                         y_offset.is_finite()
                     }
                     _ => false,

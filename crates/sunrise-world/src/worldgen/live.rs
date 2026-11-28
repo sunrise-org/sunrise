@@ -241,10 +241,7 @@ impl LiveFeatures {
                 for (name, json) in &resources.feature_tags {
                     let _ = definitions.apply_json(name, "live features", json);
                 }
-                definitions
-                    .build(lookup)
-                    .map(|built| built.tags)
-                    .unwrap_or_default()
+                definitions.bind(lookup).tags
             }),
             _ => return Some(false),
         };

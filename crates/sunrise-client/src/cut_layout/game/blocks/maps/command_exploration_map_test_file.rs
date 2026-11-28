@@ -10,13 +10,10 @@ mod command_exploration_map_tests {
     fn actual_item_modify_materializes_selected_exploration_map() {
         let mut game_resources = None;
         let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut game_resources);
-        game.player = Some(
-            sunrise_sim::motion::PlayerMotion::new(
-                game.motion,
-                sunrise_core::geometry::Vec3::new(4.5, 200.0, 4.5),
-            )
-            .unwrap(),
-        );
+        game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+            game.motion,
+            sunrise_core::geometry::Vec3::new(4.5, 200.0, 4.5),
+        ));
         assert_eq!(
             game.player_source().entity,
             Some(sunrise_gameplay_common::game::commands_common::Target::Player)
@@ -150,13 +147,10 @@ mod added_preservation_tests {
         resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
     ) -> sunrise_gameplay::game::ServerGame<'a> {
         let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
-        game.player = Some(
-            sunrise_sim::motion::PlayerMotion::new(
-                game.motion,
-                sunrise_core::geometry::Vec3::new(4.5, 200.0, 4.5),
-            )
-            .unwrap(),
-        );
+        game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+            game.motion,
+            sunrise_core::geometry::Vec3::new(4.5, 200.0, 4.5),
+        ));
         game.server.world_root =
             std::path::PathBuf::from(std::env::var_os("SUNRISE_HOME").unwrap()).join(label);
         let pack = game.server.world_root.join("datapacks/mapcmd");

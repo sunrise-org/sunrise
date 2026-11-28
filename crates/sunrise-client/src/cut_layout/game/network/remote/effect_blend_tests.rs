@@ -26,7 +26,7 @@ fn with_client(
             .unwrap()
             .id("minecraft:speed")
             .unwrap();
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
         let living = game.living(game.entity(7).unwrap()).unwrap();
         test(game, living, speed);
     });

@@ -38,7 +38,7 @@ fn blows(cases: &[Case]) -> Vec<(i32, f32)> {
             g.world.health_rules.difficulty = difficulty;
             g.mobs.clear();
             // A whole player each blow: the earlier ones took health away.
-            g.player = Some(PlayerMotion::new(g.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+            g.player = Some(PlayerMotion::new(g.motion, Vec3::new(0.5, 64.0, 0.5)));
             let p = g.player.as_mut().unwrap();
             p.entity_id = 77;
             if !landed {

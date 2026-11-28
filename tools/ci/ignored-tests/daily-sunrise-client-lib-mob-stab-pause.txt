@@ -1,0 +1,1 @@
+sunrise-client-lib mobs::stab_pause_tests::a_mob_tick_stops_at_its_stabs_before_the_mob_moves lib daily resources

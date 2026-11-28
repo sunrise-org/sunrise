@@ -32,9 +32,10 @@ fn mobs_past_the_simulation_distance_neither_enter_portals_nor_cool_down() {
         // The player in chunk (0, 0); chunk (2, 0) is inside the simulation
         // distance, chunk (8, 0) loaded and in view but past it. In each, one
         // zombie stands in a portal (z 8) and one on stone, cooling down (z 12).
-        game.player = Some(
-            sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(8.5, 65.0, 8.5)).unwrap(),
-        );
+        game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+            game.motion,
+            Vec3::new(8.5, 65.0, 8.5),
+        ));
         for (cx, x, in_portal, cooling) in [(2, 40, 1, 3), (8, 136, 2, 4)] {
             game.world
                 .chunks
@@ -63,7 +64,7 @@ fn mobs_past_the_simulation_distance_neither_enter_portals_nor_cool_down() {
             game.handle_entity_portals();
             game.find_entity_portals();
         }
-        let state = |id| game.server.portals.entities.get(&id);
+        let state = |id| game.server.portals.level.entities.get(&id);
         let here = |id| game.mobs.iter().any(|m| m.id == id);
         // A mob crosses a nether portal at once: the ticking zombie has gone.
         assert!(!here(1), "the ticking zombie went through its portal");

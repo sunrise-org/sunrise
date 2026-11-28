@@ -343,13 +343,12 @@ pub(crate) mod tests {
         with_inert_block(
             "cut_layout::game::server_side::disabled_block_tests::tests::reenabled_owner_resumes_held_scheduled_tick",
             |game, state, probe| {
-                game.server
-                    .tickets
-                    .0
-                    .update(Some(sunrise_sim::ticket_levels::Sources {
+                game.server.chunk_ticking.tickets.update(Some(
+                    sunrise_sim::ticket_levels::Sources {
                         forced: vec![(0, 0)],
                         ..Default::default()
-                    }));
+                    },
+                ));
                 game.with_level(|_, _, ticks| {
                     ticks
                         .add_chunk(POS.chunk(), Default::default(), Default::default())
@@ -528,13 +527,12 @@ pub(crate) mod tests {
                 .map(|(block, source, target)| {
                     (target, state(block), state(source), state(target))
                 });
-                game.server
-                    .tickets
-                    .0
-                    .update(Some(sunrise_sim::ticket_levels::Sources {
+                game.server.chunk_ticking.tickets.update(Some(
+                    sunrise_sim::ticket_levels::Sources {
                         forced: vec![(0, 0)],
                         ..Default::default()
-                    }));
+                    },
+                ));
                 game.with_level(|b, level, ticks| {
                     ticks.add_empty_chunk(base.chunk()).unwrap();
                     assert!(mod_api::__private::set_mod_enabled("inert_test", false));

@@ -109,7 +109,7 @@ mod projection_tests {
         let assets = sunrise_level::assets::Assets::load(&root).unwrap();
         let resources = sunrise_sim::motion::MotionResources::load(&root, &assets).unwrap();
         let mut player =
-            sunrise_sim::motion::PlayerMotion::new(&resources, Vec3::new(1.0, 64.0, 2.0)).unwrap();
+            sunrise_sim::motion::PlayerMotion::new(&resources, Vec3::new(1.0, 64.0, 2.0));
         player.entity_id = 302;
         player.velocity = Vec3::new(0.2, 0.0, -0.1);
         player.yaw = 75.0;

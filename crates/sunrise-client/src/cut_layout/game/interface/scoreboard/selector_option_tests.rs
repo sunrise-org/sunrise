@@ -23,7 +23,7 @@ fn game<'a>(
     let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
     game.build_registries();
     game.set_allow_commands(true);
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)));
     assert!(game.run_command("team add red"));
     assert!(game.run_command("team modify red prefix \"[R] \""));
     assert!(game.run_command("team join red @s"));

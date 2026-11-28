@@ -415,15 +415,11 @@ impl ExpressionBlocks {
 /// The packs' core shader pipelines' Polytone blocks, for the game to give their values.
 impl super::Renderer {
     /// The installed pack pipelines with their Polytone blocks: the block outline's, the sky's and
-    /// the stars', the lightmap's except under fullbright (which keeps the texture white), and
-    /// the text's (the world's, the see-through and the GUI's) only where a world runs (`world`;
-    /// a frame where none runs writes zeros, [`Self::zero_text_blocks`]). Evaluation does not
-    /// depend on which pipelines draw this frame.
+    /// the stars', the lightmap's, and the text's (the world's, the see-through and the GUI's)
+    /// only where a world runs (`world`; a frame where none runs writes zeros,
+    /// [`Self::zero_text_blocks`]). Evaluation does not depend on which pipelines draw this frame.
     fn polytone_blocks(&mut self, world: bool) -> impl Iterator<Item = &mut ExpressionBlocks> {
-        let fullbright = self.fullbright;
-        let lightmap = (self.core_lightmap.as_mut())
-            .filter(|_| !fullbright)
-            .map(|core| &mut core.extra);
+        let lightmap = (self.core_lightmap.as_mut()).map(|core| &mut core.extra);
         let lines = self.core_lines.as_mut().map(|core| &mut core.extra);
         let sky = (self.core_sky.iter_mut()).flat_map(|core| core.expression_blocks());
         let text = (self.core_text.as_mut().filter(|_| world).into_iter())

@@ -200,7 +200,7 @@ pub(crate) fn setup_game<'a>(
     let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
     game.options.dedicated = None;
     let mut player =
-        sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(4.5, 64.0, 17.5)).unwrap();
+        sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(4.5, 64.0, 17.5));
     player.client_loaded = true;
     game.player = Some(player);
     sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(
@@ -289,8 +289,8 @@ pub(crate) fn clear_arena(game: &mut sunrise_gameplay::game::ServerGame<'_>, bac
     game.cushions.clear();
     game.crystals.clear();
     crate::game::server_side::creatures_server::projectiles_120_124_tests::clear_others(game);
-    game.server.knot_ids.clear();
-    game.server.broken_knots.clear();
+    game.server.knot_state.knot_ids.clear();
+    game.server.knot_state.broken_knots.clear();
     game.resident_entities.knots.clear();
     game.reset_entity_residency();
     game.bind_local_player_residency();

@@ -12,10 +12,10 @@ pub(crate) mod tests {
             use sunrise_core::geometry::Vec3;
             use sunrise_sim::mobs::Mob;
             game.build_registries();
-            game.player = Some(
-                sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(8.5, 64.0, 8.5))
-                    .unwrap(),
-            );
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                Vec3::new(8.5, 64.0, 8.5),
+            ));
             let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
             for (id, order) in [(74, 2), (72, 0)] {
                 let mut m = Mob::new(id, pig.clone(), Vec3::ZERO, 0.0);
@@ -49,10 +49,10 @@ pub(crate) mod tests {
             use sunrise_core::geometry::Vec3;
             use sunrise_sim::mobs::Mob;
             game.build_registries();
-            game.player = Some(
-                sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(8.5, 64.0, 8.5))
-                    .unwrap(),
-            );
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                Vec3::new(8.5, 64.0, 8.5),
+            ));
             let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
             let (vehicle, rider) = (90, 91);
             game.mobs
@@ -93,10 +93,10 @@ pub(crate) mod tests {
             use sunrise_core::geometry::Vec3;
             use sunrise_sim::mobs::Mob;
             game.build_registries();
-            game.player = Some(
-                sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(8.5, 64.0, 8.5))
-                    .unwrap(),
-            );
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                Vec3::new(8.5, 64.0, 8.5),
+            ));
             let ghast = game
                 .res
                 .mob_types()

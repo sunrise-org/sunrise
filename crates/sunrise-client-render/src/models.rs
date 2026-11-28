@@ -359,7 +359,7 @@ pub fn load_visibility(
     if needs_tags {
         let tags_path = root.join("block-tags.json");
         let bundle: Value = sunrise_world::json_file::read(&tags_path)?;
-        let mut tag_defs = TagDefinitions::default();
+        let mut tag_defs = TagDefinitions::with_conventions("block")?;
         for (tag_name, text) in bundle.as_object().ok_or("invalid block tag bundle")? {
             tag_defs.apply_json(
                 tag_name,
@@ -367,11 +367,11 @@ pub fn load_visibility(
                 text.as_str().ok_or("invalid block tag text")?,
             )?;
         }
-        let built = tag_defs.build(|block_name, _| {
+        let built = tag_defs.bind(|block_name, _| {
             registry
                 .default_state(block_name)
                 .map(|_| block_name.to_owned())
-        })?;
+        });
         let block_tags: BTreeMap<String, BTreeSet<String>> = built
             .tags
             .into_iter()
@@ -424,9 +424,11 @@ fn with_test_registrations<R>(
 mod tests {
     use super::*;
 
+    /// Freezing the registrations namespaces, sorts and deduplicates the file IDs and keeps only
+    /// namespaced bakers. It goes through `freeze_standalone` alone, so the process-wide
+    /// `STANDALONE` registry other bake tests fall back to stays unset (#6457).
     #[test]
-    fn standalone_names_are_namespaced_sorted_and_set_once() {
-        assert!(standalone().is_none());
+    fn standalone_names_are_namespaced_sorted_and_deduplicated() {
         with_test_registrations(
             |event| {
                 for id in [
@@ -449,9 +451,7 @@ mod tests {
                 }
             },
             |staged| {
-                assert!(register_standalone(staged));
-                assert!(!register_standalone(Vec::new()));
-                let registered = standalone().unwrap();
+                let registered = freeze_standalone(staged);
                 assert_eq!(registered.names, ["lanef:block/a", "lanef:block/b"]);
                 let [baker] = registered.bakers.as_slice() else {
                     panic!("expected only the namespaced baker");
@@ -459,6 +459,10 @@ mod tests {
                 assert_eq!(baker.registration.id, "other:valid");
                 assert_eq!(baker.mod_id, "registering_mod");
             },
+        );
+        assert!(
+            STANDALONE.get().is_none(),
+            "the test sealed the process registry"
         );
     }
 }

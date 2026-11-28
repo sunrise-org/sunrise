@@ -96,7 +96,7 @@ fn with_player(
     game.world
         .chunks
         .insert((0, 0), Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)));
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 64.0, 4.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 64.0, 4.5)));
     game.server.lan_acting_uuid = Some(123);
     game.server.lan_acting_entity = Some(20);
     game.server.lan_acting_name = Some("Breaker".into());

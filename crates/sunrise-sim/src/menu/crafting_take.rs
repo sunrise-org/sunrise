@@ -79,6 +79,7 @@ impl Menu {
                     left: self.state.containers[MAIN][0].clone(),
                     right: self.state.containers[MAIN][1].clone(),
                     output: taken.clone(),
+                    cost: self.state.data[0],
                 });
                 return;
             }

@@ -3,35 +3,6 @@
 use super::*;
 use crate::game::client_side::key_codes::{gameplay_has_keyboard, glfw_modifiers, keyboard_button};
 
-fn studio_replay_shortcut(key: KeyCode) -> bool {
-    matches!(
-        key,
-        KeyCode::Escape
-            | KeyCode::KeyP
-            | KeyCode::KeyF
-            | KeyCode::KeyT
-            | KeyCode::KeyM
-            | KeyCode::Home
-            | KeyCode::KeyL
-            | KeyCode::KeyK
-            | KeyCode::Delete
-    )
-}
-
-fn studio_freecam_movement_key(key: KeyCode) -> bool {
-    matches!(
-        key,
-        KeyCode::KeyW
-            | KeyCode::KeyA
-            | KeyCode::KeyS
-            | KeyCode::KeyD
-            | KeyCode::KeyE
-            | KeyCode::KeyQ
-            | KeyCode::Space
-            | KeyCode::ControlRight
-    )
-}
-
 impl crate::game::ClientGame<'_> {
     pub(in crate::game::client_side) fn toggle_options(&self) -> [bool; 4] {
         [
@@ -185,7 +156,7 @@ impl crate::game::ClientGame<'_> {
             (_, true) => KeyAction::Repeat,
         };
         if let Some(name) = sunrise_client::keybinds::key_name(key) {
-            let screen_open = self.mod_mappings_screen_open() || self.client.replay.playing();
+            let screen_open = self.mod_mappings_screen_open();
             self.client.vanilla_mappings.key_event(
                 &self.client.settings.keys,
                 name,
@@ -282,21 +253,6 @@ impl crate::game::ClientGame<'_> {
         source: Source,
         vanilla_queued: bool,
     ) -> Result<()> {
-        if self.client.screen == Screen::Playing && self.client.replay.playing() {
-            if !pressed {
-                self.release_device_key(&key, source);
-                return Ok(());
-            }
-            if studio_replay_shortcut(key) {
-                if !repeat {
-                    self.key_pressed(key, raw)?;
-                }
-                return Ok(());
-            }
-            if !studio_freecam_movement_key(key) || !self.client.studio.flying() {
-                return Ok(());
-            }
-        }
         // Sneak and sprint are ToggleKeyMappings: a press (or a key
         // repeat) flips them when toggling; only releases reach them
         // behind a screen (KeyboardHandler.keyPress).
@@ -331,7 +287,7 @@ impl crate::game::ClientGame<'_> {
         } else if !pressed {
             self.release_device_key(&key, source);
             return Ok(());
-        } else if !self.mod_mappings_screen_open() || self.client.replay.playing() {
+        } else if !self.mod_mappings_screen_open() {
             self.press_device_key(key, source);
             if let Some(slot) = sunrise_client::keybinds::VanillaMappingSlot::by_default_key(key)
                 && slot.definition().2 == "movement"
@@ -507,9 +463,6 @@ impl crate::game::ClientGame<'_> {
     }
     /// A translated mouse mapping (`Left` = attack, `Right` = use, `Middle` = middle pair) while playing.
     pub fn play_mouse(&mut self, button: MouseButton, pressed: bool) -> Result<()> {
-        if pressed {
-            self.pvp_click(button);
-        }
         if self.common.sleeping.is_some() {
             return Ok(());
         }
@@ -586,7 +539,7 @@ impl crate::game::ClientGame<'_> {
     }
 }
 
-/// The input source (docs/layers.md, "Controllers, replays and UI pages"): what
+/// The input source (docs/layers.md, "Controllers and UI pages"): what
 /// gameplay asks of a device beyond the keyboard and mouse, and tells it. Gameplay calls these,
 /// never the controller modules; today `pad` answers.
 impl crate::game::ClientGame<'_> {
@@ -713,38 +666,3 @@ impl crate::game::ClientGame<'_> {
 }
 
 use sunrise_gameplay_common::game::game_mode_common::GameModeCommonGameExt1 as _;
-
-#[cfg(test)]
-mod tests {
-    use super::{studio_freecam_movement_key, studio_replay_shortcut};
-    use winit::keyboard::KeyCode;
-
-    #[test]
-    fn replay_shortcuts_are_distinct_from_freecam_movement() {
-        for key in [
-            KeyCode::Escape,
-            KeyCode::KeyP,
-            KeyCode::KeyF,
-            KeyCode::KeyT,
-            KeyCode::KeyM,
-            KeyCode::Home,
-            KeyCode::KeyL,
-            KeyCode::KeyK,
-            KeyCode::Delete,
-        ] {
-            assert!(studio_replay_shortcut(key));
-        }
-        for key in [
-            KeyCode::KeyW,
-            KeyCode::KeyA,
-            KeyCode::KeyS,
-            KeyCode::KeyD,
-            KeyCode::KeyE,
-            KeyCode::KeyQ,
-        ] {
-            assert!(studio_freecam_movement_key(key));
-            assert!(!studio_replay_shortcut(key));
-        }
-        assert!(!studio_freecam_movement_key(KeyCode::KeyI));
-    }
-}

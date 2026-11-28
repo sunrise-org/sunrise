@@ -534,8 +534,10 @@ fn client_player_state_reads_its_own_copy_only() {
             game.client
                 .streaming
                 .insert_remote(&mut game.common.world, Chunk::empty(0, 0));
-            game.common.player =
-                Some(PlayerMotion::new(game.common.motion, Vec3::new(8.5, 64.0, 8.5)).unwrap());
+            game.common.player = Some(PlayerMotion::new(
+                game.common.motion,
+                Vec3::new(8.5, 64.0, 8.5),
+            ));
             let local = game.local_player().unwrap();
             let entity = local.entity();
             let living = mod_api::LivingRef::new(entity);
@@ -868,7 +870,7 @@ fn client_abilities_follow_predicted_flying_between_packets() {
     mod_platform::testing::with_mods(Default::default(), || {
         with_client_game(|game| {
             let _server = logged_client(game);
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             game.handle_packet(play::Clientbound::PlayerAbilities(play::PlayerAbilities {
                 flags: 4,
                 flying_speed: 0.1,

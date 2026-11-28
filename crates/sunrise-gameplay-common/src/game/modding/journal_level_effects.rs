@@ -1,11 +1,12 @@
 use crate::game::creatures::NativeSound;
 use mod_api::{BlockPos, PlayerRef};
+use sunrise_core::ticks::TickPriority;
 use sunrise_sim::lan::server_effects::ServerQueuedParticle;
 use sunrise_world::{fluid::FluidKind, level::states::BlockId};
 
 pub enum PendingWrite {
-    BlockTick(super::Dim, BlockPos, BlockId, i32),
-    FluidTick(super::Dim, BlockPos, FluidKind, i32),
+    BlockTick(super::Dim, BlockPos, BlockId, i32, TickPriority),
+    FluidTick(super::Dim, BlockPos, FluidKind, i32, TickPriority),
     /// A level or entity-bound sound. `seed` is the caller's (`ServerLevel.playSeededSound`), or
     /// `None` to draw the level's next sound seed when the sound is published (`Level.playSound`).
     Sound {

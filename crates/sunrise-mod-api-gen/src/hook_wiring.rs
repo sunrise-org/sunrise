@@ -30,10 +30,14 @@ pub fn check_gameplay_hook_wiring(root: &Path, target_cfgs: &[String]) -> Result
 }
 
 fn check_split(root: &Path, build: Build) -> Result<(), String> {
-    let routing = crate::gameplay::Routing::load(root)?;
-    let catalog = routing.catalog(root)?;
-    check_with_builds(root, &catalog.hooks, build.clone())?;
-    semantic::check(root, &routing, &build)
+    let root = root
+        .canonicalize()
+        .map_err(|error| format!("{}: {error}", root.display()))?;
+    let routing = crate::gameplay::Routing::load(&root)?;
+    let catalog = routing.catalog(&root)?;
+    let mut sources = Sources::new(&root);
+    check_hooks(&mut sources, &catalog.hooks, &build)?;
+    semantic::check(&root, &routing, &mut sources, &build)
 }
 
 #[cfg(test)]
@@ -50,10 +54,14 @@ fn check_with_builds(root: &Path, hooks: &[Hook], initial: Build) -> Result<(), 
         .canonicalize()
         .map_err(|error| format!("{}: {error}", root.display()))?;
     let mut sources = Sources::new(&root);
+    check_hooks(&mut sources, hooks, &initial)
+}
+
+fn check_hooks(sources: &mut Sources<'_>, hooks: &[Hook], initial: &Build) -> Result<(), String> {
     let errors: Vec<_> = hooks
         .iter()
         .filter_map(|hook| {
-            check_builds(&mut sources, hook, &initial)
+            check_builds(sources, hook, initial)
                 .err()
                 .map(|error| format!("{} ({}): {error}", hook.name, hook.target))
         })

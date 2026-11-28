@@ -234,7 +234,7 @@ fn a_hit_listener_reads_its_victim_and_causer_live_and_their_attachments_read_on
     mod_platform::testing::with_mods(mods, || {
         with_resident_game(|game| {
             let mark = mark.lock().unwrap().clone().expect("probe:mark registered");
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             bind_local_player(game, 7, 7);
             game.set_game_mode(GameMode::Survival);
             let pig = summon_mob(game, "minecraft:pig", "{NoAI:1b}");

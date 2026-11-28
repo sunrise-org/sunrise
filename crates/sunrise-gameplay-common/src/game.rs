@@ -152,7 +152,7 @@ macro_rules! game_side {
             player_equipment: $crate::acting_equipment!($s),
             hit_borrows: $crate::game::native_surface::HitBorrows {
                 living_types: $s.res.living_type_keys(),
-                attributes: &$s.motion.attributes,
+                attributes: $s.motion.attributes(),
                 player_effects: &$s.potions.effects,
                 player_uuid: $crate::game::Side::lan_acting_uuid({
                     use $crate::game::SideGame as _;
@@ -206,7 +206,7 @@ macro_rules! game_side {
             player_equipment: $crate::acting_equipment!($s),
             hit_borrows: $crate::game::native_surface::HitBorrows {
                 living_types: $s.res.living_type_keys(),
-                attributes: &$s.motion.attributes,
+                attributes: $s.motion.attributes(),
                 player_effects: &$s.potions.effects,
                 player_uuid,
                 player_attachments: &$s.player_state.attachments,
@@ -792,8 +792,6 @@ pub enum Screen {
     /// A screen of a native mod's own (`mod_screen_open`): it draws and
     /// takes its input through the screen hooks.
     Mod,
-    /// PvP & HUD's widget editor (game/interface/hud_editor.rs).
-    HudEditor,
 }
 impl Screen {
     /// The id native mods see for this screen (`ScreenView.id`, the
@@ -823,7 +821,6 @@ impl Screen {
             Screen::Win => "win",
             Screen::DebugOptions => "debug_options",
             Screen::Mod => "mod",
-            Screen::HudEditor => "hud_editor",
         }
     }
 }
@@ -1346,9 +1343,14 @@ pub struct WorldTables {
     pub reload_sources: Option<Arc<sunrise_sim::crafting::ResolvedSources>>,
     /// The values of the data map types native mods registered (`native_data_map_types`).
     pub data_maps: native_data_maps_common::DataMaps,
-    /// Pack tags used by advancement predicates and built-in data maps
-    /// (`TagLoader.loadTagsForExistingRegistries`). Damage tags live in the catalog.
-    pub pack_tags: HashMap<&'static str, HashMap<String, HashSet<String>>>,
+    /// Pack tags used by advancement predicates, built-in data maps, and mod-declared static
+    /// custom registries (`TagLoader.loadTagsForExistingRegistries`). Damage tags live in the
+    /// catalog. Keyed by directory for `minecraft:` registries (`"worldgen/biome"`, ...) and
+    /// full canonical registry ID for mod-declared custom static registries (`"chemlib:gas"`).
+    /// Member order is vanilla's (`TagLoader.tryBuildTag`'s `LinkedHashSet`), kept for
+    /// `Tags::entries`, with constant-time membership.
+    /// Shared with the wire's `WorldTags`, never copied.
+    pub pack_tags: Arc<sunrise_sim::lan::data::PackTags>,
     /// The gameplay attributes of the dimension types, biomes and timelines (with the packs' timeline tags) that the raid code reads.
     pub gameplay: Arc<sunrise_sim::patrol::GameplayAttributes>,
     /// `Registries.TEST_ENVIRONMENT` and `Registries.TEST_INSTANCE`, frozen at world open.
@@ -2273,10 +2275,11 @@ impl crate::game::CommonGame<'_> {
             }
             None => (None, None),
         };
-        let (rain, thunder) = self.world.weather.levels(1.0);
+        let levels = self.world.weather.levels(1.0);
         // Level.canHaveWeather: sky light, no ceiling and not the End.
-        let weather =
+        let can_have_weather =
             self.world.shape.sky_light && !self.world.shape.has_ceiling && self.dim != Dim::End;
+        let (raining, thundering) = weather::loot_weather(levels, can_have_weather);
         sunrise_world::loot::LootPlace {
             origin: Some(origin),
             block_entity,
@@ -2286,8 +2289,8 @@ impl crate::game::CommonGame<'_> {
                 dimension: self.dim.id().to_owned(),
                 game_time: self.world.game_time,
                 day_time: self.world.day_time,
-                raining: weather && rain > 0.2,
-                thundering: weather && thunder > 0.9,
+                raining,
+                thundering,
                 clocks: self.loot_clock_ticks(),
             }),
         }
@@ -3724,10 +3727,10 @@ pub fn in_own_process(name: &str, body: impl FnOnce()) {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(
-        out.status.success() && report.contains("test result: ok. 1 passed;"),
-        "{name} failed in its own process:\n{report}"
-    );
+    if !(out.status.success() && report.contains("test result: ok. 1 passed;")) {
+        eprint!("{report}");
+        panic!("child test process failed");
+    }
 }
 #[allow(unused_imports)]
 pub use {
@@ -4126,6 +4129,9 @@ pub mod native_resources;
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_fixtures;
+
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_resource_cache;
 
 #[cfg(test)]
 mod native_entity_refs {

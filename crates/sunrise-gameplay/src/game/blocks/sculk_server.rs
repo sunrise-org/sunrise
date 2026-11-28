@@ -3,7 +3,7 @@
 //! ticker, redstone output, resonance, shrieks, warden summoning, and catalysts.
 use super::Result;
 use crate::game::server_side::lan_entities::advance_entity_id_counter;
-use mod_api::client::particles::PositionSource;
+use mod_api::PositionSource;
 use std::collections::HashSet;
 use sunrise_core::{
     geometry::{Aabb, Direction, Vec3},
@@ -50,14 +50,20 @@ pub(in crate::game) struct PlayerEvents {
     pub(in crate::game) mount: Option<(u32, [f64; 3])>,
 }
 
+/// Per-level sculk state exchanged on level swap.
+#[derive(Default)]
+pub struct SculkLevelState {
+    /// The sculk block entities in the order they were added.
+    pub(in crate::game) index: Index,
+    pub known: HashSet<(i32, i32)>,
+}
+
 #[derive(Default)]
 pub struct SculkState {
     /// The player's warning level toward a warden.
     pub tracker: WardenSpawnTracker,
     pub(in crate::game) tables: Tables,
-    /// The sculk block entities in the order they were added.
-    pub(in crate::game) index: Index,
-    pub known: HashSet<(i32, i32)>,
+    pub level: SculkLevelState,
     /// The chunk map's membership revision `known` was taken at.
     pub known_revision: Option<u64>,
     /// The active player's movement-emission state (mobs keep their own).
@@ -114,9 +120,8 @@ impl SculkState {
 
     /// Exchange the level-held parts (its sculk block entities and the
     /// chunks scanned for them) with another level's (game/world/levels.rs).
-    pub(in crate::game::server_side) fn swap_level(&mut self, other: &mut Self) {
-        std::mem::swap(&mut self.index, &mut other.index);
-        std::mem::swap(&mut self.known, &mut other.known);
+    pub(in crate::game::server_side) fn swap_level(&mut self, other: &mut SculkLevelState) {
+        std::mem::swap(&mut self.level, other);
     }
 }
 /// An insertion-ordered set of block positions (`Level.blockEntityTickers`
@@ -344,7 +349,7 @@ impl crate::game::ServerGame<'_> {
                 order.push((
                     event,
                     ctx.source.and_then(|source| source.actor()),
-                    self.server.lan_entity_events.len(),
+                    self.server.lan_queues.entity_events.len(),
                     if self.common.is_logical_server() {
                         self.server.pending_sounds.len()
                     } else {
@@ -407,7 +412,7 @@ impl crate::game::ServerGame<'_> {
         }
         let at = block_of(pos);
         let radius = sculk::notification_radius(event).min(16);
-        let near = self.server.sculk.index.within(at, radius);
+        let near = self.server.sculk.level.index.within(at, radius);
         // The wardens and allays that may hear it, in the mobs' order, while
         // the slots taken for the mobs' events hold; else every mob is asked.
         let mobs = self.server.sculk.mob_slots.as_ref().and_then(|s| {
@@ -682,7 +687,7 @@ impl crate::game::ServerGame<'_> {
         // every player's tickets (`update_chunk_tickets`), once the chunk is
         // lit: asked once per chunk, as the sensors share few chunks. Nothing
         // a sculk tick does loads, unloads or lights a chunk or moves a ticket.
-        let levels = self.server.tickets.0.levels();
+        let levels = self.server.chunk_ticking.tickets.levels();
         let chunks = &self.common.world.chunks;
         let pending = &self.common.world.entities_pending;
         let mut ticking = FxHashMap::<(i32, i32), bool>::default();
@@ -700,6 +705,7 @@ impl crate::game::ServerGame<'_> {
         let due: Vec<((i32, i32, i32), bool)> = self
             .server
             .sculk
+            .level
             .index
             .iter()
             .filter_map(|&key| {
@@ -824,6 +830,7 @@ impl crate::game::ServerGame<'_> {
         let listeners: Vec<serde_json::Value> = self
             .server
             .sculk
+            .level
             .index
             .iter()
             .filter_map(|key| match self.common.world.block_entities.get(key) {
@@ -844,7 +851,7 @@ impl crate::game::ServerGame<'_> {
             "warning_level": self.server.sculk.tracker.warning_level,
             "cooldown": self.server.sculk.tracker.cooldown_ticks,
             "darkness": 0.0,
-            "chunks_known": self.server.sculk.known.len(),
+            "chunks_known": self.server.sculk.level.known.len(),
         })
     }
     /// `WardenSpawnTrackerCommand`: clear the player's tracker or set its
@@ -1024,7 +1031,7 @@ impl crate::game::ServerGame<'_> {
             self.server.sculk.known_revision = Some(revision);
             let loaded: HashSet<(i32, i32)> = self.common.world.chunks.keys().copied().collect();
             let arrived: Vec<(i32, i32)> = loaded
-                .difference(&self.server.sculk.known)
+                .difference(&self.server.sculk.level.known)
                 .copied()
                 .collect();
             for key in arrived {
@@ -1035,6 +1042,7 @@ impl crate::game::ServerGame<'_> {
             let gone: HashSet<(i32, i32)> = self
                 .server
                 .sculk
+                .level
                 .known
                 .difference(&loaded)
                 .copied()
@@ -1042,10 +1050,11 @@ impl crate::game::ServerGame<'_> {
             if !gone.is_empty() {
                 self.server
                     .sculk
+                    .level
                     .index
                     .retain(|p| !gone.contains(&(p.0 >> 4, p.2 >> 4)));
             }
-            self.server.sculk.known = loaded;
+            self.server.sculk.level.known = loaded;
         }
         self.sculk_sync_writes();
     }
@@ -1064,7 +1073,7 @@ impl crate::game::ServerGame<'_> {
     /// `LevelChunk.removeGameEventListener`: unregister a sculk block entity's
     /// game-event listener when its block entity is removed.
     pub(super) fn sculk_unregister_listener(&mut self, key: (i32, i32, i32)) {
-        self.server.sculk.index.remove(&key);
+        self.server.sculk.level.index.remove(&key);
     }
 
     pub(in crate::game::server_side) fn sculk_sync_writes(&mut self) {
@@ -1088,13 +1097,13 @@ impl crate::game::ServerGame<'_> {
             ) {
                 self.common.world.block_entities.remove(&key);
             }
-            self.server.sculk.index.remove(&key);
+            self.server.sculk.level.index.remove(&key);
             if let Some(e) = Self::entity_for_kind(new_kind) {
                 self.common
                     .world
                     .block_entities
                     .insert(key, BlockEntity::Sculk(Box::new(e)));
-                self.server.sculk.index.insert(key);
+                self.server.sculk.level.index.insert(key);
             }
         }
     }
@@ -1140,7 +1149,7 @@ impl crate::game::ServerGame<'_> {
                     .block_entities
                     .insert(pos, BlockEntity::Sculk(Box::new(e)));
             }
-            self.server.sculk.index.insert(pos);
+            self.server.sculk.level.index.insert(pos);
         }
     }
     pub(in crate::game::server_side) fn sculk_entity(
@@ -1382,7 +1391,7 @@ impl crate::game::ServerGame<'_> {
         ctx: &Context,
     ) {
         let Some(entity) = self.sculk_entity(key) else {
-            self.server.sculk.index.remove(&key);
+            self.server.sculk.level.index.remove(&key);
             return;
         };
         let (kind, radius, busy) = (
@@ -1578,7 +1587,7 @@ impl crate::game::ServerGame<'_> {
     ) -> Result<()> {
         let time = self.common.world.game_time;
         let Some(entity) = self.sculk_entity(key) else {
-            self.server.sculk.index.remove(&key);
+            self.server.sculk.level.index.remove(&key);
             return Ok(());
         };
         match entity.kind {
@@ -1764,7 +1773,7 @@ impl crate::game::ServerGame<'_> {
                 (at[1] - 0.2).floor() as i32,
                 at[2].floor() as i32,
             );
-            if !self.server.sculk.index.contains(&key) {
+            if !self.server.sculk.level.index.contains(&key) {
                 continue;
             }
             let state = self.common.world.block(key.0, key.1, key.2);
@@ -2033,7 +2042,7 @@ impl crate::game::ServerGame<'_> {
         // order they registered in. The first one takes the experience.
         let source = block_of(at);
         let mut candidates: Vec<(f64, (i32, i32, i32), usize, (i32, i32, i32))> = Vec::new();
-        for (order, key) in self.server.sculk.index.iter().copied().enumerate() {
+        for (order, key) in self.server.sculk.level.index.iter().copied().enumerate() {
             if dist_sqr(source, key) > 64 {
                 continue;
             }
@@ -2826,5 +2835,175 @@ pub mod item_use_event_fixture {
         if RECORDING.get() {
             EVENTS.with(|events| events.borrow_mut().push((event, pos, source)));
         }
+    }
+}
+
+#[cfg(test)]
+mod swap_level_tests {
+    use super::*;
+
+    fn sorted_coords(set: &HashSet<(i32, i32)>) -> Vec<(i32, i32)> {
+        let mut out: Vec<_> = set.iter().copied().collect();
+        out.sort_unstable();
+        out
+    }
+
+    #[test]
+    fn swap_level_exchanges_per_level_fields_only() {
+        let stamp = sunrise_sim::join_seq::JoinList::<u32>::default().stamp();
+        let mut index_a = Index::default();
+        index_a.insert((1, 64, 2));
+        index_a.insert((3, 65, 4));
+        let mut index_b = Index::default();
+        index_b.insert((-5, 70, -6));
+
+        let mut sculk = SculkState {
+            tracker: WardenSpawnTracker {
+                ticks_since_last_warning: 120,
+                warning_level: 2,
+                cooldown_ticks: 45,
+            },
+            tables: Tables {
+                built: true,
+                kinds: vec![0, KIND_SENSOR, KIND_SHRIEKER],
+                occludes: vec![false, true],
+                dampens: vec![true, false],
+                resonator: vec![false, false, true],
+                climbable: vec![true],
+                redstone_ore: vec![false, true],
+            },
+            level: SculkLevelState {
+                index: index_a,
+                known: [(0, 0), (1, 2)].into_iter().collect(),
+            },
+            known_revision: Some(99),
+            steps: Some(Steps {
+                move_dist: 1.5,
+                next_step: 2.5,
+                last: [1.0, 64.0, 2.0],
+                on_ground: true,
+                in_water: false,
+            }),
+            falling_items: [101, 102].into_iter().collect(),
+            mounts: [
+                (Who::Player, (7, [1.0, 2.0, 3.0])),
+                (Who::Mob(8), (9, [4.0, 5.0, 6.0])),
+            ]
+            .into_iter()
+            .collect(),
+            damaged: [(14, 500)].into_iter().collect(),
+            mob_slots: Some(MobSlots {
+                by_id: [(14, 0)].into_iter().collect(),
+                listeners: vec![(0, 14)],
+                next_entity: 33,
+            }),
+            last_health: Some(18.5),
+            actor: Some(Who::Player),
+            ticks: 77,
+            tracker_loaded: true,
+            listeners: vec![3, 5],
+            listeners_of: Some(stamp),
+        };
+        let mut parked = SculkLevelState {
+            index: index_b,
+            known: [(-3, -4)].into_iter().collect(),
+        };
+
+        let check_non_level = |s: &SculkState| {
+            assert_eq!(
+                s.tracker,
+                WardenSpawnTracker {
+                    ticks_since_last_warning: 120,
+                    warning_level: 2,
+                    cooldown_ticks: 45,
+                }
+            );
+            assert!(s.tables.built);
+            assert_eq!(s.tables.kinds, vec![0, KIND_SENSOR, KIND_SHRIEKER]);
+            assert_eq!(s.tables.occludes, vec![false, true]);
+            assert_eq!(s.tables.dampens, vec![true, false]);
+            assert_eq!(s.tables.resonator, vec![false, false, true]);
+            assert_eq!(s.tables.climbable, vec![true]);
+            assert_eq!(s.tables.redstone_ore, vec![false, true]);
+            assert_eq!(s.known_revision, Some(99));
+            let steps = s.steps.unwrap();
+            assert_eq!(
+                (
+                    steps.move_dist,
+                    steps.next_step,
+                    steps.last,
+                    steps.on_ground,
+                    steps.in_water
+                ),
+                (1.5, 2.5, [1.0, 64.0, 2.0], true, false)
+            );
+            assert_eq!(s.falling_items.len(), 2);
+            assert!(s.falling_items.contains(&101) && s.falling_items.contains(&102));
+            assert_eq!(s.mounts.len(), 2);
+            assert_eq!(s.mounts.get(&Who::Player), Some(&(7, [1.0, 2.0, 3.0])));
+            assert_eq!(s.mounts.get(&Who::Mob(8)), Some(&(9, [4.0, 5.0, 6.0])));
+            assert_eq!(s.damaged.len(), 1);
+            assert_eq!(s.damaged.get(&14), Some(&500));
+            let slots = s.mob_slots.as_ref().unwrap();
+            assert_eq!(slots.by_id.len(), 1);
+            assert_eq!(slots.by_id.get(&14), Some(&0));
+            assert_eq!(slots.listeners, vec![(0, 14)]);
+            assert_eq!(slots.next_entity, 33);
+            assert_eq!(s.last_health, Some(18.5));
+            assert_eq!(s.actor, Some(Who::Player));
+            assert_eq!(s.ticks, 77);
+            assert!(s.tracker_loaded);
+            assert_eq!(s.listeners, vec![3, 5]);
+            assert_eq!(s.listeners_of, Some(stamp));
+        };
+
+        sculk.swap_level(&mut parked);
+        check_non_level(&sculk);
+        assert_eq!(sculk.level.index.order, vec![(-5, 70, -6)]);
+        assert_eq!(sculk.level.index.set.len(), 1);
+        assert!(sculk.level.index.contains(&(-5, 70, -6)));
+        assert_eq!(
+            sculk.level.index.within([-5, 70, -6], 16),
+            vec![(-5, 70, -6)]
+        );
+        assert!(sculk.level.index.within([1, 64, 2], 8).is_empty());
+        assert_eq!(sorted_coords(&sculk.level.known), vec![(-3, -4)]);
+        assert_eq!(parked.index.order, vec![(1, 64, 2), (3, 65, 4)]);
+        assert_eq!(parked.index.set.len(), 2);
+        assert!(parked.index.contains(&(1, 64, 2)) && parked.index.contains(&(3, 65, 4)));
+        assert_eq!(
+            parked.index.within([2, 64, 3], 16),
+            vec![(1, 64, 2), (3, 65, 4)]
+        );
+        assert!(parked.index.within([-5, 70, -6], 8).is_empty());
+        assert_eq!(sorted_coords(&parked.known), vec![(0, 0), (1, 2)]);
+
+        // Inserting into the swapped-in index preserves rank ordering against existing cells.
+        sculk.level.index.insert((-4, 70, -5));
+        assert_eq!(sculk.level.index.order, vec![(-5, 70, -6), (-4, 70, -5)]);
+        assert_eq!(sculk.level.index.set.len(), 2);
+        assert_eq!(
+            sculk.level.index.within([-5, 70, -6], 16),
+            vec![(-5, 70, -6), (-4, 70, -5)]
+        );
+
+        sculk.swap_level(&mut parked);
+        check_non_level(&sculk);
+        assert_eq!(sculk.level.index.order, vec![(1, 64, 2), (3, 65, 4)]);
+        assert_eq!(sculk.level.index.set.len(), 2);
+        assert!(sculk.level.index.contains(&(1, 64, 2)) && sculk.level.index.contains(&(3, 65, 4)));
+        assert_eq!(
+            sculk.level.index.within([2, 64, 3], 16),
+            vec![(1, 64, 2), (3, 65, 4)]
+        );
+        assert_eq!(sorted_coords(&sculk.level.known), vec![(0, 0), (1, 2)]);
+        assert_eq!(parked.index.order, vec![(-5, 70, -6), (-4, 70, -5)]);
+        assert_eq!(parked.index.set.len(), 2);
+        assert!(parked.index.contains(&(-5, 70, -6)) && parked.index.contains(&(-4, 70, -5)));
+        assert_eq!(
+            parked.index.within([-5, 70, -6], 16),
+            vec![(-5, 70, -6), (-4, 70, -5)]
+        );
+        assert_eq!(sorted_coords(&parked.known), vec![(-3, -4)]);
     }
 }

@@ -903,51 +903,139 @@ impl crate::game::ServerGame<'_> {
                 ],
             )
         });
-        let (mut gained, taken) = self.with_lifted_orbs(
+        // The batch is lifted while it is searched, as the pass's other kinds are; the orb is
+        // taken from the restored list, where a `pickup_xp` listener reaches it.
+        let touched = self.with_lifted_orbs(
             sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst,
             |game, orbs| {
                 #[cfg(any(test, feature = "test-support"))]
                 crate::game::server_side::entity_server::taken_pass_tests::after_take(game);
-                let mut gained = 0i32;
-                let mut taken = Vec::new();
-                if let Some((min, max)) = bounds {
-                    orbs.retain_mut(|o| {
-                        let touching = o.position.x + 0.25 > min[0]
-                            && o.position.x - 0.25 < max[0]
-                            && o.position.y + 0.5 > min[1]
-                            && o.position.y < max[1]
-                            && o.position.z + 0.25 > min[2]
-                            && o.position.z - 0.25 < max[2];
-                        if touching && game.server.xp_delay == 0 {
-                            // ExperienceOrb.playerTouch: one orb every 2 ticks; a
-                            // merged orb gives its value once per count.
-                            game.server.xp_delay = 2;
-                            gained = gained.saturating_add(o.value);
-                            taken.push(o.clone());
-                            o.count -= 1;
-                            return o.count > 0;
-                        }
-                        true
-                    });
-                }
-                (gained, taken)
+                // ExperienceOrb.playerTouch takes nothing while takeXpDelay runs, and sets it to 2 when
+                // it takes one: at most one orb a tick.
+                bounds
+                    .filter(|_| game.server.xp_delay == 0)
+                    .and_then(|(min, max)| {
+                        orbs.iter()
+                            .find(|o| {
+                                o.position.x + 0.25 > min[0]
+                                    && o.position.x - 0.25 < max[0]
+                                    && o.position.y + 0.5 > min[1]
+                                    && o.position.y < max[1]
+                                    && o.position.z + 0.25 > min[2]
+                                    && o.position.z - 0.25 < max[2]
+                            })
+                            .map(|o| o.join)
+                    })
             },
         );
+        if let Some(index) = touched.and_then(|join| self.common.orbs.locate(join)) {
+            self.host_take_orb(index);
+        }
+    }
+
+    /// `ExperienceOrb.playerTouch` for the host's own player, whose `takeXpDelay` is 0, and the
+    /// resident orb at `index`: `pickup_xp` (NeoForge's `PlayerXpEvent.PickupXp`), then
+    /// `takeXpDelay = 2`, the take animation and sound, Mending with the orb's signed value and
+    /// the rest as points, then one off the orb's count, discarding it at 0. False when a mod
+    /// vetoed the pickup or removed the orb.
+    pub(in crate::game) fn host_take_orb(&mut self, index: usize) -> bool {
+        let join = self.common.orbs[index].join;
+        let orb_id = self.common.orbs[index].id;
+        // On a server only (the guests' pass asks the same), and only when a mod hears it.
+        let server = self.common.is_logical_server()
+            || self.server.serving.is_some()
+            || self.common.options.dedicated.is_some();
+        if server
+            && mod_api::__private::listened(mod_api::HookId::PickupXp)
+            && let Some(epoch) = self.common.native_lifecycle.epoch()
+        {
+            let orb = mod_api::ExperienceOrbRef::new(mod_api::EntityRef::new(epoch, orb_id));
+            let mut canceled = false;
+            let player = self.native_acting_id();
+            let dimension = self.common.dim.id();
+            self.native_pickup_xp(player, dimension, orb, &mut canceled);
+            if canceled {
+                return false;
+            }
+        }
+        // A callback may have committed a discard: the row stays until removals flush.
+        let live = |game: &Self| {
+            !game.server.held_out.contains(&orb_id)
+                && game.resident_source_target_visible(
+                    game.common.dim.key(),
+                    crate::game::commands::Target::Orb(orb_id),
+                )
+        };
+        if !live(self) {
+            return false;
+        }
+        let Some(index) = self.common.orbs.locate(join) else {
+            return false;
+        };
+        self.server.xp_delay = 2;
+        let o = self.common.orbs[index].clone();
+        // ClientPacketListener.handleTakeItemEntity: every orb taken sounds at the orb, whether
+        // Mending took its points or not.
+        let mut r = random_source::create();
+        let pitch = (r.next_float() - r.next_float()) * 0.35 + 0.9;
+        let at = [o.position.x, o.position.y, o.position.z];
+        self.server_play_sound("minecraft:entity.experience_orb.pickup", at, 0.1, pitch);
+        let value = o.value;
         // ExperienceOrb.playerTouch repairs with the signed value, whatever it is.
-        if !taken.is_empty() {
-            gained = self.mending(gained);
+        let rest = self.mending(value);
+        if rest > 0 {
+            self.give_experience_points(rest);
         }
-        for o in taken {
-            // ClientPacketListener.handleTakeItemEntity: every orb taken sounds
-            // at the orb, whether mending took its points or not.
-            let mut r = random_source::create();
-            let pitch = (r.next_float() - r.next_float()) * 0.35 + 0.9;
-            let at = [o.position.x, o.position.y, o.position.z];
-            self.server_play_sound("minecraft:entity.experience_orb.pickup", at, 0.1, pitch);
+        if !live(self) {
+            return false;
         }
-        if gained > 0 {
-            self.give_experience_points(gained);
+        // A merged orb gives its value once per count and goes at zero.
+        if let Some(index) = self.common.orbs.locate(join) {
+            if self.common.orbs[index].count <= 1 {
+                self.remove_orb(index);
+            } else {
+                self.common.orbs[index].count -= 1;
+            }
         }
+        true
+    }
+
+    /// `ExperienceOrb.playerTouch` now, for the player in place (the host's own, or the guest
+    /// whose turn it is) and the resident orb `id`: what the pass does for the orb it takes,
+    /// whether or not the orb is in reach. False while `takeXpDelay` runs, for a player with no
+    /// body here, and when a mod vetoes the pickup through `pickup_xp`.
+    pub(in crate::game) fn native_touch_orb_now(&mut self, id: u32) -> bool {
+        let Some(index) = self.common.orbs.iter().position(|o| o.id == id) else {
+            return false;
+        };
+        // In a guest's turn, `xp_delay` is the guest's own `takeXpDelay`.
+        if self.server.xp_delay > 0 {
+            return false;
+        }
+        if let Some(conn) = self.server.lan_acting {
+            let Some(host) = self.server.lan.as_ref() else {
+                return false;
+            };
+            let Some(guest) = host
+                .hub
+                .guests
+                .connection_index(conn)
+                .map(|gi| &host.hub.guests[gi])
+            else {
+                return false;
+            };
+            let (collector, position, uuid, name) = (
+                guest.entity_id,
+                guest.position,
+                guest.uuid,
+                guest.name.clone(),
+            );
+            return self.guest_take_orb(conn, collector, position, uuid, &name, index);
+        }
+        if self.common.player.is_none() {
+            return false;
+        }
+        self.host_take_orb(index)
     }
 
     /// `ServerLevel.addFreshEntity` of the item `id` that `push_item_entity`
@@ -1286,3 +1374,5 @@ use sunrise_gameplay_common::game::entity_sections::EntitySectionsGameExt1 as _;
 use sunrise_gameplay_common::game::held_items::HeldItemsGameExt1 as _;
 
 use sunrise_gameplay_common::game::native_ticks::NativeTicksGameExt1 as _;
+
+use sunrise_gameplay_common::game::native_hooks::ModGameExt1 as _;

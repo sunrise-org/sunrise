@@ -1,7 +1,7 @@
 //! The `anvil_craft_pre` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
 
 pub trait Hooks {
-    /// A player took an anvil's result at `pos` (`AnvilCraftEvent.Pre`, matching NeoForge `AnvilMenu.onTake`), before the levels are charged, the inputs used up and the anvil worn. `inputs` borrows the input stacks and result from before the take. Set `cancel` to return early before charging levels, consuming inputs, damaging the anvil or firing `anvil_craft_post`, without undoing the click's item move (the listener handles any post-processing itself).
+    /// A player took an anvil's result at `pos` (`AnvilCraftEvent.Pre`, matching NeoForge `AnvilMenu.onTake`), before the levels are charged, the inputs used up and the anvil worn. `inputs` borrows the input stacks, result and level cost (`xp_cost`) from before the take. Set `cancel` to return early before charging levels, consuming inputs, damaging the anvil or firing `anvil_craft_post`, without undoing the click's item move (the listener handles any post-processing itself).
     #[hook(
         target = "sunrise_gameplay::game::native_hooks::base::ServerGame<'_>::native_anvil_craft_pre",
         dispatch = "flat",

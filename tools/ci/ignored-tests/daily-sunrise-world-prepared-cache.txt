@@ -1,0 +1,3 @@
+sunrise-world level::data::cache::tests::cache_invalidates_sources_and_recovers_from_corruption lib daily resources
+sunrise-world level::data::cache::tests::registry_snapshot_roundtrips_and_recovers_from_corruption lib daily resources
+sunrise-world level::data::cache::tests::resolved_snapshot_roundtrips_all_fields lib daily resources

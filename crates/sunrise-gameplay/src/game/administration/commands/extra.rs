@@ -269,12 +269,9 @@ impl crate::game::ServerGame<'_> {
         let style_literal = ctx.literals.iter().any(|l| l == "style");
         let message = if style_literal {
             icon.style = if ctx.literals.iter().any(|l| l == "reset") {
-                "minecraft:default".into()
+                Icon::default_style()
             } else {
-                match ctx.get("style") {
-                    Some(Arg::Resource(s)) => s.clone(),
-                    _ => "minecraft:default".into(),
-                }
+                Self::waypoint_style_arg(ctx)?
             };
             Text::translate("commands.waypoint.modify.style", &[])
         } else if ctx.literals.iter().any(|l| l == "reset") {
@@ -764,15 +761,25 @@ impl crate::game::ServerGame<'_> {
             Some(Tag::Int(rgb)) => Some(*rgb),
             _ => None,
         };
-        Some(Icon {
-            style: style.to_string_lossy(),
-            color,
-        })
+        // `Waypoint.Icon.CODEC`'s style is a resource key: one that is no identifier fails
+        // the icon, which then stays the default.
+        let style = sunrise_core::identifier::Identifier::parse(&style.to_string_lossy()).ok()?;
+        Some(Icon { style, color })
+    }
+    /// `/waypoint modify <waypoint> style set <style>`: the style as a typed id. A style that
+    /// is no identifier fails as `Identifier.read` does (`argument.id.invalid`), never
+    /// falling back to the default icon.
+    fn waypoint_style_arg(ctx: &Context) -> R<sunrise_core::identifier::Identifier> {
+        let Some(Arg::Resource(style)) = ctx.get("style") else {
+            return Err(err("argument.resource.invalid_type", &[]));
+        };
+        sunrise_core::identifier::Identifier::parse(style)
+            .map_err(|_| err("argument.id.invalid", &[]))
     }
     /// `LivingEntity.addAdditionalSaveData`'s `locator_bar_icon`: written only
     /// when the icon `hasData`, so any other icon takes the key out.
     pub(in crate::game) fn save_waypoint_icon(icon: &Icon, entity: &mut Option<Tag>) {
-        if icon.style == "minecraft:default" && icon.color.is_none() {
+        if icon.style == Icon::default_style() && icon.color.is_none() {
             if let Some(Tag::Compound(map)) = entity {
                 map.remove(&JavaString::from("locator_bar_icon"));
             }
@@ -796,7 +803,7 @@ pub(in crate::game) mod waypoint_icon_save_tests {
 
     fn icon(style: &str, color: Option<i32>) -> Icon {
         Icon {
-            style: style.into(),
+            style: sunrise_core::identifier::Identifier::parse(style).unwrap(),
             color,
         }
     }
@@ -821,6 +828,52 @@ pub(in crate::game) mod waypoint_icon_save_tests {
         assert_eq!(
             crate::game::ServerGame::waypoint_icon_from_saved(Some(&saved)),
             Some(icon("minecraft:bowtie", Some(0x00FF_0000)))
+        );
+    }
+
+    fn style_context(style: &str) -> Context {
+        Context {
+            root: 0,
+            nodes: vec![],
+            args: vec![sunrise_command::ParsedArg {
+                name: "style".into(),
+                value: Arg::Resource(style.into()),
+                range: (0, 0),
+            }],
+            command: None,
+            executor: None,
+            range: (0, 0),
+            child: None,
+            literals: vec![],
+        }
+    }
+
+    /// `/waypoint modify … style set` (#6064): a style that is no identifier is refused with
+    /// `argument.id.invalid`, not replaced by the default icon.
+    #[test]
+    fn a_style_argument_that_is_no_identifier_is_refused() {
+        let refused =
+            crate::game::ServerGame::waypoint_style_arg(&style_context("Bad Style!")).unwrap_err();
+        assert_eq!(refused.key, "argument.id.invalid");
+        let style =
+            crate::game::ServerGame::waypoint_style_arg(&style_context("mod:flag_1")).unwrap();
+        assert_eq!(style.as_str(), "mod:flag_1");
+    }
+
+    /// `Waypoint.Icon.CODEC`'s style is a resource key (#6064): a saved style that is no
+    /// identifier fails the icon, so the entity keeps the default one.
+    #[test]
+    fn a_saved_style_that_is_no_identifier_loads_no_icon() {
+        let saved = Tag::compound([(
+            "locator_bar_icon",
+            Tag::compound([
+                ("style", Tag::String("Bad Style!".into())),
+                ("color", Tag::Int(7)),
+            ]),
+        )]);
+        assert_eq!(
+            crate::game::ServerGame::waypoint_icon_from_saved(Some(&saved)),
+            None
         );
     }
 

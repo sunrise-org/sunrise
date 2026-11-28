@@ -1,5 +1,6 @@
 //! Declared content, config files, registry keys and the crash report.
 
+pub(crate) mod arm_pose;
 pub(crate) mod attached_storage;
 pub(crate) mod content_declarations;
 // hidden: a module of game-side types; mods use their re-exports

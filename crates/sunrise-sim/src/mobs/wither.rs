@@ -60,27 +60,35 @@ pub fn register(m: &mut Mob) {
 pub fn shielded_from(victim: Species, attacker: Species) -> bool {
     victim == Species::Wither && undead(attacker)
 }
+/// `shielded_from` for a damage source that carries only the attacker's portable
+/// species id (`Damage.attacker_species`).
+pub(super) fn shielded_from_id(victim: Species, attacker: &str) -> bool {
+    victim == Species::Wither
+        && UNDEAD
+            .into_iter()
+            .any(|species| super::species::vanilla_id(species) == attacker)
+}
 /// `#wither_friends`: the undead.
 fn undead(s: Species) -> bool {
-    matches!(
-        s,
-        Species::Zombie
-            | Species::Husk
-            | Species::Drowned
-            | Species::ZombieVillager
-            | Species::Skeleton
-            | Species::Stray
-            | Species::Bogged
-            | Species::Parched
-            | Species::WitherSkeleton
-            | Species::ZombieHorse
-            | Species::SkeletonHorse
-            | Species::Phantom
-            | Species::ZombifiedPiglin
-            | Species::Zoglin
-            | Species::Wither
-    )
+    UNDEAD.contains(&s)
 }
+const UNDEAD: [Species; 15] = [
+    Species::Zombie,
+    Species::Husk,
+    Species::Drowned,
+    Species::ZombieVillager,
+    Species::Skeleton,
+    Species::Stray,
+    Species::Bogged,
+    Species::Parched,
+    Species::WitherSkeleton,
+    Species::ZombieHorse,
+    Species::SkeletonHorse,
+    Species::Phantom,
+    Species::ZombifiedPiglin,
+    Species::Zoglin,
+    Species::Wither,
+];
 /// `WitherDoNothingGoal`: still while charging.
 #[derive(Clone, Debug)]
 struct DoNothing;
@@ -1022,6 +1030,7 @@ mod upstream_sync_tests {
                     let seen = [cow.seen(None, &crate::items::Items::empty())];
                     let world = crate::mobs::MobWorld {
                         side: crate::motion::dry_side(),
+                        variant_tables: None,
                         others: &seen,
                         ..w.clone()
                     };

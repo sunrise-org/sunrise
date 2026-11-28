@@ -45,7 +45,7 @@ pub(crate) mod tests {
             let living = game.living(game.entity(13).unwrap()).unwrap();
             assert!(!game.living_start_gliding(living));
             // The player in place and a guest start their own body's flag.
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 20, 20);
             let player = game.living(game.entity(20).unwrap()).unwrap();
             assert!(game.living_start_gliding(player));
@@ -241,7 +241,6 @@ pub(crate) mod tests {
         let net = NetConfig {
             listen: false,
             announce: false,
-            lod_distance: 0,
             ..NetConfig::lan(0, String::new(), 2)
         };
         let config = HubConfig {
@@ -765,7 +764,7 @@ pub(crate) mod tests {
             let (outer, _rx) = guest(game, 12);
             let (inner, _rx2) = guest(game, 13);
             bed(game, "minecraft:red_bed", [5, 64, 5]);
-            let motion = PlayerMotion::new(game.motion, Vec3::ZERO).unwrap();
+            let motion = PlayerMotion::new(game.motion, Vec3::ZERO);
             let mut fake = Guest::connectionless(14, 14, "fake14".into(), 14, [0.0; 3], motion);
             fake.dimension = game.dim.id().to_owned();
             game.server.lan.as_mut().unwrap().hub.guests.push(fake);
@@ -1028,7 +1027,7 @@ pub(crate) mod tests {
     /// The vertical velocity left to a sneaking player at `(5.5, 64, 5.5)` falling at -0.3
     /// after `handle_on_climbable`.
     fn sneaking_slide(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> f64 {
-        let mut player = PlayerMotion::new(game.motion, Vec3::new(5.5, 64.0, 5.5)).unwrap();
+        let mut player = PlayerMotion::new(game.motion, Vec3::new(5.5, 64.0, 5.5));
         player.shift_key_down = true;
         use sunrise_gameplay_common::game::side_ops::world::WorldSideGameExt as _;
         let meta = game.side_game_side_meta();
@@ -1063,7 +1062,7 @@ pub(crate) mod tests {
         game: &mut sunrise_gameplay::game::ServerGame<'_>,
         id: i32,
     ) -> (bool, Option<BlockPos>) {
-        let mut player = PlayerMotion::new(game.motion, Vec3::new(5.5, 64.0, 5.5)).unwrap();
+        let mut player = PlayerMotion::new(game.motion, Vec3::new(5.5, 64.0, 5.5));
         player.entity_id = id;
         use sunrise_gameplay_common::game::side_ops::world::WorldSideGameExt as _;
         let meta = game.side_game_side_meta();

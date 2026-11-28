@@ -239,13 +239,10 @@ pub(crate) mod registered_slot_source_preservation_tests {
             &mut resources,
             directory.path().join("slot-source-player-this-world"),
         );
-        game.player = Some(
-            sunrise_sim::motion::PlayerMotion::new(
-                game.motion,
-                sunrise_core::geometry::Vec3::new(0.5, 101.0, 0.5),
-            )
-            .unwrap(),
-        );
+        game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+            game.motion,
+            sunrise_core::geometry::Vec3::new(0.5, 101.0, 0.5),
+        ));
         assert!(game.server.command_source.is_none());
         assert!(game.run_command(
             r#"item replace entity @s {type:"slot_range",source:"this",slots:"weapon.mainhand"} with minecraft:stone"#

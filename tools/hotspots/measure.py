@@ -46,11 +46,14 @@ import os
 import re
 import subprocess
 import sys
+import tomllib
+from pathlib import Path
 
 MIN_GIT = (2, 38)
 GITHUB_MERGE = re.compile(r"Merge pull request #(\d+) from [^/\s]+/(\S+)")
 ROLLUP_BRANCH = re.compile(r"(^|[-/])rollup-?\d+$")
 SYNC_BRANCH = re.compile(r"(^|[-/_])sync([-/_]|$)")
+WATCHED = Path(__file__).with_name("watched")
 
 
 class Git:
@@ -353,7 +356,53 @@ def constructs(git, path, conflict_list):
     return found
 
 
-def report(git, raw, min_rollup, min_prs):
+def watched_rows(directory=WATCHED):
+    """The split files the churn report watches: (path, split PR, landing commit, path at landing).
+
+    `path` is where the file is today; `landing_path` is optional and names where it was when the
+    split landed, for a monolith that later moved with a crate split.
+    """
+    rows = []
+    for path in sorted(directory.glob("*.toml")):
+        try:
+            row = tomllib.loads(path.read_text(encoding="utf-8"))
+        except tomllib.TOMLDecodeError as error:
+            raise SystemExit(f"{path}: {error}") from error
+        fields = {}
+        for key in ("path", "split", "landing"):
+            value = row.get(key)
+            if not isinstance(value, str) or not value.strip():
+                raise SystemExit(f"{path}: each descriptor names a non-empty {key}")
+            fields[key] = value.strip()
+        landing_path = row.get("landing_path", fields["path"])
+        if not isinstance(landing_path, str) or not landing_path.strip():
+            raise SystemExit(f"{path}: landing_path must be a non-empty path when given")
+        rows.append((fields["path"], fields["split"], fields["landing"], landing_path.strip()))
+    return rows
+
+
+def watched_section(git, main, rows):
+    """The watched files with their line count at `main` and the growth since the split landed."""
+    out = ["### Watched splits", "",
+           "Top-level files a split PR broke up. The churn report lists them so they stay small; a positive delta "
+           "is growth since the split landed, and is not a gate.", ""]
+    for name, split, landing, landing_path in rows:
+        # Look the path up in the tree first: `git show` also exits 128 for an
+        # object it cannot read, which must surface instead of reading as a
+        # deletion. Then read the baseline at the split's own commit, so the
+        # number cannot drift from the file it describes.
+        _, listed = git.run("ls-tree", "-z", "--name-only", main, "--", f":(literal){name}")
+        if not listed:
+            out.append(f"- `{name}`: gone at `{main}` (split in {split})")
+            continue
+        at_split = git.out("show", f"{landing}:{landing_path}").count("\n")
+        now = git.out("show", f"{main}:{name}").count("\n")
+        out.append(f"- `{name}`: {now} lines ({now - at_split:+d} since the split in {split})")
+    out.append("")
+    return out
+
+
+def report(git, raw, min_rollup, min_prs, watched=None):
     rows = []
     for f, e in raw["files"].items():
         c = counts(e)
@@ -364,6 +413,11 @@ def report(git, raw, min_rollup, min_prs):
            f"`git merge-tree`. Listed: every file with {min_rollup} or more replayed rollup conflicts or {min_prs} or "
            "more distinct PRs. Made by `tools/hotspots/measure.py --report`; whether a file is a list that should "
            "become discovered is decided by a person, not by this report.", ""]
+    # Before the conflict details, which the nightly publisher may cut off:
+    # the watched splits stay visible on the busiest nights.
+    watched = watched_rows() if watched is None else watched
+    if watched:
+        out.extend(watched_section(git, raw["main"], watched))
     if not rows:
         out.append("No file reached either threshold.")
     for f, e, c in rows:

@@ -300,7 +300,7 @@ mod tests {
                 ),
             ],
             |game, hits, reads, cancel| {
-                let mut player = PlayerMotion::new(game.motion, Vec3::new(0.0, 64.0, 0.0)).unwrap();
+                let mut player = PlayerMotion::new(game.motion, Vec3::new(0.0, 64.0, 0.0));
                 player.ground.on_ground = true;
                 game.player = Some(player);
                 bind_local_player(game, 7, 1);
@@ -491,8 +491,7 @@ mod tests {
                     game.world
                         .chunks
                         .insert((0, 0), Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)));
-                    let mut player =
-                        PlayerMotion::new(game.motion, Vec3::new(0.0, 64.0, 0.0)).unwrap();
+                    let mut player = PlayerMotion::new(game.motion, Vec3::new(0.0, 64.0, 0.0));
                     player.entity_id = 7;
                     player.ground.on_ground = true;
                     game.player = Some(player);

@@ -8,8 +8,13 @@ Queries answer whether a tool harvests a block, and how fast a tick removes a su
 `ItemStack.isCorrectToolForDrops(state)`. It reads the stack's `minecraft:tool` component: the first rule
 that sets `correct_for_drops` and names the state's block decides, and a stack with no component or no such
 rule is not the correct tool. A rule that sets only a speed is skipped. It ignores whether the block needs a
-tool at all, the player, the position and every hook, so dirt answers `false` for a pickaxe. It returns `None`
-for an unknown state.
+tool at all, the player, the position and every hook, so dirt answers `false` for a pickaxe. It returns
+`None` for an unknown state.
+
+A rule's block tags (`#minecraft:mineable/pickaxe`) are, on the server, the open world's as its data packs
+bind them, the ones the game's own harvest reads, whether you ask through a host or inside a block
+callback's level. A friction part's level reads the game's built-in tags.
+On the client they are the game's built-in tags until the client receives the world's tables.
 
 ## What the game uses for a player
 

@@ -1,0 +1,3 @@
+# A new player's sent input and sprint against 26.3: ignored-tests.yml generates its private vanilla witness via
+# tools/test_network_parity.py --prepare-witness.
+sunrise-client cut_layout::game::client_side::remote_client::movement_input_tests::local_rotation_tests::a_new_player_sends_input_and_sprint_like_26_3 lib daily child-process

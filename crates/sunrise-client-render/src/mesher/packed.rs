@@ -250,9 +250,6 @@ pub fn layout_into(solid: &[TerrainVertex], tints: &[u32], out: &mut Vec<[u32; 6
 /// vertices of each quad without one, whose record holds the distance to them
 /// (`FULL`). Empty where that would not be smaller than the vertices, which is
 /// what makes the layout never a loss.
-///
-/// Shared with `lod::packed`, whose records hold a far tile's quads instead but
-/// spill and pad the same way.
 pub fn place(records: &[Option<[u32; 6]>], quads: &[[TerrainVertex; 4]]) -> Vec<[u32; 6]> {
     let mut out = Vec::new();
     place_into(records, quads, &mut out);

@@ -19,6 +19,7 @@ fn missing(cells: Vec<usize>) -> TransferCheck {
 
 /// The check answers as the transfer would and names the cells nothing fills.
 #[test]
+#[ignore = "daily"]
 fn a_check_answers_as_the_transfer_would() {
     with_menu(Kind::Crafting, |env, menu| {
         // A stick is two planks, one above the other.
@@ -114,6 +115,7 @@ fn a_renamed_plank_fills_one_stick_cell() {
 /// A check counts a mod grid's sources and leaves the slots, the sources and
 /// the drops as they were, whatever it answers.
 #[test]
+#[ignore = "daily"]
 fn a_check_counts_sources_and_changes_nothing() {
     let station = &mut Menu::new(mod_crafting_table());
     with_menu(Kind::Inventory, |env, _| {

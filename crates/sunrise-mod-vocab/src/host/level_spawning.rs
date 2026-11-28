@@ -23,6 +23,55 @@ pub trait LevelSpawningBackend {
     /// its spawner uses: the chunk is loaded. Reads parked levels and loads
     /// nothing. None on a client and for a stale handle.
     fn level_can_spawn_entities_in_chunk(&self, level: LevelRef, pos: [i32; 2]) -> Option<bool>;
+    /// Side: server.
+    /// `SpawnPlacements.checkSpawnRules` for the entity type `kind` (a full id) at `pos` in the
+    /// level in place: the type's placement predicate (vanilla's, or one a mod registered
+    /// through `register_spawn_placement`) with the light reads `light` names, then the
+    /// `mob_spawn_placement_check` hook as natural spawning asks it (NeoForge's
+    /// `MobSpawnEvent.SpawnPlacementCheck`), so other mods' spawn checks apply. `reason` is
+    /// the reason the rule and the hook are told. A type with no placement entry, a non-mob
+    /// included, passes its vanilla rule, as in `SpawnPlacements.checkSpawnRules`; registered
+    /// predicates and the hook still answer for it.
+    ///
+    /// Peaceful: `SpawnPlacements.checkSpawnRules` refuses a type `EntityType.isAllowedInPeaceful`
+    /// refuses before it asks the predicate, so at Peaceful difficulty such a type (a zombie)
+    /// answers `Ok(false)` whatever `light` says, and neither the predicate nor the hook is
+    /// called.
+    ///
+    /// [`LightOverride::Real`] uses the level's light. [`LightOverride::Level`] supplies one
+    /// value for sky and block light everywhere the predicate reads them, including the sky
+    /// light used to determine sky visibility. It changes what light checks see; it does not
+    /// skip them. Values above vanilla's `LightEngine.MAX_LEVEL` (15) are clamped to 15.
+    /// [`LightOverride::Any`] tries 0 through 15 in order, stopping at the first passing result
+    /// after the hook. The override affects the predicate and thus `default_result`; the hook's
+    /// `level` handle still reads the real level, including its light and sky visibility.
+    ///
+    /// This query does not spawn anything. [`LevelRef::spawn_entity`] does not run placement
+    /// checks; call this query first if the spawn should depend on them.
+    ///
+    /// Random: vanilla's predicate draws advance the caller's `RandomSource`. This call has no
+    /// caller stream: the predicate and the hook draw from one copy of the level random taken
+    /// at the call and never written back. The level's stream does not move, so two calls at
+    /// an unchanged state draw the same rolls; within a call, each `Any` try draws after the
+    /// one before. A listener must be a pure function of its inputs, as it must on replayed
+    /// ticks.
+    ///
+    /// `Ok(false)` for an unloaded position and an id that names no entity type.
+    /// `Err(Stale)` for a stale handle. `Err(Unavailable)` on a client, for a level not in
+    /// place, for a light override this build does not know, and for a call made while
+    /// another runs on this thread (a `mob_spawn_placement_check` listener asking again), so a
+    /// listener cannot recurse. Also `Err(Unavailable)` while the engine holds the level random
+    /// out of the level for its own pass (natural spawning, a spawner's or trial spawner's tick,
+    /// a vault's, a raid's, zombie reinforcements): a listener those passes call cannot ask,
+    /// since there is no level stream to copy until the pass ends.
+    fn level_check_spawn_rules(
+        &self,
+        level: LevelRef,
+        kind: &str,
+        pos: [i32; 3],
+        reason: SpawnReason,
+        light: LightOverride,
+    ) -> Result<bool, LevelReadError>;
 }
 /// The handles' writes of the `level_spawning` area, implemented by the game and reached through [`BackendMut`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait

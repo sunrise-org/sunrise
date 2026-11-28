@@ -1,5 +1,5 @@
 //! Seed-independent registry resources and their load boundary.
-use super::*;
+use super::{super::tags::BuiltTags, *};
 /// Feature resources for the FEATURES status, keyed by resource identifier.
 pub(in crate::worldgen) struct FeatureResources {
     pub(in crate::worldgen) features: BTreeMap<String, String>,
@@ -100,7 +100,7 @@ pub struct GeneratorData {
     /// Data packs' dimension types (`dimension_type/<id>.json`), by id:
     /// they replace the vanilla ones' build ranges.
     pub(super) dimension_types: BTreeMap<String, String>,
-    /// What loading the data packs' entries left out, for the log.
+    /// What loading the worldgen resources left out, for the log.
     pub(super) warnings: Vec<String>,
     pub(super) conditions: MaterialConditionRegistry,
     pub(super) source_catalog: BiomeSourceCatalog,
@@ -246,51 +246,33 @@ pub(in crate::worldgen) fn load_carvers(
     )
 }
 
-/// The tags of the bundle `name`, the data packs' tag files after the
-/// prepared ones. A tag naming what is not there fails on its own, as
-/// vanilla's TagLoader leaves it out. Without packs the prepared tags must
-/// all resolve; with them (a pack's tag can also break a prepared tag that
-/// includes it), each failed tag goes into `dropped` for the log.
-pub(in crate::worldgen) fn build_tags(
+/// Fold the pack tag files after the prepared ones, then bind against the registry.
+fn bind_tags(
+    mut definitions: TagDefinitions,
     raw: &Bundle,
     overrides: &WorldgenOverrides,
     name: &str,
-    dropped: &mut Vec<String>,
     known: impl Fn(&str) -> bool,
-) -> Result<BTreeMap<String, Vec<String>>, GeneratorError> {
-    build_tags_with_base(&[], raw, overrides, name, dropped, known)
-}
-
-fn build_tags_with_base(
-    base: &[(String, String)],
-    raw: &Bundle,
-    overrides: &WorldgenOverrides,
-    name: &str,
-    dropped: &mut Vec<String>,
-    known: impl Fn(&str) -> bool,
-) -> Result<BTreeMap<String, Vec<String>>, GeneratorError> {
-    let mut definitions = TagDefinitions::default();
-    for (tag_id, json) in base {
-        definitions.apply_json(tag_id, "sunrise:convention", json)?;
-    }
+    mut on_pack_error: impl FnMut(String) -> Result<(), GeneratorError>,
+) -> Result<BuiltTags<String>, GeneratorError> {
     for (name, json) in raw {
         definitions.apply_json(name, "vanilla", json)?;
     }
     for (id, pack, json) in overrides.tags(name) {
-        definitions
-            .apply_json(id, pack, json)
-            .map_err(|e| resource(format!("{pack}: tag {id}: {e}")))?;
+        if let Err(error) = definitions.apply_json(id, pack, json) {
+            on_pack_error(format!("{pack}: tag {id}: {error}"))?;
+        }
     }
-    let built = definitions
-        .build(|id, _| known(id).then(|| id.to_owned()))
-        .map_err(|e| resource(format!("tags: {e:?}")))?;
-    if overrides.tags(name).next().is_none() && !built.missing.is_empty() {
-        return Err(resource(format!(
-            "unresolved tag entries in {:?}",
-            built.missing.keys().collect::<Vec<_>>()
-        )));
-    }
-    for (tag, entries) in &built.missing {
+    Ok(definitions.bind(|id, _| known(id).then(|| id.to_owned())))
+}
+
+/// `TagLoader.build`: report unresolved tags individually and keep the rest.
+fn resolved_tags(
+    built: BuiltTags<String>,
+    name: &str,
+    dropped: &mut Vec<String>,
+) -> BTreeMap<String, Vec<String>> {
+    for (tag, entries) in built.missing {
         dropped.push(format!(
             "{name}: tag {tag} names what is missing: {}",
             entries
@@ -300,7 +282,23 @@ fn build_tags_with_base(
                 .join(", ")
         ));
     }
-    Ok(built.tags)
+    built.tags
+}
+
+pub(super) fn build_tags(
+    definitions: TagDefinitions,
+    raw: &Bundle,
+    overrides: &WorldgenOverrides,
+    name: &str,
+    dropped: &mut Vec<String>,
+    known: impl Fn(&str) -> bool,
+) -> Result<BTreeMap<String, Vec<String>>, GeneratorError> {
+    // `TagLoader.load` reports an invalid pack file and continues with the rest of the stack.
+    let built = bind_tags(definitions, raw, overrides, name, known, |message| {
+        dropped.push(message);
+        Ok(())
+    })?;
+    Ok(resolved_tags(built, name, dropped))
 }
 
 /// Seed-independent biome, biome-tag and preset tables for binding biome sources
@@ -395,18 +393,40 @@ impl BiomeSourceData {
     }
 }
 
+pub(in crate::worldgen) fn load_block_tags(
+    dir: &Path,
+    overrides: &WorldgenOverrides,
+    required: bool,
+    warnings: &mut Vec<String>,
+    registry: &BlockRegistry,
+) -> Result<BTreeMap<String, Vec<String>>, GeneratorError> {
+    let raw = if required {
+        read_bundle(dir, overrides, "block_tags")?
+    } else {
+        read_registry_bundle(dir, overrides, "block_tags")?.unwrap_or_default()
+    };
+    build_tags(
+        TagDefinitions::with_conventions("block")?,
+        &raw,
+        overrides,
+        "block_tags",
+        warnings,
+        |id| registry.default_state(id).is_some(),
+    )
+}
+
 pub(in crate::worldgen) fn load_fluid_tags(
     dir: &Path,
     overrides: &WorldgenOverrides,
     warnings: &mut Vec<String>,
 ) -> Result<BTreeMap<String, Vec<String>>, GeneratorError> {
-    let raw = read_registry_bundle(dir, overrides, "fluid_tags")?.unwrap_or_default();
-    build_tags_with_base(
-        crate::tag_layers::convention::json_entries("fluid"),
+    let name = "fluid_tags";
+    let raw = read_registry_bundle(dir, overrides, name)?.unwrap_or_default();
+    let built = bind_tags(
+        TagDefinitions::with_conventions("fluid")?,
         &raw,
         overrides,
-        "fluid_tags",
-        warnings,
+        name,
         |id| {
             matches!(
                 id,
@@ -417,7 +437,16 @@ pub(in crate::worldgen) fn load_fluid_tags(
                     | "minecraft:empty"
             )
         },
-    )
+        |message| Err(resource(message)),
+    )?;
+    // Preserve the prepared-only fluid bundle's strict resolution policy.
+    if overrides.tags(name).next().is_none() && !built.missing.is_empty() {
+        return Err(resource(format!(
+            "unresolved tag entries in {:?}",
+            built.missing.keys().collect::<Vec<_>>()
+        )));
+    }
+    Ok(resolved_tags(built, name, warnings))
 }
 
 pub(in crate::worldgen) fn load_biome_tags(
@@ -432,10 +461,7 @@ pub(in crate::worldgen) fn load_biome_tags(
     } else {
         read_registry_bundle(dir, overrides, "biome_tags")?.unwrap_or_default()
     };
-    let mut tags = TagDefinitions::default();
-    for (id, json) in crate::tag_layers::convention::json_entries("worldgen/biome") {
-        tags.apply_json(id, "sunrise:convention", json)?;
-    }
+    let mut tags = TagDefinitions::with_conventions("worldgen/biome")?;
     for (id, json) in entries {
         tags.apply_json(&id, "vanilla", &json)?;
     }
@@ -506,14 +532,7 @@ impl GeneratorData {
         if flags.len() != registry.len() {
             return Err(resource("block_flags.json does not match the registry"));
         }
-        let block_tags = build_tags_with_base(
-            crate::tag_layers::convention::json_entries("block"),
-            &read_bundle(dir, ov, "block_tags")?,
-            ov,
-            "block_tags",
-            &mut warnings,
-            |id| registry.default_state(id).is_some(),
-        )?;
+        let block_tags = load_block_tags(dir, ov, true, &mut warnings, registry)?;
         let fluid_tags = load_fluid_tags(dir, ov, &mut warnings)?;
         // The three biggest reads (the block tables, the structure templates
         // and the block behaviours) need only the tags: they run on threads of
@@ -537,16 +556,16 @@ impl GeneratorData {
                     .map(Arc::new)
             }
         })?;
-        let tag_set = |name: &str| -> Result<BTreeSet<&str>, GeneratorError> {
-            Ok(block_tags
+        let tag_set = |name: &str| -> BTreeSet<&str> {
+            block_tags
                 .get(name)
-                .ok_or_else(|| resource(format!("missing block tag {name}")))?
-                .iter()
+                .into_iter()
+                .flatten()
                 .map(String::as_str)
-                .collect())
+                .collect()
         };
-        let motion = tag_set("minecraft:blocks_motion_in_heightmap")?;
-        let no_leaves = tag_set("minecraft:blocks_motion_in_heightmap_no_leaves")?;
+        let motion = tag_set("minecraft:blocks_motion_in_heightmap");
+        let no_leaves = tag_set("minecraft:blocks_motion_in_heightmap_no_leaves");
         let states = (0..registry.len())
             .map(|i| {
                 let state = registry.state(BlockStateId(i as u32)).unwrap();
@@ -591,7 +610,7 @@ impl GeneratorData {
         }
         let carving_blocks = CarvingBlocks::from_registry(
             registry,
-            &tag_set("minecraft:uncarvable")?
+            &tag_set("minecraft:uncarvable")
                 .into_iter()
                 .map(str::to_owned)
                 .collect(),
@@ -761,8 +780,7 @@ impl GeneratorData {
     pub fn registry(&self) -> &'static BlockRegistry {
         self.registry
     }
-    /// What loading the data packs' entries left out (tags naming what is
-    /// missing), for the log.
+    /// What loading the worldgen resources left out (such as unresolved tags), for the log.
     pub fn warnings(&self) -> &[String] {
         &self.warnings
     }

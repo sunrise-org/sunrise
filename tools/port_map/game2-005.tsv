@@ -90,7 +90,7 @@ Player.getVoicePitch	port	crates/sunrise-gameplay-common/src/game/network/remote
 Player.defineSynchedData	skip:java		synched data definitions; Sunrise keeps the fields in game and player state
 Player.turtleHelmetTick	port	crates/sunrise-gameplay/src/game/items/potions_server.rs::Game::turtle_helmet_tick
 Player.isEquipped	inline	crates/sunrise-gameplay/src/game/items/potions_server.rs::Game::turtle_helmet_tick	the head-slot check for the turtle helmet
-Player.canPlayerFitWithinBlocksAndEntitiesWhen	port	crates/sunrise-sim/src/pose.rs::MotionWorld::can_fit_pose	the box of the pose's dimensions at the player's position, deflated by 1e-7, tested against the player's collision; `update_player_pose` asks it for the swimming, the desired and the crouching pose in that order, as `updatePlayerPose` does
+Player.canPlayerFitWithinBlocksAndEntitiesWhen	port	crates/sunrise-sim/src/motion/pose_update.rs::MotionWorld::can_fit_pose	the box of the pose's dimensions at the player's position, deflated by 1e-7, tested against the player's collision; `update_player_pose` asks it for the swimming, the desired and the crouching pose in that order, as `updatePlayerPose` does
 Player.increaseScore	skip:other		the score is experience.total in Sunrise (death screen); there is no separate score counter
 Player.getWeaponItem	missing		the riptide spin attack keeps only `auto_spin_attack_ticks` and `auto_spin_attack_dmg`, not the stack it started with (`autoSpinAttackItemStack`), so there is no item to answer with mid-spin
 Player.destroyVanishingCursedItems	port	crates/sunrise-gameplay/src/game/items/item_entities.rs::ServerGame::drop_inventory	vanishing-curse stacks are removed from the death drops

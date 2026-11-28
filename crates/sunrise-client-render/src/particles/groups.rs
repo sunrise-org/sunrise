@@ -9,7 +9,7 @@ use mod_api::{
 };
 use std::{collections::BTreeMap, sync::OnceLock};
 
-pub(super) struct Factory {
+pub struct Factory {
     registration: ParticleGroupRegistration,
     owner: CallbackOwner,
 }
@@ -63,7 +63,7 @@ fn freeze(groups: Vec<Answered<ParticleGroupRegistration>>) -> Result<Vec<Factor
 
 /// A group's engine-owned definition and live particles. Vanilla's `ParticleGroup` keeps
 /// its own queue and limit the same way.
-pub(super) struct Group {
+pub struct Group {
     pub(super) id: Identifier,
     pub(super) definition: ParticleGroup,
     pub(super) particles: Vec<Particle>,

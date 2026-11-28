@@ -366,8 +366,7 @@ fn item_parts_rewrite_or_refuse_context_and_control_survival_on_both_sides() {
             remote.logged_in = true;
             remote.entity_id = 7;
             remote.profile = 42;
-            game.player =
-                Some(PlayerMotion::new(game.motion, Vec3::new(12.5, 64.0, 12.5)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(12.5, 64.0, 12.5)));
             game.world
                 .chunks
                 .insert((0, 0), Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)));

@@ -799,7 +799,7 @@ fn exhausted_ids_refuse_every_mod_spawn() {
             game.motion,
             sunrise_core::geometry::Vec3::new(1.5, 70.0, 1.5),
         );
-        game.player = Some(player.unwrap());
+        game.player = Some(player);
         crate::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
         let mob = summon(game, "minecraft:zombie", "{}").unwrap();
         let fixture = Fixture {

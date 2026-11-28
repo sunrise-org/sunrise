@@ -44,7 +44,6 @@ sunrise-client-lib	test:datapack_join	a_client_that_offers_the_registry_joins_an
 sunrise-client-lib	test:datapack_join	a_refused_reload_disconnects_instead_of_retaining_the_old_generation	crates/sunrise-client/tests/datapack_join.rs:454	network
 sunrise-client-lib	test:datapack_join	a_reload_snapshot_gives_the_client_generation_two_and_stales_old_handles	crates/sunrise-client/tests/datapack_join.rs:392	network
 sunrise-client-lib	test:datapack_join	a_required_registry_refuses_a_client_without_the_mod_before_any_registry_data	crates/sunrise-client/tests/datapack_join.rs:376	network
-sunrise-client-render	lib	pack_screen::click_sound_tests::the_browsers_search_button_submits_what_was_typed	crates/sunrise-client-render/src/pack_screen.rs:2076	network
 sunrise-client-render	lib	skins::tests::a_failed_download_is_retried_after_the_wait	crates/sunrise-client-render/src/skins.rs:1882	network
 sunrise-client-render	lib	skins::tests::http_get_reads_2xx_bodies	crates/sunrise-client-render/src/skins.rs:1628	network
 sunrise-server-profiles-http	lib	tests::profiles_resolve_through_the_services	crates/sunrise-server-profiles-http/src/lib.rs:593	network

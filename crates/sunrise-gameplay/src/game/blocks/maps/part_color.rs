@@ -65,13 +65,10 @@ mod tests {
     fn pixel(game: &mut ServerGame<'_>, floor: &str) -> u8 {
         let state = game.pack.assets.registry.default_state(floor).unwrap();
         game.world.set(5, 63, 5, state).unwrap();
-        game.player = Some(
-            sunrise_sim::motion::PlayerMotion::new(
-                game.motion,
-                sunrise_core::geometry::Vec3::new(5.5, 64.0, 5.5),
-            )
-            .unwrap(),
-        );
+        game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+            game.motion,
+            sunrise_core::geometry::Vec3::new(5.5, 64.0, 5.5),
+        ));
         let map = MapData::fresh(5.5, 5.5, 0, game.dimension_id());
         game.maps.data.insert(0, map);
         // A map reveals one column in sixteen per update.

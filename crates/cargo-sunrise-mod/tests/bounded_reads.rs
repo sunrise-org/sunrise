@@ -78,6 +78,51 @@ fn bounded_manifest_commands() {
         assert_eq!(fs::metadata(&path).unwrap().len(), limit + 1);
     }
 }
+#[test]
+#[ignore = "daily"]
+fn build_invalidates_a_previous_package_only_after_validating_the_invocation() {
+    use sunrise_mod_package::Package;
+
+    let f = Fixture::new("build-output");
+    f.manifest("");
+    let manifest = f.dir.join("sunrise-mod.toml");
+    let valid = fs::read(&manifest).unwrap();
+    let cargo = f.dir.join("Cargo.toml");
+    let crate_header = "[package]\nname = 'mod-example'\nversion = '1.0.0'\n";
+    fs::write(
+        &cargo,
+        format!("{crate_header}\n[dependencies]\nsunrise-mod-api = {{ path = '.sunrise/sdk/api/crates/sunrise-mod-api' }}\n"),
+    )
+    .unwrap();
+    fs::create_dir(f.dir.join("src")).unwrap();
+    fs::write(f.dir.join("src/lib.rs"), "pub fn ready() {}\n").unwrap();
+    let previous = Package::pack_directory(&f.dir).unwrap();
+    let output = f.dir.join("target/sunrise-mod/example.smod");
+    fs::create_dir_all(output.parent().unwrap()).unwrap();
+    fs::write(&output, &previous).unwrap();
+
+    assert!(f.run(&["build", "--typo"]).contains("--typo"));
+    assert_eq!(fs::read(&output).unwrap(), previous);
+    fs::remove_file(&manifest).unwrap();
+    assert!(f.run(&["build"]).contains("sunrise-mod.toml"));
+    assert_eq!(fs::read(&output).unwrap(), previous);
+    fs::write(&manifest, "id =").unwrap();
+    assert!(f.run(&["build"]).contains("sunrise-mod.toml"));
+    assert_eq!(fs::read(&output).unwrap(), previous);
+    assert!(!f.dir.join(".sunrise").exists());
+
+    // Project::read rejects the missing API dependency before SDK fetch.
+    // The build_errors fixture separately exercises the real compiler-failure path.
+    fs::write(&manifest, valid).unwrap();
+    fs::write(&cargo, crate_header).unwrap();
+    let error = f.run(&["build"]);
+    assert!(
+        error.contains("has no sunrise-mod-api dependency"),
+        "{error}"
+    );
+    assert!(!output.exists());
+}
+
 #[cfg(unix)]
 #[test]
 #[ignore = "daily"]
@@ -136,4 +181,115 @@ fn bounded_catalog_commands() {
     );
     assert_eq!(fs::metadata(&catalog).unwrap().len(), LIMIT + 1);
     assert_eq!(fs::read(manifest).unwrap(), before);
+}
+
+#[test]
+#[ignore = "daily"]
+fn native_discover_cold_catalog_stdout_is_pure_json() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let mod_dir = root.join("mod");
+    fs::create_dir_all(mod_dir.join("src")).unwrap();
+    fs::write(
+        mod_dir.join("sunrise-mod.toml"),
+        format!(
+            "id = 'example'\nname = 'Example'\nversion = '0.1.0'\napi = '0.2'\ncapabilities = ['registries']\n[native]\ngame = '26.3'\nsunrise = '{BUILD}'\nmixins = '{}'\n",
+            sunrise_native_build::MIXINS_REV
+        ),
+    )
+    .unwrap();
+    fs::write(
+        mod_dir.join("Cargo.toml"),
+        "[package]\nname = 'example'\nversion = '0.1.0'\n[dependencies]\nmod_api = { package = 'sunrise-mod-api', path = '.sunrise/sdk/api/crates/sunrise-mod-api' }\n",
+    )
+    .unwrap();
+    fs::write(mod_dir.join("src/lib.rs"), "").unwrap();
+
+    let work = root.join("work");
+    let source = work.join("source").join(BUILD);
+    let write = |path: PathBuf, text: &str| {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    };
+    write(source.join(".horizon-revision"), BUILD);
+    write(source.join("Cargo.toml"), "[workspace]\nmembers = []\n");
+    write(
+        source.join(sunrise_mod_api_gen::crossing::CROSSING_FOREIGN_FILE),
+        "[]",
+    );
+    write(
+        source.join("crates/sunrise-mod-api-gen/source-layout"),
+        "split\n",
+    );
+    write(source.join("crates/sunrise-mod-api-gen/internals.txt"), "");
+    for package in [
+        "sunrise-client",
+        "sunrise-gameplay-common",
+        "sunrise-gameplay",
+        "sunrise-client-gameplay",
+    ] {
+        let pkg = source.join("crates").join(package);
+        write(
+            pkg.join("Cargo.toml"),
+            &format!("[package]\nname = '{package}'\n"),
+        );
+        if package == "sunrise-client" {
+            write(pkg.join("src/lib.rs"), "mod entry;\n");
+            write(pkg.join("src/entry.rs"), "");
+        } else {
+            write(pkg.join("src/lib.rs"), "pub mod game;\n");
+            write(pkg.join("src/game.rs"), "");
+        }
+    }
+
+    let catalog_out = root.join("catalog-out");
+    let plan = root.join("plan.json");
+    fs::write(
+        &plan,
+        format!(
+            "{}\n",
+            serde_json::json!({
+                "contract": sunrise_native_build::contract::CONTRACT,
+                "work": work,
+                "toolchain": {
+                    "dir": work,
+                    "target": "x86_64-unknown-linux-gnu",
+                    "cargo_home": work,
+                },
+                "mods": mod_dir,
+                "catalog": catalog_out,
+            })
+        ),
+    )
+    .unwrap();
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_cargo-sunrise-mod"))
+        .arg("native-discover")
+        .stdin(fs::File::open(&plan).unwrap())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "native-discover failed:\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        !stdout.contains("cargo:rerun-if-changed="),
+        "Cargo rerun directive leaked onto SDK stdout:\n{stdout}"
+    );
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "expected a single JSON reply line:\n{stdout}"
+    );
+    let reply: serde_json::Value = serde_json::from_str(lines[0])
+        .unwrap_or_else(|e| panic!("first stdout line is not valid JSON ({e}):\n{stdout}"));
+    assert_eq!(
+        reply["contract"],
+        serde_json::json!(sunrise_native_build::contract::CONTRACT)
+    );
+    assert_eq!(reply["catalog"], serde_json::json!(catalog_out));
+    assert!(catalog_out.join("internals.json").is_file());
 }

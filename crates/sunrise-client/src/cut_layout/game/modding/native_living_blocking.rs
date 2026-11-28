@@ -2,7 +2,7 @@
 
 #[cfg(test)]
 mod tests {
-    use mod_api::client::first_person::Hand;
+    use mod_api::Hand;
     use sunrise_core::geometry::Vec3;
     use sunrise_gameplay::game::native_entity_refs::tests::with_resident_game;
     use sunrise_gameplay_common::game::held_items::HeldItemsGameExt1;
@@ -20,8 +20,10 @@ mod tests {
         use sunrise_items::equipment::OFFHAND;
         with_resident_game(|game| {
             sunrise_gameplay::game::native_entity_refs::tests::resolve_parts(game).unwrap();
-            game.player =
-                Some(sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                Vec3::ZERO,
+            ));
             sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
             game.server_set_acting_use(true);
             let player = game.living(game.entity(20).unwrap()).unwrap();

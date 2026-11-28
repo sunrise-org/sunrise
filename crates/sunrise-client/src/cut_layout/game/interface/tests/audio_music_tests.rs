@@ -186,8 +186,7 @@ fn music_selection_and_gain_follow_the_camera_across_a_biome_boundary() {
             with_client_game(|game| {
                 game.client.title.0 = None;
                 game.dim = Dim::Overworld;
-                game.player =
-                    Some(PlayerMotion::new(game.motion, Vec3::new(-20.0, 64.0, 0.0)).unwrap());
+                game.player = Some(PlayerMotion::new(game.motion, Vec3::new(-20.0, 64.0, 0.0)));
 
                 let biome = |sound, volume, min, max, replace| {
                     json!({"attributes": {

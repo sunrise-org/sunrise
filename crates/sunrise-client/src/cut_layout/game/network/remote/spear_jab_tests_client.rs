@@ -16,7 +16,7 @@ fn a_spear_jab_sends_only_its_stab() {
         peer.set_read_timeout(Some(std::time::Duration::from_millis(50)))
             .unwrap();
         game.set_local_mode(sunrise_command::args::GameMode::Survival);
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)));
         game.world
             .chunks
             .insert((0, 0), Arc::new(Chunk::empty(0, 0)));

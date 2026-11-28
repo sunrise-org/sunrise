@@ -13,6 +13,7 @@ use std::{
     path::Path,
     sync::Arc,
 };
+use sunrise_core::graph::strongly_connected_components;
 use sunrise_level::datapack::RegistryFiles;
 use sunrise_world::{
     conditions::{ConditionProgress, LoadConditions},
@@ -309,7 +310,8 @@ fn admit_datapack_registries(
             bound_any = true;
         }
         if !bound_any {
-            let component = registry_components(&dependencies)
+            // Resolve a blocked dependency component before its consumers.
+            let component = strongly_connected_components(&dependencies)
                 .into_iter()
                 .rev()
                 .find(|members| !dependencies[members[0]].is_empty())
@@ -434,53 +436,6 @@ pub fn worldgen_load_conditions(
                 tags.iter().map(|(tag, held)| (tag.as_str(), *held)),
             )
         }))
-}
-
-/// Strongly connected components, consumers before their dependencies
-/// (Kosaraju's two traversals). Pack input controls the depth, so use explicit stacks.
-fn registry_components(dependencies: &[BTreeSet<usize>]) -> Vec<Vec<usize>> {
-    let mut consumers = vec![Vec::new(); dependencies.len()];
-    for (consumer, producers) in dependencies.iter().enumerate() {
-        for &producer in producers {
-            consumers[producer].push(consumer);
-        }
-    }
-    let mut seen = vec![false; dependencies.len()];
-    let mut finished = Vec::with_capacity(dependencies.len());
-    let mut stack = Vec::new();
-    for root in 0..dependencies.len() {
-        stack.push((root, false));
-        while let Some((index, leaving)) = stack.pop() {
-            if leaving {
-                finished.push(index);
-            } else if !std::mem::replace(&mut seen[index], true) {
-                stack.push((index, true));
-                stack.extend(
-                    dependencies[index]
-                        .iter()
-                        .map(|&producer| (producer, false)),
-                );
-            }
-        }
-    }
-    seen.fill(false);
-    let mut components = Vec::new();
-    let mut stack = Vec::new();
-    for root in finished.into_iter().rev() {
-        if seen[root] {
-            continue;
-        }
-        let mut component = Vec::new();
-        stack.push(root);
-        while let Some(index) = stack.pop() {
-            if !std::mem::replace(&mut seen[index], true) {
-                component.push(index);
-                stack.extend(consumers[index].iter().copied());
-            }
-        }
-        components.push(component);
-    }
-    components
 }
 
 pub fn conditions_for_mods(

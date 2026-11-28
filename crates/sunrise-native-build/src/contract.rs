@@ -1,7 +1,7 @@
 //! The JSON contract of `cargo sunrise-mod native-build`: one plan line in, one event per line out.
 use crate::prebuilt::{self, Package, Route};
 use crate::rust::Unpacked;
-use crate::{Target, api, dependencies, library_record, scan_bundles};
+use crate::{BuildDiagnostics, Target, api, dependencies, library_record, scan_bundles};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
@@ -275,7 +275,12 @@ pub fn emit(out: &mut dyn Write, event: &Event) -> Result<(), String> {
 }
 
 /// Builds `plan`, saying each step on `out` and reading consent answers from `input`; ends with [`Event::Built`] or [`Event::Failed`].
-pub fn run(plan: &Plan, input: &mut dyn BufRead, out: &mut dyn Write) -> Result<(), String> {
+pub fn run(
+    plan: &Plan,
+    input: &mut dyn BufRead,
+    out: &mut dyn Write,
+    diagnostics: BuildDiagnostics,
+) -> Result<(), String> {
     crate::mixins_from_source(plan.mixins_from_source);
     let events = std::cell::RefCell::new(out);
     let ids = std::cell::RefCell::new(Vec::new());
@@ -284,6 +289,7 @@ pub fn run(plan: &Plan, input: &mut dyn BufRead, out: &mut dyn Write) -> Result<
         &|event| emit(&mut **events.borrow_mut(), &event),
         input,
         &ids,
+        diagnostics,
     );
     let out = events.into_inner();
     match built {
@@ -346,7 +352,7 @@ fn code_links(
 
 /// Type-check a developer's staged native projects through the build's own route and SDK
 /// bindings, without producing or installing native libraries.
-pub fn check_rust(plan: &Plan) -> Result<(), String> {
+pub fn check_rust(plan: &Plan, diagnostics: BuildDiagnostics) -> Result<(), String> {
     let work = crate::root();
     let mods = native_projects(plan)?;
     let (declared, resolution) = code_links(&mods, plan.target.into())?;
@@ -370,6 +376,7 @@ pub fn check_rust(plan: &Plan) -> Result<(), String> {
         Some(&|_| plan.registry == Some(true)),
         &|_, _, _| {},
         true,
+        diagnostics,
     )
     .map(drop)
 }
@@ -379,6 +386,7 @@ fn compile(
     say: &dyn Fn(Event) -> Result<(), String>,
     input: &mut dyn BufRead,
     ids: &std::cell::RefCell<Vec<String>>,
+    diagnostics: BuildDiagnostics,
 ) -> Result<Event, String> {
     let work = crate::root();
     std::fs::create_dir_all(&work).map_err(|e| format!("{}: {e}", work.display()))?;
@@ -430,6 +438,7 @@ fn compile(
             });
         },
         false,
+        diagnostics,
     )?
     .expect("build mode returns artifacts");
     let mut internals = BTreeMap::new();
@@ -564,7 +573,13 @@ mod tests {
         )
         .unwrap();
         let mut out = Vec::new();
-        let error = run(&plan(&dir), &mut "".as_bytes(), &mut out).unwrap_err();
+        let error = run(
+            &plan(&dir),
+            &mut "".as_bytes(),
+            &mut out,
+            BuildDiagnostics::default(),
+        )
+        .unwrap_err();
         assert!(error.starts_with("E_NATIVE_FEATURES: optioned"), "{error}");
         let lines: Vec<Event> = String::from_utf8(out)
             .unwrap()

@@ -361,7 +361,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (name, json) in resources {
         tags.apply_json(&name, "vanilla", &json)?;
     }
-    let built = tags.build(|name, _| registry.default_state(name).map(|_| name.to_owned()))?;
+    let built = tags.bind(|name, _| registry.default_state(name).map(|_| name.to_owned()));
     if !built.missing.is_empty() {
         return Err("unresolved native block tags".into());
     }

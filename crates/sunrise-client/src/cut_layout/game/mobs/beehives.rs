@@ -25,10 +25,10 @@ pub(crate) mod honey_overflow_tests {
             full.properties.insert("honey_level".into(), "5".into());
             let full = registry.id(&full).unwrap();
             game.world.set(8, 64, 10, full).unwrap();
-            game.player = Some(
-                sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(8.5, 64.0, 8.5))
-                    .unwrap(),
-            );
+            game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                game.motion,
+                Vec3::new(8.5, 64.0, 8.5),
+            ));
             // Facing south (+z), towards the hive.
             game.yaw = 0.0;
             game.pitch = 0.0;

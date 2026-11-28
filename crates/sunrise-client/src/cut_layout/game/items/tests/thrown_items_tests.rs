@@ -20,7 +20,7 @@ pub(crate) fn standing_game<'a>(
 ) -> sunrise_gameplay::game::ServerGame<'a> {
     let mut game = server_game(resources);
     let feet = Vec3::new(8.5, 70.0, 8.5);
-    game.player = Some(sunrise_sim::motion::PlayerMotion::new(game.motion, feet).unwrap());
+    game.player = Some(sunrise_sim::motion::PlayerMotion::new(game.motion, feet));
     game.world
         .chunks
         .insert((0, 0), Arc::new(Chunk::empty(0, 0)));

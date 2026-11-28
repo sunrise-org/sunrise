@@ -54,7 +54,7 @@ pub(crate) fn run_a_falling_block_resting_in_a_moving_piston_cell_stays() {
     });
     with_game(|game| {
         prepare_entity_ticking_neighborhood(game, ChunkPos::new(0, 0));
-        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
         sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 1, 99);
         game.set_allow_commands(true);
         game.build_registries();

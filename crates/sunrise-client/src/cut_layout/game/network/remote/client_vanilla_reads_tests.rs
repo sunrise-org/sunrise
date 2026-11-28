@@ -471,7 +471,8 @@ fn the_contextual_bar_facts_read_the_jumpable_mount_and_the_tracked_waypoints() 
                     C::TrackedWaypoint(TrackedWaypoint {
                         operation,
                         id: WaypointId::Uuid(0x4677),
-                        style: "minecraft:default".into(),
+                        style: sunrise_core::identifier::Identifier::parse("minecraft:default")
+                            .unwrap(),
                         color: None,
                         target: WaypointTarget::Block([40, 64, 40]),
                     })

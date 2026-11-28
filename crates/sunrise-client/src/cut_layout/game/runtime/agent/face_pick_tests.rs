@@ -106,7 +106,7 @@ fn with_pig_and_server(
             finish_login(game, &mut server);
             game.native_lifecycle.begin_open(None);
             game.client.title.0 = None;
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 1.0, 0.5)).unwrap());
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 1.0, 0.5)));
             game.previous_position = Vec3::new(0.5, 1.0, 0.5);
             game.yaw = 90.0;
             game.pitch = 0.0;

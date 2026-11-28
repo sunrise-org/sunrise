@@ -529,7 +529,7 @@ impl crate::game::ServerGame<'_> {
                     )
                 });
         }
-        let catalog = self.common.motion.attributes.clone();
+        let catalog = self.common.motion.attributes().clone();
         let Some(key) = catalog.id("minecraft:waypoint_transmit_range") else {
             return 0.0;
         };

@@ -17,9 +17,11 @@ use sunrise_client::{
     },
     world::World,
 };
+use sunrise_core::prepared_test_support::{STREAMING_INPUTS, WORLDGEN_INPUTS};
+use sunrise_sim::test_resources::item_data;
 use sunrise_world::{native_load_context::DataLoadOrigin, registry::BlockStateId};
-#[path = "../src/test_resources.rs"]
-mod test_resources;
+#[path = "../../sunrise-core/src/prepared_test_root.rs"]
+mod prepared_test_root;
 use std::{
     collections::HashMap,
     path::Path,
@@ -230,7 +232,7 @@ fn worker_context(root: &Path) -> Arc<WorkerContext> {
 #[test]
 #[ignore = "daily"]
 fn a_new_column_is_told_apart_from_a_saved_one() {
-    let root = test_resources::prepared_root(&[test_resources::STREAMING_INPUTS]);
+    let root = prepared_test_root::prepared_root(&[STREAMING_INPUTS]);
     let context = worker_context(&root);
     let generator = Arc::new(Recorder::default());
     let mut session = Session::new(generator.clone(), context.clone());
@@ -251,7 +253,7 @@ fn a_new_column_is_told_apart_from_a_saved_one() {
 #[test]
 #[ignore = "daily"]
 fn chunks_left_behind_keep_their_decoration() {
-    let root = test_resources::prepared_root(&[test_resources::STREAMING_INPUTS]);
+    let root = prepared_test_root::prepared_root(&[STREAMING_INPUTS]);
     let context = worker_context(&root);
     let generator = Arc::new(Recorder::default());
     let mut session = Session::new(generator.clone(), context.clone());
@@ -310,7 +312,7 @@ fn chunks_left_behind_keep_their_decoration() {
 #[test]
 #[ignore = "daily"]
 fn proto_chunks_are_viewed_once_per_state() {
-    let root = test_resources::prepared_root(&[test_resources::STREAMING_INPUTS]);
+    let root = prepared_test_root::prepared_root(&[STREAMING_INPUTS]);
     let assets = Arc::new(Assets::load(&root).unwrap());
     let render = Arc::new(
         sunrise_client::assets::RenderAssets::load(
@@ -370,7 +372,7 @@ fn saved_proto_chunks_restore_exactly() {
         save::{Persistent, SaveDir},
         vanillagen::VanillaTerrain,
     };
-    let root = test_resources::prepared_root(&[test_resources::WORLDGEN_INPUTS]);
+    let root = prepared_test_root::prepared_root(&[WORLDGEN_INPUTS]);
     let assets = Arc::new(Assets::load(&root).unwrap());
     let biomes = Arc::new(
         Biomes::load(&sunrise_assets::resource_source::ResourceRoot::directory(
@@ -378,7 +380,7 @@ fn saved_proto_chunks_restore_exactly() {
         ))
         .unwrap(),
     );
-    let item_data = test_resources::item_data(&root, DataLoadOrigin::ServerDataLoad).unwrap();
+    let item_data = item_data(&root, DataLoadOrigin::ServerDataLoad).unwrap();
     let terrain = VanillaTerrain::for_dimension(
         sunrise_client::vanillagen::TerrainResources {
             data: None,
@@ -518,7 +520,7 @@ fn saved_proto_block_entities_keep_their_id() {
         sunrise_core::nbt::{Limits, Tag},
         sunrise_world::region::RegionFile,
     };
-    let root = test_resources::prepared_root(&[test_resources::WORLDGEN_INPUTS]);
+    let root = prepared_test_root::prepared_root(&[WORLDGEN_INPUTS]);
     let assets = Arc::new(Assets::load(&root).unwrap());
     let biomes = Arc::new(
         Biomes::load(&sunrise_assets::resource_source::ResourceRoot::directory(
@@ -526,7 +528,7 @@ fn saved_proto_block_entities_keep_their_id() {
         ))
         .unwrap(),
     );
-    let item_data = test_resources::item_data(&root, DataLoadOrigin::ServerDataLoad).unwrap();
+    let item_data = item_data(&root, DataLoadOrigin::ServerDataLoad).unwrap();
     let terrain = VanillaTerrain::for_dimension(
         sunrise_client::vanillagen::TerrainResources {
             data: None,
@@ -618,7 +620,7 @@ fn persistent_forwards_the_block_entities_decoration_made_in_a_final_chunk() {
                 .collect()
         }
     }
-    let root = test_resources::prepared_root(&[test_resources::WORLDGEN_INPUTS]);
+    let root = prepared_test_root::prepared_root(&[WORLDGEN_INPUTS]);
     let assets = Arc::new(Assets::load(&root).unwrap());
     let biomes = Arc::new(
         Biomes::load(&sunrise_assets::resource_source::ResourceRoot::directory(
@@ -652,7 +654,7 @@ fn persistent_forwards_the_block_entities_decoration_made_in_a_final_chunk() {
 #[ignore = "daily"]
 fn the_end_asks_for_no_creature_packs_and_the_overworld_does() {
     use sunrise_client::{assets::Assets, biome::Biomes, vanillagen::VanillaTerrain};
-    let root = test_resources::prepared_root(&[test_resources::WORLDGEN_INPUTS]);
+    let root = prepared_test_root::prepared_root(&[WORLDGEN_INPUTS]);
     let assets = Arc::new(Assets::load(&root).unwrap());
     let biomes = Arc::new(
         Biomes::load(&sunrise_assets::resource_source::ResourceRoot::directory(
@@ -660,7 +662,7 @@ fn the_end_asks_for_no_creature_packs_and_the_overworld_does() {
         ))
         .unwrap(),
     );
-    let item_data = test_resources::item_data(&root, DataLoadOrigin::ServerDataLoad).unwrap();
+    let item_data = item_data(&root, DataLoadOrigin::ServerDataLoad).unwrap();
     for (dimension, want) in [
         ("minecraft:overworld", false),
         ("minecraft:the_nether", false),

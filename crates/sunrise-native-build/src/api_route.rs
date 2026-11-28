@@ -15,6 +15,7 @@ const BIN: &str = "bin";
 pub(super) struct Options<'a> {
     pub on_mod: &'a dyn Fn(&str, usize, usize),
     pub check_only: bool,
+    pub stderr: super::CompilerStderr,
 }
 
 /// Compile the mods in dependency order against API metadata and the runtime's dynamic
@@ -77,6 +78,7 @@ pub(super) fn compile(
             &identities,
             &source,
             options.check_only,
+            options.stderr,
         )?;
         rlibs.insert(project.bundle.manifest.id.as_str(), rlib);
     }

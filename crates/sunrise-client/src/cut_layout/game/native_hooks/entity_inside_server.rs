@@ -191,7 +191,7 @@ pub(crate) mod sweep_tests {
                     .default_state("minecraft:short_grass")
                     .unwrap();
                 game.world.set(1, 104, 0, grass).unwrap();
-                game.server.tickets.0.update(None);
+                game.server.chunk_ticking.tickets.update(None);
                 game.server.ticked_entities_through = u32::MAX;
                 for (health, count) in [(5, 3), (1, 2)] {
                     part.contacts.lock().unwrap().clear();
@@ -520,7 +520,7 @@ pub(crate) mod sweep_tests {
                 let [direct, causing, stale] = ids.map(|id| game.entity(id).unwrap());
                 *part.sources.lock().unwrap() = Some([direct, causing, stale]);
                 game.dropped.remove(3);
-                game.server.tickets.0.update(None);
+                game.server.chunk_ticking.tickets.update(None);
                 game.server.ticked_entities_through = u32::MAX;
 
                 sunrise_sim::block_contact::in_level(
@@ -792,8 +792,7 @@ pub(crate) mod sweep_tests {
                 );
                 game.world.set(1, 100, 0, stone).unwrap();
                 let mut player =
-                    sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(1.5, 100.0, 0.5))
-                        .unwrap();
+                    sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(1.5, 100.0, 0.5));
                 player.mod_fire_immune = true;
                 let mut guest = guest(1);
                 guest.loaded = true;
@@ -916,7 +915,7 @@ pub(crate) mod sweep_tests {
                 game.world
                     .chunks
                     .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
-                game.server.tickets.0.update(Some(Sources {
+                game.server.chunk_ticking.tickets.update(Some(Sources {
                     players: vec![(0, 0)],
                     forced: Vec::new(),
                     portal: Vec::new(),
@@ -1018,7 +1017,7 @@ pub(crate) mod sweep_tests {
                 game.world
                     .chunks
                     .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
-                game.server.tickets.0.update(Some(Sources {
+                game.server.chunk_ticking.tickets.update(Some(Sources {
                     players: vec![(0, 0)],
                     forced: Vec::new(),
                     portal: Vec::new(),
@@ -1092,7 +1091,7 @@ pub(crate) mod sweep_tests {
             game.world
                 .chunks
                 .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
-            game.server.tickets.0.update(Some(Sources {
+            game.server.chunk_ticking.tickets.update(Some(Sources {
                 players: vec![(0, 0)],
                 forced: Vec::new(),
                 portal: Vec::new(),
@@ -1342,8 +1341,7 @@ pub(crate) mod sweep_tests {
                 let mut player = sunrise_sim::motion::PlayerMotion::new(
                     game.motion,
                     sunrise_core::geometry::Vec3::new(1.5, 100.0, 0.5),
-                )
-                .unwrap();
+                );
                 player
                     .history
                     .add(sunrise_world::entity_move::MovementRecord {
@@ -1373,8 +1371,7 @@ pub(crate) mod sweep_tests {
                 let mut player = sunrise_sim::motion::PlayerMotion::new(
                     game.motion,
                     sunrise_core::geometry::Vec3::new(1.5, 100.0, 0.5),
-                )
-                .unwrap();
+                );
                 player
                     .history
                     .add(sunrise_world::entity_move::MovementRecord {
@@ -1399,8 +1396,7 @@ pub(crate) mod sweep_tests {
                 let mut player = sunrise_sim::motion::PlayerMotion::new(
                     game.motion,
                     sunrise_core::geometry::Vec3::new(1.5, 100.0, 0.5),
-                )
-                .unwrap();
+                );
                 player.fire_ticks = 0;
                 player
                     .history

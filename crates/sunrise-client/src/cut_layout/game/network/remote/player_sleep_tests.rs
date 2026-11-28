@@ -56,7 +56,7 @@ fn client_sleep_metadata_and_tick_preserve_shape_and_authoritative_positions() {
         remote.level_players.insert(66, 789);
         let kind = remote.player_type.as_ref().unwrap().clone();
         let authoritative = Vec3::new(8.5, 70.0, 8.5);
-        game.player = Some(PlayerMotion::new(game.motion, authoritative).unwrap());
+        game.player = Some(PlayerMotion::new(game.motion, authoritative));
         game.mobs.push(Mob::new(66, kind, authoritative, 0.0));
         game.client
             .streaming

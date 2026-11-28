@@ -101,7 +101,7 @@ pub(crate) fn setup_game<'a>(
     assert!(game.run_command("difficulty normal"));
     // The Java oracle has a live player as the owner of its creative arrows and fireballs.
     let mut player =
-        sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 12.5)).unwrap();
+        sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 12.5));
     player.client_loaded = true;
     game.player = Some(player);
     sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(&mut game, 1, 1);

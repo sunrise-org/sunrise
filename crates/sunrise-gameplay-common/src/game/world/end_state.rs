@@ -82,6 +82,18 @@ pub fn exact_teleport(entity: Option<&BlockEntity>) -> bool {
     matches!(entity, Some(BlockEntity::EndGateway(g)) if g.exact_teleport)
 }
 
+/// Per-level End state exchanged on level swap.
+#[derive(Default)]
+pub struct EndLevelState {
+    pub locator: Option<Arc<VanillaTerrain>>,
+}
+
+impl EndLevelState {
+    pub fn new(locator: Option<Arc<VanillaTerrain>>) -> Self {
+        Self { locator }
+    }
+}
+
 #[derive(Default)]
 pub struct EndState {
     /// Ticks until the player can use a gateway again (TheEndGatewayBlockEntity cooldown).
@@ -161,6 +173,11 @@ impl EndState {
     }
     pub fn set_locator(&self, terrain: Option<Arc<VanillaTerrain>>) {
         *self.locator.lock().unwrap() = terrain;
+    }
+    pub fn swap_level(&mut self, other: &mut EndLevelState) {
+        let mut locator = self.locator();
+        std::mem::swap(&mut locator, &mut other.locator);
+        self.set_locator(locator);
     }
 }
 
@@ -324,5 +341,102 @@ impl EyeOfEnder {
         };
         horizontal * (wanted_speed / length)
             + glam::DVec3::new(0.0, y + (wanted_y - y) * 0.015, 0.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sunrise_core::position::BlockPos;
+
+    #[test]
+    fn swap_level_keeps_non_level_fields_untouched() {
+        let mut traveller = sunrise_sim::end_gateway::Traveller::default();
+        traveller.enter_with_delay(BlockPos::new(2, 64, 3), 23);
+        let mut state = EndState {
+            gateway_cooldown: 17,
+            gateways: [(9, traveller)].into_iter().collect(),
+            arrivals: vec![GatewayArrival {
+                traveller: Arriving::Live(77),
+                job: GatewayJob::Known {
+                    exit: [1, 2, 3],
+                    exact: true,
+                },
+                target: Vec3::new(4.0, 5.0, 6.0),
+            }],
+            areas: vec![(3, 4)],
+            tickets: vec![((5, 6), 99)],
+            locator: std::sync::Mutex::new(None),
+            eyes: vec![EyeOfEnder {
+                id: 55,
+                position: glam::DVec3::new(1.0, 2.0, 3.0),
+                previous: glam::DVec3::new(0.5, 1.5, 2.5),
+                velocity: glam::DVec3::new(0.1, 0.2, 0.3),
+                target: glam::DVec3::new(10.0, 20.0, 30.0),
+                life: 12,
+                survive: true,
+            }],
+            flash: EndFlash {
+                seed: Some(7),
+                offset: 12,
+                duration: 150,
+                intensity: 0.5,
+                old_intensity: 0.25,
+                x_angle: 10.0,
+                y_angle: 20.0,
+            },
+        };
+        let mut parked = EndLevelState::new(None);
+
+        let check_non_level = |s: &EndState| {
+            assert_eq!(s.gateway_cooldown, 17);
+            assert_eq!(s.gateways.len(), 1);
+            let mut copy = s.gateways[&9];
+            assert_eq!(copy.cooldown(), 0);
+            assert!(!copy.is_done());
+            assert_eq!(
+                copy.travel_with_delay(true, 23),
+                Some(BlockPos::new(2, 64, 3))
+            );
+            assert_eq!(copy.cooldown(), 23);
+            assert_eq!(s.arrivals.len(), 1);
+            assert!(matches!(s.arrivals[0].traveller, Arriving::Live(77)));
+            assert_eq!(
+                s.arrivals[0].job,
+                GatewayJob::Known {
+                    exit: [1, 2, 3],
+                    exact: true,
+                }
+            );
+            assert_eq!(s.arrivals[0].target, Vec3::new(4.0, 5.0, 6.0));
+            assert_eq!(s.areas, vec![(3, 4)]);
+            assert_eq!(s.tickets, vec![((5, 6), 99)]);
+            assert_eq!(s.eyes.len(), 1);
+            let eye = &s.eyes[0];
+            assert_eq!(eye.id, 55);
+            assert_eq!(eye.position, glam::DVec3::new(1.0, 2.0, 3.0));
+            assert_eq!(eye.previous, glam::DVec3::new(0.5, 1.5, 2.5));
+            assert_eq!(eye.velocity, glam::DVec3::new(0.1, 0.2, 0.3));
+            assert_eq!(eye.target, glam::DVec3::new(10.0, 20.0, 30.0));
+            assert_eq!(eye.life, 12);
+            assert!(eye.survive);
+            assert_eq!(s.flash.seed, Some(7));
+            assert_eq!(s.flash.offset, 12);
+            assert_eq!(s.flash.duration, 150);
+            assert_eq!(s.flash.intensity, 0.5);
+            assert_eq!(s.flash.old_intensity, 0.25);
+            assert_eq!(s.flash.x_angle, 10.0);
+            assert_eq!(s.flash.y_angle, 20.0);
+        };
+
+        state.swap_level(&mut parked);
+        check_non_level(&state);
+        assert!(state.locator().is_none());
+        assert!(parked.locator.is_none());
+
+        state.swap_level(&mut parked);
+        check_non_level(&state);
+        assert!(state.locator().is_none());
+        assert!(parked.locator.is_none());
     }
 }

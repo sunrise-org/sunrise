@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Every nested Cargo workspace's own Cargo.lock still matches its manifests.
 
-The telemetry server, the registry and the probes are their own workspaces with their own lock,
+The telemetry server and the probes are their own workspaces with their own lock,
 and many take game crates by path. A game crate that gains a dependency changes the root lock, which the gate's
 --locked builds check, but not these: their --locked builds then refuse after merge (the telemetry image, the
 daily's fixtures). `cargo update --workspace --locked` resolves each one and fails, changing nothing, when its lock

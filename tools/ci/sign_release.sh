@@ -51,9 +51,16 @@ if [[ -n "$launcher_for" ]]; then
 fi
 rm -f "$dir/SHA256SUMS.sig" "$dir/SHA256SUMS.v2.sig" "$dir/SHA256SUMS.launcher.sig" "$dir/ephemeral.pub"
 
+ephemeral_key_file=
 sign_one() {  # base64 key, message file, signature file to append to
-  # The key reaches OpenSSL through an anonymous pipe: never a file, an argument or output.
-  "$openssl" pkeyutl -sign -rawin -inkey /dev/fd/3 -keyform DER -in "$2" -out "$work/signature" 3< <(printf '%s' "$1" | base64 --decode)
+  if [[ -n "$ephemeral_key_file" ]]; then
+    printf '%s' "$1" | base64 --decode > "$ephemeral_key_file"
+    "$openssl" pkeyutl -sign -rawin -inkey "$ephemeral_key_file" -keyform DER -in "$2" -out "$work/signature"
+    rm -f "$ephemeral_key_file"
+  else
+    # Release keys reach OpenSSL through an anonymous pipe: never a file, an argument or output.
+    "$openssl" pkeyutl -sign -rawin -inkey /dev/fd/3 -keyform DER -in "$2" -out "$work/signature" 3< <(printf '%s' "$1" | base64 --decode)
+  fi
   # base64 of the 64 bytes on one line (GNU base64 wraps at 76 characters).
   base64 < "$work/signature" | tr -d '\n' >> "$3"
   echo >> "$3"
@@ -71,6 +78,11 @@ sign_with() {  # the base64 key in $1: every message
 }
 
 if [[ -n "${EPHEMERAL:-}" ]]; then
+  # Native Windows OpenSSL cannot open Git Bash's translated /dev/fd path.
+  # Only the generated throwaway key may use a file; the EXIT trap also cleans up on failure.
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) ephemeral_key_file="$work/ephemeral.der" ;;
+  esac
   ephemeral=$("$openssl" genpkey -algorithm ed25519 -outform DER | base64 | tr -d '\n')
   printf '%s' "$ephemeral" | base64 --decode | "$openssl" pkey -inform DER -pubout -outform DER | tail -c 32 | base64 > "$dir/ephemeral.pub"
   sign_with "$ephemeral"

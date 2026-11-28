@@ -79,7 +79,7 @@ pub(crate) fn with_command_game(
     ));
     std::fs::create_dir_all(&scratch).unwrap();
     game.server.world_root = scratch.clone();
-    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(10.5, 200.0, 0.5)).unwrap());
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(10.5, 200.0, 0.5)));
     game.reset_entity_residency();
     game.native_lifecycle
         .begin_open(Some(mod_api::Authority::IntegratedServer));

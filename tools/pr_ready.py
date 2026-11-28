@@ -82,19 +82,18 @@ ln -sfn "$state/parity-runner" .local/parity-runner && ln -sfn "$state/parity-ta
 }
 ROOT_RUST = {"Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "rustfmt.toml", "clippy.toml"}
 # Standalone workspaces under crates/ that the root Cargo.toml excludes: the main workspace never builds them
-# (the registry has its own steps below; the telemetry server is tested by its own workflow).
-SEPARATE_WORKSPACES = ("crates/sunrise-mod-registry/", "crates/sunrise-telemetry-server/")
+# (the telemetry server is tested by its own workflow).
+SEPARATE_WORKSPACES = ("crates/sunrise-telemetry-server/",)
 
 
 # Build-script inputs outside the crates: catalog-only edits still need to build and test their consumers.
 MOD_API_INPUTS = ("crates/sunrise-mod-vocab/src/hooks/",)
-# The generated dispatch surface: edits here change what the dispatch tests compile and run. The registry is its
-# own crate with its own suite; a `--manifest-path` run keeps both out of the workspace selection above.
+# The generated dispatch surface: edits here change what the dispatch tests compile and run. They are their own crate
+# with their own suite; a `--manifest-path` run keeps them out of the workspace selection above.
 DISPATCH_TESTS = "crates/sunrise-mod-api-gen/dispatch-tests/Cargo.toml"
 DISPATCH_TEST_INPUTS = ("crates/sunrise-mod-api-gen/", "crates/sunrise-mod-api-macros/",
                         "crates/sunrise-mod-api/",
                         "crates/sunrise-mod-vocab/", *MOD_API_INPUTS)
-MOD_REGISTRY = "crates/sunrise-mod-registry/Cargo.toml"
 # What decides the mod API surface report. The crates are sunrise-stage and everything it depends on in the workspace
 # (surface_crates): the generator and the crates whose source it reads. Besides them (crates/sunrise-mod-api-gen/src:
 # surface/mod.rs `export_here`, `OutsideSeam::read`, loops.rs `collect`): the change notes, the workspace manifest
@@ -531,7 +530,7 @@ def _is_exact_int(value, low, high):
 
 def prepared_stamp_problems(root):
     """Why root is not a current full-profile prepared root, worded as Manifest::version_problems and
-    test_resources.rs `stamp_problems` word it; empty when it is."""
+    prepared_test_support.rs `stamp_problems` word it; empty when it is."""
     if not (root / "sunrise-resources.json").is_file():
         return ["sunrise-resources.json is missing"]
     manifest = read_json_object(root / "sunrise-resources.json")
@@ -569,7 +568,7 @@ def prepared_stamp_problems(root):
 
 def refuse_stale_prepared(args, steps):
     """Fail `content root tests` before cargo starts when a local run would read a stale prepared root: the
-    test boundary (test_resources.rs `prepared_root`) refuses it after minutes of building. A root that is not
+    test boundary (prepared_test_root.rs `prepared_root`) refuses it after minutes of building. A root that is not
     there is left to that boundary, which names every missing input."""
     step = next((step for step in steps if step.name == "content root tests"), None)
     if args.host != "local" or step is None or step.skip:
@@ -581,7 +580,7 @@ def refuse_stale_prepared(args, steps):
         root = ROOT / ".local" / "sunrise-client" / expected_prepared_stamp()["minecraft"]
     else:
         # CONTENT_ROOT_TESTS runs under `cargo test -p sunrise-client-lib`, whose tests start in that crate's
-        # directory: a relative override names a root there (as test_resources.rs `prepared_root` reads it),
+        # directory: a relative override names a root there (as prepared_test_root.rs `prepared_root` reads it),
         # not relative to this script's cwd.
         path = Path(override)
         root = path if path.is_absolute() else ROOT / "crates" / "sunrise-client-lib" / path
@@ -682,18 +681,14 @@ def plan(args, base, changed, crates_of, libraries, dependencies, merge_base=Non
     ]
     dispatch_skip = None if any(path.startswith(DISPATCH_TEST_INPUTS) for path in changed) \
         else "dispatch surface untouched"
-    registry_skip = None if any(path.startswith("crates/sunrise-mod-registry/") for path in changed) \
-        else "mod registry untouched"
-    for name, manifest, skip in (("dispatch tests", DISPATCH_TESTS, dispatch_skip),
-                                 ("mod registry tests", MOD_REGISTRY, registry_skip)):
-        steps.extend([
-            Step(f"{name} clippy",
-                 f"CARGO_BUILD_JOBS=${{CARGO_BUILD_JOBS:-4}} python3 tools/ci/check_warnings.py cargo clippy --keep-going --manifest-path {manifest}"
-                 " --all-targets --locked", skip=skip),
-            Step(f"{name} tests",
-                 f"CARGO_BUILD_JOBS=${{CARGO_BUILD_JOBS:-4}} cargo test --manifest-path {manifest}"
-                 " --locked -- --test-threads=4", skip=skip, summary=tests_passed),
-        ])
+    steps.extend([
+        Step("dispatch tests clippy",
+             f"CARGO_BUILD_JOBS=${{CARGO_BUILD_JOBS:-4}} python3 tools/ci/check_warnings.py cargo clippy --keep-going --manifest-path {DISPATCH_TESTS}"
+             " --all-targets --locked", skip=dispatch_skip),
+        Step("dispatch tests tests",
+             f"CARGO_BUILD_JOBS=${{CARGO_BUILD_JOBS:-4}} cargo test --manifest-path {DISPATCH_TESTS}"
+             " --locked -- --test-threads=4", skip=dispatch_skip, summary=tests_passed),
+    ])
     harness = Step("Parity", summary=parity_summary)
     affected = affected_here(changed)
     local_data = (ROOT / ".local" / "minecraft").exists() and (ROOT / ".local" / "sunrise-client").exists()

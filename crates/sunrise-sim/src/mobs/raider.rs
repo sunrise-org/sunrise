@@ -817,6 +817,7 @@ mod tests {
             with_test_world(&seen, |w, _| {
                 let indexed = MobWorld {
                     side: crate::motion::dry_side(),
+                    variant_tables: None,
                     others_grid: Some(&grid),
                     ..w.clone()
                 };

@@ -69,7 +69,7 @@ impl crate::game::ServerGame<'_> {
                 Vec3::new(s.x, y.max(s.y), s.z)
             }
         };
-        let mut player = PlayerMotion::new(self.common.motion, feet)?;
+        let mut player = PlayerMotion::new(self.common.motion, feet);
         player.yaw = self.common.yaw;
         player.load_saved_state_once(&mut self.server.restore_player_state, &self.common.level)?;
         let spectator = self.common.mode == sunrise_command::args::GameMode::Spectator;

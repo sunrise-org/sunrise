@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real block-hit arrow category, captured by the unchanged headless client's Studio recorder.
+"""Real block-hit arrow category, captured by the headless client packet log (`SUNRISE_NET_PACKETS`).
 
 The contract is admission, air-to-ground, one arrow hit on NEUTRAL, and two
 independent RECORDS controls. Full packets (including random pitch/seed and
@@ -14,7 +14,6 @@ import struct
 import subprocess
 import time
 import uuid
-import zipfile
 
 import sys
 
@@ -27,24 +26,11 @@ UUID = '0000014b-0000-0000-0000-000000000001'
 
 
 def recorded_sounds(folder):
-    archives = list((folder / 'recordings').glob('*.mcpr'))
-    assert len(archives) == 1, archives
-    with zipfile.ZipFile(archives[0]) as archive:
-        assert archive.testzip() is None
-        data = archive.read('recording.tmcpr')
-        json.loads(archive.read('metaData.json'))
-    rows, at, previous = [], 0, -1
-    while at < len(data):
-        assert len(data)-at >= 8, 'truncated Studio header'
-        stamp, length = struct.unpack_from('>ii', data, at)
-        at += 8
-        assert stamp >= previous and 0 < length <= len(data)-at, 'incomplete/out-of-order recording'
-        previous = stamp
-        payload = data[at:at+length]
-        at += length
-        rows.append(dict(sequence=len(rows), timestamp_ms=stamp, payload=payload.hex()))
+    rows = [json.loads(line) for line in (folder / 'packets.jsonl').read_text().splitlines()]
     assert rows, 'empty recording'
-    (folder / 'packets.jsonl').write_text(''.join(json.dumps(r)+'\n' for r in rows))
+    stamps = [r['timestamp_ms'] for r in rows]
+    assert stamps[0] >= 0 and stamps == sorted(stamps), 'out-of-order recording timestamps'
+    assert [r['sequence'] for r in rows] == list(range(len(rows))), 'incomplete recording'
     # 119 is ClientboundSoundPacket in pinned protocol 777. Decode and reencode
     # with the existing official codec below; no handwritten sound decoder.
     sounds = [r for r in rows if bytes.fromhex(r['payload'])[0] == 119]
@@ -99,10 +85,10 @@ def run_side(label, command, client, folder, decoder):
         passed('execute if block 4 199 4 minecraft:stone')
         passed('execute if block 4 201 4 minecraft:air')
         # The final silent command keeps the existing net harness connected
-        # while the console runs this bounded scene. It then stops Studio.
+        # while the console runs this bounded scene. The harness writes the log before leaving.
         env = lab.game_env(SUNRISE_NET_REPORT=folder / 'client-report.json',
-            SUNRISE_NET_CHAT='/studio record start h331;h331_capture_ready;'
-            '/scoreboard players set #hold h331 0;/studio record stop')
+            SUNRISE_NET_PACKETS=folder / 'packets.jsonl',
+            SUNRISE_NET_CHAT='h331_capture_ready;/scoreboard players set #hold h331 0')
         with (folder / 'client.log').open('w') as log:
             process = subprocess.Popen([str(client), '--resources', str(lab.RESOURCES.resolve()),
                 '--server', f'127.0.0.1:{port}', '--name', 'Tester', '--render-distance', '2'],
@@ -160,7 +146,7 @@ def run_side(label, command, client, folder, decoder):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', type=Path, help='prebuilt server; otherwise build fast')
-    parser.add_argument('--client-binary', type=Path, help='unchanged Studio client; defaults to server binary')
+    parser.add_argument('--client-binary', type=Path, help='client with SUNRISE_NET_PACKETS support; defaults to server binary')
     parser.add_argument('--out', type=Path, help='fresh capture directory; default retains a new run')
     parser.add_argument('--reference-dir', type=Path, help='retained fresh Java capture; never rewritten')
     parser.add_argument('--reference-only', action='store_true')

@@ -987,7 +987,7 @@ jobs:
         id: test_reruns_select_ignored_tests_too
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: python3 tools/ci/reexec_include_ignored.py --check
-      # The nested workspaces (telemetry server, registry and probes) take game crates by path: a crate that
+      # The nested workspaces (telemetry server and probes) take game crates by path: a crate that
       # gains a dependency must refresh their own Cargo.lock too, or their --locked builds refuse after merge.
       - name: Nested workspaces' lockfiles are current
         id: nested_workspaces_lockfiles_are_current
