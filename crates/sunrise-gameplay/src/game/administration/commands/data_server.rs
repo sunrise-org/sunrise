@@ -15,6 +15,41 @@ use sunrise_sim::{
     save::{self, random_uuid},
 };
 
+/// The saved fields `Entity.load` and `AreaEffectCloud.readAdditionalSaveData`
+/// read, including common fields Sunrise does not model for clouds. A command
+/// may change these; any other top-level key is not saved entity data.
+const CLOUD_SAVED_KEYS: &[&str] = &[
+    "id",
+    "UUID",
+    "Pos",
+    "Motion",
+    "Rotation",
+    "fall_distance",
+    "Fire",
+    "Air",
+    "OnGround",
+    "Invulnerable",
+    "PortalCooldown",
+    "NoGravity",
+    "CustomName",
+    "CustomNameVisible",
+    "Silent",
+    "Glowing",
+    "HasVisualFire",
+    "Tags",
+    "Age",
+    "Duration",
+    "Radius",
+    "WaitTime",
+    "ReapplicationDelay",
+    "DurationOnUse",
+    "RadiusOnUse",
+    "RadiusPerTick",
+    "potion_duration_scale",
+    "potion_contents",
+    "custom_particle",
+];
+
 impl crate::game::ServerGame<'_> {
     /// `Entity.load` of new data (`EntityDataAccessor.setData`): the entity is
     /// rebuilt from its compound, keeping its id and UUID. Also what
@@ -539,6 +574,148 @@ impl crate::game::ServerGame<'_> {
                 }
                 set_key(&mut tag, "UUID", Tag::IntArray(uuid.to_vec()));
             }
+            Target::Cloud(id) => {
+                // `EntityDataAccessor.setData` calls `Entity.load` on a live cloud
+                // too (`AreaEffectCloud.readAdditionalSaveData`). Identity, join
+                // state and runtime-only fields stay on the resident cloud.
+                let index = self
+                    .common
+                    .breath_clouds
+                    .iter()
+                    .position(|c| c.id == id)
+                    .ok_or_else(stale)?;
+                let uuid = self.uuid_for(id);
+                // `Entity.load` keeps the current position when `Pos` is absent,
+                // and clamps a saved one to the world's limits before `setPos`.
+                let at = match tag.get("Pos") {
+                    Some(_) => {
+                        let p = entity_nbt::position(&tag).ok_or_else(stale)?;
+                        let p = sunrise_core::geometry::Vec3::new(
+                            p.x.clamp(-30_000_512.0, 30_000_512.0),
+                            p.y.clamp(-20_000_000.0, 20_000_000.0),
+                            p.z.clamp(-30_000_512.0, 30_000_512.0),
+                        );
+                        if !p.x.is_finite() || !p.y.is_finite() || !p.z.is_finite() {
+                            return Err(stale());
+                        }
+                        p
+                    }
+                    None => {
+                        let c = &self.common.breath_clouds[index];
+                        sunrise_core::geometry::Vec3::new(c.at[0], c.at[1], c.at[2])
+                    }
+                };
+                // `potion_cloud_from_nbt` is the spawn decoder and insists on a
+                // position; feed it the live-load position it must not invent.
+                let mut load_tag = tag.clone();
+                set_key(
+                    &mut load_tag,
+                    "Pos",
+                    Tag::List(
+                        [at.x, at.y, at.z]
+                            .map(|v| Tag::Double(if v == 0.0 { 0 } else { v.to_bits() }))
+                            .to_vec(),
+                    ),
+                );
+                let (_, loaded) =
+                    crate::game::server_side::potions_server::potion_cloud_from_nbt(&load_tag)
+                        .ok_or_else(stale)?;
+                // The command snapshot has no live potion contents for a cloud
+                // that was never saved (a thrown lingering potion): an edit that
+                // does not name them leaves the resident effects and particle.
+                let has_contents = tag.get("potion_contents").is_some();
+                let has_particle = tag.get("custom_particle").is_some();
+                let keep_dragon =
+                    self.common.breath_clouds[index].potion.is_none() && !has_contents;
+                self.common.breath_clouds.update(index, |c| {
+                    let old_victims = std::mem::take(&mut c.victims);
+                    let old_from_dragon = c.from_dragon;
+                    let old_first_tick = c.first_tick;
+                    let old_potion = c.potion.take();
+                    c.at = [at.x, at.y, at.z];
+                    c.motion = loaded.motion;
+                    c.fall_distance = loaded.fall_distance;
+                    c.fire_ticks = loaded.fire_ticks;
+                    c.radius = loaded.radius;
+                    c.age = loaded.age;
+                    c.duration = loaded.duration;
+                    // A merge is `Entity.load` on the resident cloud, not a
+                    // respawn: its first tick and dragon/potion tick family stay.
+                    c.first_tick = old_first_tick;
+                    if keep_dragon {
+                        c.from_dragon = old_from_dragon;
+                        c.victims = old_victims;
+                        c.potion = None;
+                    } else {
+                        let mut potion = loaded
+                            .potion
+                            .expect("potion_cloud_from_nbt always reads potion contents");
+                        if let Some(old) = old_potion {
+                            if !has_contents {
+                                potion.effects = old.effects;
+                                potion.hidden = old.hidden;
+                                potion.ambient = old.ambient;
+                                potion.color = old.color;
+                            }
+                            if !has_particle {
+                                potion.custom_particle = old.custom_particle;
+                            }
+                            // Owner, source and victim history are live state
+                            // `AreaEffectCloud.readAdditionalSaveData` does not write.
+                            potion.owner = old.owner;
+                            potion.guest = old.guest;
+                            potion.source = old.source;
+                            potion.victims = old.victims;
+                        }
+                        c.potion = Some(potion);
+                        c.victims = old_victims;
+                    }
+                });
+                // Keep the raw compound the entity already had, apply only the
+                // fields `Entity.load` reads, and drop arbitrary new keys a
+                // command supplied. `Passengers` is never read by `Entity.load`.
+                let old_raw = self
+                    .common
+                    .persist
+                    .raw
+                    .get(&id)
+                    .and_then(|tag| match tag {
+                        Tag::Compound(raw) => Some(raw.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                let old_keys: Vec<_> = old_raw.keys().cloned().collect();
+                let mut raw = old_raw;
+                if let Tag::Compound(fields) = &tag {
+                    for key in old_keys {
+                        if key.to_string_lossy().as_str() != "Passengers"
+                            && !fields.contains_key(&key)
+                        {
+                            raw.remove(&key);
+                        }
+                    }
+                    for (key, value) in fields {
+                        let name = key.to_string_lossy();
+                        if name.as_str() != "Passengers"
+                            && (CLOUD_SAVED_KEYS.contains(&name.as_str()) || raw.contains_key(key))
+                        {
+                            raw.insert(key.clone(), value.clone());
+                        }
+                    }
+                }
+                raw.insert("UUID".into(), Tag::IntArray(uuid.to_vec()));
+                // SaveWithoutId writes the live, clamped position, never the
+                // out-of-bounds value a command supplied.
+                raw.insert(
+                    "Pos".into(),
+                    Tag::List(
+                        [at.x, at.y, at.z]
+                            .map(|v| Tag::Double(if v == 0.0 { 0 } else { v.to_bits() }))
+                            .to_vec(),
+                    ),
+                );
+                tag = Tag::Compound(raw);
+            }
             Target::Bolt(id) => {
                 Self::normalize_loaded_mob_tags(&mut tag);
                 let i = self
@@ -577,6 +754,7 @@ impl crate::game::ServerGame<'_> {
         | Target::Other(id)
         | Target::Fangs(id)
         | Target::Bolt(id)
+        | Target::Cloud(id)
         | Target::Projectile(id) = t
         {
             if let Some(kept) = kept_passengers

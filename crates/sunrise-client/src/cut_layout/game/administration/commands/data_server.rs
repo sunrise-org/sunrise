@@ -10,7 +10,14 @@ pub(crate) mod tests {
         bind_local_player, fixture_resident_column, run_fresh_cases, with_game,
     };
     use sunrise_gameplay_common::game::commands_common::Target;
+    use sunrise_gameplay_common::game::dragon_common::Breath;
     use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _;
+    use sunrise_gameplay_common::game::potions_common::Victim;
+    use sunrise_sim::mobs::Who;
+
+    fn uuid_text(uuid: [i32; 4]) -> String {
+        sunrise_protocol::crypto::uuid_string(sunrise_sim::lan::playerdata::ints_uuid(uuid))
+    }
 
     /// `EntityDataAccessor.setData` keeps the entity's id and UUID: a
     /// `/data merge` that carries a different UUID does not take, and a
@@ -321,6 +328,182 @@ pub(crate) mod tests {
                 game.mobs.iter().any(|m| m.id == pig),
                 "the rider stays in the level"
             );
+        });
+    }
+    /// `EntityDataAccessor.setData` loads a live `AreaEffectCloud` as well as a
+    /// mob: an Age/Radius `/data merge` keeps a thrown lingering cloud's live
+    /// effects, particle, owner and victim history (#6769).
+    #[test]
+    #[ignore = "daily"]
+    fn a_data_merge_keeps_a_lingering_clouds_live_potion_and_victims() {
+        if run_fresh_cases(
+            "cut_layout::game::server_side::commands_server::data::tests::a_data_merge_keeps_a_lingering_clouds_live_potion_and_victims",
+            "SUNRISE_TEST_CLOUD_DATA_MERGE_CASE",
+            &["lingering"],
+        ) {
+            return;
+        }
+        with_game(|game| {
+            fixture_resident_column(&mut game.world, (0, 0));
+            game.build_registries();
+            game.set_allow_commands(true);
+            let created = Tag::compound([
+                (
+                    "Pos",
+                    Tag::List(
+                        [0.5f64, 64.0, 0.5]
+                            .map(|v| Tag::Double(v.to_bits()))
+                            .to_vec(),
+                    ),
+                ),
+                ("Age", Tag::Int(3)),
+                ("Duration", Tag::Int(600)),
+                ("Radius", Tag::Float(3.0_f32.to_bits())),
+                ("WaitTime", Tag::Int(20)),
+                (
+                    "potion_contents",
+                    Tag::compound([("potion", Tag::String("minecraft:swiftness".into()))]),
+                ),
+                (
+                    "custom_particle",
+                    Tag::compound([("type", Tag::String("flame".into()))]),
+                ),
+            ]);
+            let id = game.load_potion_cloud(&created).expect("the cloud loads");
+            let uuid = game.uuid_for(id);
+            // A thrown lingering potion's cloud is live state the command
+            // snapshot never wrote back: effects, owner and recent victims.
+            game.breath_clouds.update(0, |c| {
+                let potion = c.potion.as_mut().unwrap();
+                potion.owner = Some(Who::Player);
+                potion.guest = Some(7);
+                potion.victims.push((Victim::Mob(99), 40));
+                c.victims.push((Victim::Mob(99), 40));
+            });
+            let cloud = format!("data merge entity {} ", uuid_text(uuid));
+            assert!(
+                game.run_command(&format!("{cloud}{{Age:42,Radius:5.0f}}")),
+                "an Age/Radius merge"
+            );
+            let c = game.breath_clouds.iter().find(|c| c.id == id).unwrap();
+            assert_eq!((c.age, c.radius), (42, 5.0));
+            let potion = c.potion.as_ref().unwrap();
+            assert!(
+                potion.effects.iter().any(|(id, ..)| *id == "speed"),
+                "the live swiftness effect survives the unrelated merge"
+            );
+            assert_eq!(potion.settings.wait_time, 20);
+            assert!(potion.custom_particle.is_some(), "the custom particle");
+            assert_eq!((potion.owner, potion.guest), (Some(Who::Player), Some(7)));
+            assert_eq!(potion.victims.len(), 1);
+            assert!(matches!(potion.victims[0].0, Victim::Mob(99)));
+            assert_eq!(c.victims.len(), 1);
+            assert_eq!(game.uuid_for(id), uuid);
+            let saved = game.command_target_nbt(Target::Cloud(id)).unwrap();
+            assert_eq!(saved.get("Age"), Some(&Tag::Int(42)));
+            assert_eq!(saved.get("Radius"), Some(&Tag::Float(5.0_f32.to_bits())));
+
+            // An unrecognized key is command input, not saved entity data.
+            assert!(game.run_command(&format!("{cloud}{{Bogus:1}}")));
+            let saved = game.command_target_nbt(Target::Cloud(id)).unwrap();
+            assert!(saved.get("Bogus").is_none(), "an unknown key is not saved");
+
+            // `Entity.load` keeps the current position when Pos is absent.
+            let before = game.breath_clouds.iter().find(|c| c.id == id).unwrap().at;
+            assert!(game.run_command(&format!("data remove entity {} Pos", uuid_text(uuid))));
+            let c = game.breath_clouds.iter().find(|c| c.id == id).unwrap();
+            assert_eq!(c.at, before, "removing Pos keeps the live position");
+            assert!(
+                game.command_target_nbt(Target::Cloud(id))
+                    .unwrap()
+                    .get("Pos")
+                    .is_some()
+            );
+
+            // An out-of-bounds saved position is clamped, not copied.
+            assert!(game.run_command(&format!("{cloud}{{Pos:[40000000d,64d,-40000000d]}}")));
+            let c = game.breath_clouds.iter().find(|c| c.id == id).unwrap();
+            assert_eq!(c.at, [30_000_512.0, 64.0, -30_000_512.0]);
+        });
+    }
+
+    /// A generated dragon cloud stays in the dragon tick through an unrelated
+    /// `/data merge`: its damage family, particle/growth state and victims stay.
+    #[test]
+    #[ignore = "daily"]
+    fn a_data_merge_keeps_generated_dragon_clouds_in_the_dragon_tick() {
+        if run_fresh_cases(
+            "cut_layout::game::server_side::commands_server::data::tests::a_data_merge_keeps_generated_dragon_clouds_in_the_dragon_tick",
+            "SUNRISE_TEST_DRAGON_CLOUD_DATA_MERGE_CASE",
+            &["dragon"],
+        ) {
+            return;
+        }
+        with_game(|game| {
+            fixture_resident_column(&mut game.world, (0, 0));
+            game.build_registries();
+            game.set_allow_commands(true);
+            let add = |game: &mut sunrise_gameplay::game::ServerGame<'_>,
+                       from_dragon: bool,
+                       age: i32,
+                       radius: f32,
+                       uuid: [i32; 4]| {
+                let id = game.take_entity_id();
+                game.persist.uuids.insert(id, uuid);
+                game.breath_clouds.push(Breath {
+                    attachment_lifetime: Default::default(),
+                    join: Default::default(),
+                    id,
+                    at: [0.5, 64.0, 0.5],
+                    motion: [0.0; 3],
+                    fall_distance: 0.0,
+                    fire_ticks: 0,
+                    first_tick: true,
+                    radius,
+                    age,
+                    duration: 200,
+                    from_dragon,
+                    victims: vec![(Victim::Mob(5), 99)],
+                    potion: None,
+                });
+                id
+            };
+            let flame = add(game, true, 0, 5.0, [24730, 0, 0, 1]);
+            let fireball = add(game, false, 30, 3.0, [24730, 0, 0, 2]);
+            game.server.ticked_entities_through = fireball;
+            for uuid in [[24730, 0, 0, 1], [24730, 0, 0, 2]] {
+                assert!(game.run_command(&format!(
+                    "data merge entity {} {{Age:30,Radius:6.0f}}",
+                    uuid_text(uuid)
+                )));
+            }
+            for (id, from_dragon) in [(flame, true), (fireball, false)] {
+                let c = game.breath_clouds.iter().find(|c| c.id == id).unwrap();
+                assert_eq!((c.age, c.radius), (30, 6.0));
+                assert!(c.potion.is_none(), "still a dragon-tick cloud");
+                assert_eq!(c.from_dragon, from_dragon);
+                assert_eq!(c.victims.len(), 1);
+            }
+            // The potion pass leaves them, the dragon pass ticks both; the
+            // fireball's cloud grows after its wait, the flame's radius does not.
+            game.tick_potion_clouds();
+            assert!(
+                game.breath_clouds
+                    .iter()
+                    .all(|c| c.age == 30 && c.potion.is_none())
+            );
+            game.tick_breath();
+            let flame = game.breath_clouds.iter().find(|c| c.id == flame).unwrap();
+            let fireball = game
+                .breath_clouds
+                .iter()
+                .find(|c| c.id == fireball)
+                .unwrap();
+            assert_eq!((flame.age, flame.radius), (31, 6.0));
+            assert_eq!(fireball.age, 31);
+            assert!(fireball.radius > 6.0, "the fireball cloud still grows");
+            assert_eq!((flame.from_dragon, fireball.from_dragon), (true, false));
+            assert!(flame.potion.is_none() && fireball.potion.is_none());
         });
     }
 }
