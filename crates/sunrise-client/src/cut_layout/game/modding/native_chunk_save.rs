@@ -1,4 +1,4 @@
-#![cfg(test)]
+#![cfg(all(test, not(sunrise_parity_fixtures)))]
 use std::sync::Arc;
 use std::time::Instant;
 #[cfg(test)]

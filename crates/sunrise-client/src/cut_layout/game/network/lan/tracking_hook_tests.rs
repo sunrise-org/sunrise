@@ -3,6 +3,8 @@
 //! with the entity in the level once the player was sent its spawn bundle, a stop once it was
 //! sent the removal, and a payload a listener sends reaches the player right after that packet.
 //! A leaving player's stops follow `player_logged_out`.
+#![cfg(not(sunrise_parity_fixtures))]
+
 use mod_api::{Hooks, ModEntry, PayloadBytes, PayloadId, Registrar, ServerHost};
 use std::sync::{Arc, Mutex};
 use sunrise_gameplay::game::native_entity_refs::tests::with_game;

@@ -105,7 +105,7 @@ def main():
                         'dev.sunriselab.parity.VanillaDispenserOracle', str(args.resources.resolve()),
                         str(input_path), str(work / 'native.txt')], cwd=scratch, check=True)
         subprocess.run(
-            [str(binary), 'game::server_side::special_attack_fixture::tests::special_attack_cases_without_world_startup',
+            [str(binary), 'cut_layout::game::server_side::special_attack_fixture::tests::special_attack_cases_without_world_startup',
              '--exact', '--ignored', '--test-threads=1'], cwd=scratch,
             env=lab.game_env(SUNRISE_TEST_RESOURCES=str(args.resources.resolve()),
                              SUNRISE_SPECIAL_ATTACK_CASES=f'{input_path},{work / "rust.txt"}'),

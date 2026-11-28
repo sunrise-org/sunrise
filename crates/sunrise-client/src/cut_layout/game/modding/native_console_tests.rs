@@ -1,5 +1,7 @@
 //! The console for native mods: logged lines reach `console_line`, and a command's feedback
 //! comes back from `run_command_with_output`.
+#![cfg(not(sunrise_parity_fixtures))]
+
 use super::{native_entity_refs::tests::with_game, native_guest_turn_tests::with_guests};
 use mod_api::{
     Command, CommandFeedback, CommandResult, Commands, ConsoleLineEvent, Hooks,

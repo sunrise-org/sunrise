@@ -1,3 +1,5 @@
+#![cfg(not(sunrise_parity_fixtures))]
+
 use crate::game::server_side::lan::tracking_hook_tests::Heard;
 use crate::game::server_side::lan::tracking_hook_tests::Sent;
 use crate::game::server_side::lan::tracking_hook_tests::at;

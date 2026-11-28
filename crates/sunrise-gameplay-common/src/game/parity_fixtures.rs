@@ -1,15 +1,28 @@
 //! The parity harnesses' fixtures, run by the `sunrise-parity-fixtures` program (crates/sunrise-parity-fixtures, CI
 //! only) as the lib test runs them, without compiling the lib's other tests: the lib test's rustc outgrew a parity
-//! runner (#4896). The table is that package's build.rs's: each `#[test]` whose body is one call to the function
-//! `run_<test>` beside it. Its build.rs sets `test` for this build, so the test-only code the fixtures read compiles as in the lib test, and only the
-//! `#[test]` functions, which need `--test`, are left out. The command line is libtest's, as far as the harnesses and
-//! `in_own_process` use it, and so is the report they read.
+//! runner (#4896). The build scripts discover each `#[test]` whose only statement calls its sibling
+//! `run_<test>()`. The gameplay crates expose their runners through a feature; the dispatcher builds
+//! the shell with `cfg(test)` but without libtest. The command line and report match the parts of
+//! libtest used by the harnesses and `in_own_process`.
 
-include!(concat!(env!("OUT_DIR"), "/parity_fixtures.rs"));
+#[cfg(sunrise_parity_fixtures)]
+use crate::game::FIXTURES;
+
+fn matches_filters(name: &str, filters: &[String], exact: bool) -> bool {
+    filters.is_empty()
+        || filters.iter().any(|filter| {
+            if exact {
+                name == filter
+            } else {
+                name.contains(filter.as_str())
+            }
+        })
+}
 
 /// Runs the fixtures the arguments select, one after another, each on a thread named for it as libtest names
 /// its tests' threads; the exit code is libtest's (101 when one failed), and 101 too when the filters select none, so a
 /// harness whose fixture left the table fails instead of passing on nothing.
+#[cfg(sunrise_parity_fixtures)]
 pub fn main() {
     let mut filters = Vec::new();
     let (mut exact, mut list) = (false, false);
@@ -34,16 +47,7 @@ pub fn main() {
     }
     let chosen: Vec<_> = FIXTURES
         .iter()
-        .filter(|(name, _)| {
-            filters.is_empty()
-                || filters.iter().any(|filter| {
-                    if exact {
-                        name == filter
-                    } else {
-                        name.contains(filter.as_str())
-                    }
-                })
-        })
+        .filter(|(name, _)| matches_filters(name, &filters, exact))
         .collect();
     if list {
         for (name, _) in &chosen {
@@ -94,6 +98,22 @@ pub fn main() {
 }
 
 /// "1 test", "2 tests": libtest's wording, which harnesses match.
+#[cfg(sunrise_parity_fixtures)]
 fn tests(count: usize) -> String {
     format!("{count} test{}", if count == 1 { "" } else { "s" })
+}
+
+#[cfg(all(test, not(sunrise_parity_fixtures)))]
+mod tests {
+    use super::matches_filters;
+
+    #[test]
+    fn isolated_shell_fixture_matches_its_full_reexec_name() {
+        let reexec = "cut_layout::game::client_side::crosshair_pick_tests::dynamic_redirectable_tag_controls_arrow_pick_and_in_ground_stops_it";
+        let short = "game::client_side::crosshair_pick_tests::dynamic_redirectable_tag_controls_arrow_pick_and_in_ground_stops_it";
+        assert!(matches_filters(reexec, &[reexec.into()], true));
+        assert!(matches_filters(reexec, &[short.into()], false));
+        assert!(!matches_filters(reexec, &[short.into()], true));
+        assert!(!matches_filters(reexec, &["missing".into()], false));
+    }
 }

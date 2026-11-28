@@ -3184,10 +3184,13 @@ impl LanHost {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(in crate::game) mod tests {
+    #[cfg(test)]
     use super::{EventTimings, Hub, LanHost, OFFHAND_SLOT, living_flags};
+    #[cfg(test)]
     use sunrise_gameplay_common::game::lan_mob_metadata::{mob_freeze_meta, mob_meta};
+    #[cfg(test)]
     use sunrise_gameplay_common::game::{
         native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _,
         tables::{GameItems as _, WorldTablesExt as _},
@@ -3685,7 +3688,9 @@ pub(in crate::game) mod tests {
         spans::record_here(false);
         assert_eq!(notes, vec![(1000.0, "200 x UseItemOn".into())]);
     }
+    #[cfg(test)]
     use sunrise_protocol::entity_data::{Value, serializer};
+    #[cfg(test)]
     use sunrise_sim::mobs::Mob;
 
     fn sync_test_items(
@@ -4307,6 +4312,7 @@ pub(in crate::game) mod tests {
         assert!(Arc::ptr_eq(&opened, &reused));
     }
 
+    #[cfg(test)]
     fn mob_of(kind: &str) -> Option<Mob> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../.local/sunrise-client")
@@ -4321,6 +4327,7 @@ pub(in crate::game) mod tests {
         ))
     }
 
+    #[cfg(test)]
     fn freeze_meta(m: &Mob) -> (Vec<(u8, i32, Value)>, Vec<(u8, i32, Value)>) {
         let (mut meta, mut defaults) = (Vec::new(), Vec::new());
         mob_freeze_meta(m, &mut meta, &mut defaults);
@@ -5116,9 +5123,11 @@ pub(in crate::game) mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(in crate::game) mod sources_tests {
+    #[cfg(test)]
     use super::sync::overlay_key;
+    #[cfg(test)]
     use sunrise_world::loot::PackOverlay;
 
     /// A pack set is told apart by its bytes, so a preload read without

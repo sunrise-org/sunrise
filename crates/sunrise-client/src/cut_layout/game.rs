@@ -1,15 +1,19 @@
 pub use crate::game_facade::*;
+
+// The table belongs here so it can see runners restricted to `crate::game`.
+#[cfg(sunrise_parity_fixtures)]
+include!(concat!(env!("OUT_DIR"), "/parity_fixtures.rs"));
 #[cfg(test)]
 pub(crate) use resource_load::{load_resources, load_resources_skip_lang, load_resources_uncached};
-#[cfg(all(test, feature = "client"))]
+#[cfg(all(test, feature = "client", not(sunrise_parity_fixtures)))]
 pub(crate) use sunrise_client_gameplay::game::client_side::test_key_codes::{
     drop_held_behind_dialog, gameplay_has_keyboard, glfw_button, glfw_modifiers, keyboard_button,
 };
-#[cfg(all(test, feature = "client"))]
+#[cfg(all(test, feature = "client", not(sunrise_parity_fixtures)))]
 pub(crate) use sunrise_client_gameplay::hud_gates::{block_outline_drawn, debug_crosshair_drawn};
 #[path = "../benchmark_retention.rs"]
 pub(crate) mod benchmark_retention;
-#[cfg(test)]
+#[cfg(all(test, not(sunrise_parity_fixtures)))]
 #[path = "game/modding/container_loot_table_tests.rs"]
 mod container_loot_table_tests;
 #[cfg(all(test, feature = "client"))]
@@ -116,7 +120,7 @@ mod contained_fluid_tests;
 #[cfg(test)]
 #[path = "game/mobs/conversion_place_tests.rs"]
 mod conversion_place_tests;
-#[cfg(test)]
+#[cfg(all(test, not(sunrise_parity_fixtures)))]
 #[path = "game/runtime/core_tests.rs"]
 mod core_tests;
 #[cfg(test)]

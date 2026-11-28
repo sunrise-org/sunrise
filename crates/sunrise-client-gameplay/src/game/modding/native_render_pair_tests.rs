@@ -340,7 +340,7 @@ fn entity_draw_order_after_client_packets() {
     run_entity_draw_order_after_client_packets();
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(in crate::game::client_side) fn run_entity_draw_order_after_client_packets() {
     use sunrise_level::camera_math::CameraType;
     use sunrise_protocol::{

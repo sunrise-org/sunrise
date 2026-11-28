@@ -29,7 +29,7 @@ def main():
               'dev.sunriselab.parity.VanillaClientRedstonePreviewOracle'])
     for case in ('placement_preview_checks_obstruction_without_changing_the_level',
                  'redstone_updates_respect_the_preview_level_side'):
-        test = f'game::remote::tests::placement_preview_tests::{case}'
+        test = f'cut_layout::game::remote::tests::placement_preview_tests::{case}'
         recording = work / f'{case}.log'
         with recording.open('w', encoding='utf-8') as output:
             base.run([lab.parity_fixtures(),

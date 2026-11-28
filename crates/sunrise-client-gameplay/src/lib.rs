@@ -39,6 +39,12 @@ pub mod game;
 #[cfg(all(test, feature = "client"))]
 #[path = "../../sunrise-core/src/prepared_test_root.rs"]
 pub(crate) mod prepared_test_root;
+
+/// Fixtures available to the parity dispatcher in this build.
+#[cfg(feature = "parity-fixtures")]
+pub fn parity_fixtures() -> &'static [(&'static str, fn())] {
+    game::client_side::parity_fixtures()
+}
 #[cfg(test)]
 mod test_game_dir;
 

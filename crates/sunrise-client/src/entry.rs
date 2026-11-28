@@ -307,7 +307,7 @@ fn raise_open_file_limit() {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(sunrise_parity_fixtures)))]
 mod installation_tests {
     #[test]
     fn refused_install_names_all_mods_and_only_failed_targets() {
@@ -324,7 +324,7 @@ mod installation_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(sunrise_parity_fixtures)))]
 mod name_conversion_tests {
     use std::sync::{
         Arc,

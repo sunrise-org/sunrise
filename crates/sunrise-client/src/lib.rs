@@ -28,16 +28,16 @@ pub mod game_facade;
 pub use cut_layout::game;
 #[cfg(all(test, not(feature = "client")))]
 pub(crate) use sunrise_client_lib::settings;
-#[cfg(all(test, not(feature = "client")))]
+#[cfg(all(test, not(feature = "client"), not(sunrise_parity_fixtures)))]
 pub(crate) use sunrise_game_data::scoreboard;
-#[cfg(all(test, not(feature = "client")))]
+#[cfg(all(test, not(feature = "client"), not(sunrise_parity_fixtures)))]
 pub(crate) use sunrise_items::items;
-#[cfg(all(test, not(feature = "client")))]
+#[cfg(all(test, not(feature = "client"), not(sunrise_parity_fixtures)))]
 pub(crate) use sunrise_level::chunk;
-#[cfg(all(test, not(feature = "client")))]
+#[cfg(all(test, not(feature = "client"), not(sunrise_parity_fixtures)))]
 pub(crate) use sunrise_sim::{datapack_net, entities, motion, raw_payloads};
 pub use sunrise_sim::{lan, orb_limits, save};
-#[cfg(test)]
+#[cfg(all(test, not(sunrise_parity_fixtures)))]
 mod test_game_dir;
 
 // The one way a unit test gets prepared data: `SUNRISE_TEST_RESOURCES`, else the checkout's
@@ -47,3 +47,13 @@ mod test_game_dir;
 pub(crate) mod prepared_test_root;
 
 pub use sunrise_level::{crash, logging, spans};
+
+#[cfg(any(test, sunrise_parity_fixtures))]
+#[path = "../../sunrise-gameplay-common/src/game/parity_fixtures.rs"]
+mod parity_fixtures_cli;
+
+#[cfg(sunrise_parity_fixtures)]
+fn main() {
+    mod_platform::__private::test_platform::install();
+    parity_fixtures_cli::main();
+}
