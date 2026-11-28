@@ -1,16 +1,17 @@
-# Changes to these files wait for a council member's review (council poll P35, 2026-11-10) once branch protection requires code owners' reviews
-# (tools/ci/protect_pipeline.sh, docs/security.md). They are what builds, signs and ships releases, the code that
-# checks downloads before installing them (backend.rs downloads, installs and updates the launcher itself; links.json
-# says where from; the Cargo.toml files pick the crates that do it), and this file. Everything else merges as soon as
-# `verify` passes.
-/.github/                                @horizon-rust/council
-/tools/ci/                               @horizon-rust/council
-/tools/release_train.py                  @horizon-rust/council
-/crates/sunrise-release-sign/            @horizon-rust/council
-/crates/sunrise-server/src/update.rs     @horizon-rust/council
-/crates/sunrise-server/Cargo.toml        @horizon-rust/council
-/launcher/src/signed.rs                  @horizon-rust/council
-/launcher/src/backend.rs                 @horizon-rust/council
-/launcher/links.json                     @horizon-rust/council
-/launcher/Cargo.toml                     @horizon-rust/council
-/packaging/                              @horizon-rust/council
+# Release, signing and download-check paths: the release council (.github/council.txt); licence and governance: the core team.
+/.github/                                @UMCEKO @reservedbytes @arismoko @Xmilon
+/tools/ci/                               @UMCEKO @reservedbytes @arismoko @Xmilon
+/tools/release_train.py                  @UMCEKO @reservedbytes @arismoko @Xmilon
+/crates/sunrise-release-sign/            @UMCEKO @reservedbytes @arismoko @Xmilon
+/crates/sunrise-server/src/update.rs     @UMCEKO @reservedbytes @arismoko @Xmilon
+/crates/sunrise-server/Cargo.toml        @UMCEKO @reservedbytes @arismoko @Xmilon
+/launcher/src/signed.rs                  @UMCEKO @reservedbytes @arismoko @Xmilon
+/launcher/src/backend.rs                 @UMCEKO @reservedbytes @arismoko @Xmilon
+/launcher/links.json                     @UMCEKO @reservedbytes @arismoko @Xmilon
+/launcher/Cargo.toml                     @UMCEKO @reservedbytes @arismoko @Xmilon
+/packaging/                              @UMCEKO @reservedbytes @arismoko @Xmilon
+/LICENSE                                 @UMCEKO @reservedbytes @arismoko
+/LICENSES/                               @UMCEKO @reservedbytes @arismoko
+/LICENSING.md                            @UMCEKO @reservedbytes @arismoko
+/GOVERNANCE.md                           @UMCEKO @reservedbytes @arismoko
+/.github/CODEOWNERS                      @UMCEKO @reservedbytes @arismoko @Xmilon
