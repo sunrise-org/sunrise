@@ -1445,14 +1445,13 @@ impl crate::game::ServerGame<'_> {
                         return None;
                     }
                     let eye = g.eye_position()?;
-                    let d2: f64 = (0..3)
-                        .map(|a| {
-                            let lo = f64::from(p.pos[a]);
-                            (eye[a] - eye[a].clamp(lo, lo + 1.0)).powi(2)
-                        })
-                        .sum();
-                    let range = g.reach() + 1.0;
-                    let within = d2 < range * range;
+                    // `Player.blockInteractionRange()` is read live here too, and
+                    // the block AABB distance uses the shared helper (#6828).
+                    let range =
+                        g.common
+                            .interaction_range("minecraft:block_interaction_range", 4.5, 5.0)
+                            + 1.0;
+                    let within = sunrise_sim::lan::guest::within_block_range(eye, range, p.pos);
                     if !g.within_interaction_range_of(g.server.lan_acting_uuid, p.pos, 1.0, within)
                     {
                         return None;
@@ -1588,3 +1587,7 @@ use sunrise_gameplay_common::game::pick_entity_common::PickEntityCommonGameExt1 
 use sunrise_gameplay_common::game::player_equip::PlayerEquipGameExt1 as _;
 
 use sunrise_gameplay_common::game::GameGameExt1 as _;
+
+#[cfg(test)]
+#[path = "tests/live_block_reach_tests.rs"]
+pub(in crate::game) mod live_block_reach_tests;

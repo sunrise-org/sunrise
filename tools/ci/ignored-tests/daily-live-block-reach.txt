@@ -1,0 +1,2 @@
+sunrise-gameplay game::server_side::lan_actions_server::packets::live_block_reach_tests::issue_6828_menus_follow_the_live_block_range lib daily child-process
+sunrise-gameplay game::server_side::lan_actions_server::packets::live_block_reach_tests::issue_6828_pick_accepts_the_strict_boundary lib daily child-process

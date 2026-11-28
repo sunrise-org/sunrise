@@ -127,7 +127,13 @@ impl ServerGame<'_> {
             self.close_container_server();
             return;
         }
-        let range = self.common.reach() + 4.0;
+        // `Player.blockInteractionRange()` is read live: a mid-tick attribute
+        // edit must reach the host's container check, not wait for the tick's
+        // cached `block_reach` refresh (#6828).
+        let range = self
+            .common
+            .interaction_range("minecraft:block_interaction_range", 4.5, 5.0)
+            + 4.0;
         let near = self.common.container_parts().iter().all(|&((x, y, z), _)| {
             let within = sunrise_sim::lan::guest::within_block_range(eye, range, [x, y, z]);
             self.host_within_interaction_range([x, y, z], within)
@@ -186,7 +192,11 @@ impl ServerGame<'_> {
         };
         let state = self.common.world.block(pos[0], pos[1], pos[2]);
         let table = &*self.common.res.facts().get(state).name == "minecraft:crafting_table";
-        let range = self.common.reach() + 4.0;
+        // `CraftingMenu.stillValid` asks the live block interaction range too (#6828).
+        let range = self
+            .common
+            .interaction_range("minecraft:block_interaction_range", 4.5, 5.0)
+            + 4.0;
         let within = sunrise_sim::lan::guest::within_block_range(eye, range, pos);
         if !(table && self.host_within_interaction_range(pos, within)) {
             self.close_container_server();
