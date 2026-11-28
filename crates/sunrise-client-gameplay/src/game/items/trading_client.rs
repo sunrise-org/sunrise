@@ -396,7 +396,6 @@ impl ClientGame<'_> {
         s.merchant = Some(Box::new(state));
         self.open_station_client(s);
         self.set_screen(super::Screen::Inventory);
-        self.capture(false);
         self.set_mapping_held("key.use", false);
     }
     /// Opens a client-only merchant preview without a mob (`sunrise-ctl trade`).

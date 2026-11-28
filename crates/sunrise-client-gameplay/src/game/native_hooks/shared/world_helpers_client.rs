@@ -43,7 +43,6 @@ impl crate::game::ClientGame<'_> {
                 self.close_mod_screen_to_title();
             } else {
                 self.set_screen(Screen::Playing);
-                self.capture(true);
             }
             if self.client.screen == Screen::Mod {
                 // `screen_opening` kept it open, or opened a mod's own.

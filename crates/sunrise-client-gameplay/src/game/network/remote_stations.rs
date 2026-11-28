@@ -25,7 +25,6 @@ impl crate::game::ClientGame<'_> {
         self.common.container = None;
         self.open_station_client(Station::new_kind(kind, pos));
         self.set_screen(Screen::Inventory);
-        self.capture(false);
     }
 
     /// Window `container` is the server's workstation menu, open here.

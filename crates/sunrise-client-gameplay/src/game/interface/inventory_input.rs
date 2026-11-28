@@ -116,7 +116,6 @@ impl crate::game::ClientGame<'_> {
             self.close_container_client();
             self.set_screen(Screen::Playing);
         }
-        self.capture(true);
     }
 
     /// `CreativeModeInventoryScreen.keyPressed` on the search tab: a hotbar

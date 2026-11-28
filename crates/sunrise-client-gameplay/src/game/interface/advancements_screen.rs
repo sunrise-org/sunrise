@@ -208,7 +208,6 @@ impl crate::game::ClientGame<'_> {
         if self.client.screen != Screen::Advancements {
             return;
         }
-        self.capture(false);
         if self.common.adv.remote_tree.is_some() {
             // AdvancementsScreen.init attaches a fresh listener (ClientAdvancements.setListener),
             // which replays roots to select the first tab before init reports the selection again.
@@ -228,7 +227,6 @@ impl crate::game::ClientGame<'_> {
             self.set_screen(Screen::Paused);
         } else {
             self.set_screen(Screen::Playing);
-            self.capture(true);
         }
     }
     /// `ClientAdvancements.setSelectedTab` with `tellServer` enabled.

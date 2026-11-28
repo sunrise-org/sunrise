@@ -421,15 +421,16 @@ impl crate::game::ClientGame<'_> {
         if self.client.screen == Screen::Inventory {
             self.close_container_client();
         }
-        self.set_screen(Screen::Playing);
-        if self.client.screen == Screen::Playing
-            && self.client.title.0.is_none()
-            && !self.screen_over_playing()
-        {
-            self.capture(true);
-            if self.client.captured {
-                self.common.clicks.miss_time = 10000;
+        if self.client.screen == Screen::Playing {
+            // With no transition, a grab request must still take the pointer.
+            if self.client.title.0.is_none() && !self.screen_over_playing() {
+                self.capture(true);
             }
+        } else {
+            self.set_screen(Screen::Playing);
+        }
+        if self.client.captured {
+            self.common.clicks.miss_time = 10000;
         }
     }
     /// The game's pointer grab leaves the system pointer where the person at the computer has

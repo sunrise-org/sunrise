@@ -42,7 +42,6 @@ impl crate::game::ClientGame<'_> {
         });
         self.clear_device_keys();
         self.set_screen(Screen::Win);
-        self.capture(false);
     }
     /// Stop the scroll `scroll` pixels in (`sunrise-ctl credits ... SCROLL`).
     pub(in crate::game::client_side) fn hold_win_screen(&mut self, scroll: f32) {
@@ -140,7 +139,6 @@ impl crate::game::ClientGame<'_> {
                     self.remote_respawn();
                 }
                 self.set_screen(Screen::Playing);
-                self.capture(true);
             }
         }
         Ok(())

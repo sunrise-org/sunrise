@@ -616,11 +616,7 @@ impl crate::game::ClientGame<'_> {
                 return;
             }
         }
-        let native = self.client.mod_screen.0.is_some();
         self.set_screen(Screen::Inventory);
-        if !native || self.native_screen_shown() {
-            self.capture(false);
-        }
     }
     /// A Shift double click on a server (`AbstractContainerScreen.mouseReleased`):
     /// a predicted QUICK_MOVE for every slot the engine moves, each sent.
@@ -720,7 +716,6 @@ impl crate::game::ClientGame<'_> {
         self.remote_close_local();
         if self.client.screen == Screen::Inventory {
             self.set_screen(Screen::Playing);
-            self.capture(true);
         }
         self.send(S::ContainerClose(play::ContainerClose { container }));
     }

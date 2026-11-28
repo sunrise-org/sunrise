@@ -286,7 +286,6 @@ impl crate::game::ClientGame<'_> {
             "close" => {
                 self.close_container_client();
                 self.set_screen(Screen::Playing);
-                self.capture(true);
                 ok()
             }
             _ => Ok(None),

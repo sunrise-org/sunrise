@@ -22,7 +22,6 @@ impl crate::game::ClientGame<'_> {
         } else {
             self.set_screen(Screen::Inventory);
         }
-        self.capture(false);
     }
     /// A key press while a world is open (keyboard or control socket). `key`
     /// is the vanilla default the pressed mapping translates to, `raw` the
@@ -111,7 +110,6 @@ impl crate::game::ClientGame<'_> {
                     self.mod_browser_closed();
                     self.common.carried = None;
                     self.set_screen_with(Screen::Playing, |g| g.close_creative_menu());
-                    self.capture(true);
                 }
                 Screen::Paused | Screen::Inventory => {
                     // RecipeBookComponent.keyPressed: a narrow window's open
@@ -130,7 +128,6 @@ impl crate::game::ClientGame<'_> {
                     self.client.pause_focus = None;
                     self.set_screen(Screen::Playing);
                     self.client.pause_menu = true;
-                    self.capture(true);
                 }
                 Screen::GameModeSwitcher => self.close_gamemode_switcher(false),
                 Screen::Dead => {

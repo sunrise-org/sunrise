@@ -231,7 +231,6 @@ impl crate::game::ClientGame<'_> {
             .collect();
         self.client.block_editor.0 = Some(screen);
         self.set_screen(Screen::BlockEditor);
-        self.capture(false);
         for packet in opening {
             self.send(packet);
         }
@@ -256,7 +255,6 @@ impl crate::game::ClientGame<'_> {
     pub(in crate::game::client_side) fn close_block_editor(&mut self) {
         self.client.block_editor.0 = None;
         self.set_screen(Screen::Playing);
-        self.capture(true);
     }
 
     /// Run `f` on the open screen with its block entity; the screen closes
@@ -276,7 +274,6 @@ impl crate::game::ClientGame<'_> {
             self.client.block_editor.0 = Some(screen);
         } else {
             self.set_screen(Screen::Playing);
-            self.capture(true);
         }
         result
     }

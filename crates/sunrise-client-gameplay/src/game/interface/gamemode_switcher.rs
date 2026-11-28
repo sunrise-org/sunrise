@@ -28,13 +28,11 @@ impl crate::game::ClientGame<'_> {
         self.set_mapping_held("key.attack", false);
         self.set_mapping_held("key.use", false);
         self.set_client_mining(None);
-        self.capture(false);
     }
 
     pub(in crate::game::client_side) fn close_gamemode_switcher(&mut self, apply: bool) {
         let selected = self.client.gamemode_switcher.take().map(|s| s.selected);
         self.set_screen(Screen::Playing);
-        self.capture(true);
         if apply
             && self.common.player.is_some()
             && self.gamemaster()

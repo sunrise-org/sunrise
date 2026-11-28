@@ -533,11 +533,6 @@ impl crate::game::ClientGame<'_> {
             }
             self.apply_screen_with_mod_book(screen, owner);
         }
-        self.capture(
-            self.client.screen == Screen::Playing
-                && self.client.title.0.is_none()
-                && !self.screen_over_playing(),
-        );
         Ok(())
     }
     /// Commit a screen transition synchronously (`Gui.setScreen` / `Screen.init`):
@@ -1090,11 +1085,10 @@ impl crate::game::ClientGame<'_> {
             }
         }
         self.build_screen();
-        // Every target takes the pointer, even one opened in place of a
-        // request that grabbed none (a mod's screen asked for while playing).
-        self.capture(false);
         self.client.screen_state.0.replacing = false;
         if self.client.screen_state.0.screen_instance == before_instance {
+            // A title target can change mode without applying a new Screen.
+            self.capture(false);
             self.commit_screen_transition();
         }
     }
