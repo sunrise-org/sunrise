@@ -4,7 +4,7 @@
 
 use super::Screen;
 use serde_json::{Value, json};
-use std::{path::PathBuf, sync::mpsc::Sender};
+use std::{path::PathBuf, sync::mpsc::Sender, time::Duration};
 use sunrise_client::gfx::{ScreenshotRequest, pack_uniforms::FrameTiming};
 use sunrise_game_data::Result;
 
@@ -235,7 +235,10 @@ impl crate::game::ClientGame<'_> {
 
     /// One frame of the running sequence: the next one, on its clock. A frame the surface
     /// refused is drawn again; the last is saved, and the reply sent.
-    pub(in crate::game::client_side) fn render_sequence_frame(&mut self) -> Result<bool> {
+    pub(in crate::game::client_side) fn render_sequence_frame(
+        &mut self,
+        elapsed: Duration,
+    ) -> Result<bool> {
         let sequence = self
             .client
             .screenshot_sequence
@@ -251,7 +254,7 @@ impl crate::game::ClientGame<'_> {
         });
         if let Some(reason) = refusal {
             self.end_screenshot_sequence(Err(reason.into()));
-            return self.render_frame();
+            return self.render_frame(elapsed);
         }
         let last = sequence.next == sequence.frames;
         if last && let Some(renderer) = &mut self.client.renderer.0 {
@@ -263,7 +266,7 @@ impl crate::game::ClientGame<'_> {
             });
             renderer.screenshot_result = None;
         }
-        let drawn = self.render_frame();
+        let drawn = self.render_frame(elapsed);
         if self.client.screenshot_sequence.0.is_none() {
             // The extracted camera changed; its frame was drawn outside the sequence.
             return drawn;
@@ -338,7 +341,7 @@ impl crate::game::ClientGame<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Screen, parse};
+    use super::{Duration, Screen, parse};
     use crate::game::{
         native_entity_refs::tests::with_client_game,
         native_hooks::particle_count_tests::frame_scene,
@@ -429,13 +432,13 @@ mod tests {
                 assert_eq!(angles.load(Ordering::Relaxed), 0);
                 assert_eq!(positions.load(Ordering::Relaxed), 0);
 
-                assert!(game.render_sequence_frame().unwrap());
+                assert!(game.render_sequence_frame(Duration::ZERO).unwrap());
                 assert_eq!(angles.load(Ordering::Relaxed), 1);
                 assert_eq!(positions.load(Ordering::Relaxed), 1);
                 assert_eq!(game.client.screenshot_sequence.0.as_ref().unwrap().next, 2);
                 assert!(result.try_recv().is_err());
 
-                assert!(game.render_sequence_frame().unwrap());
+                assert!(game.render_sequence_frame(Duration::ZERO).unwrap());
                 assert_eq!(angles.load(Ordering::Relaxed), 2);
                 assert_eq!(positions.load(Ordering::Relaxed), 2);
                 assert!(game.client.screenshot_sequence.0.is_none());

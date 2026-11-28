@@ -7,9 +7,9 @@ pub trait Hooks {
     /// not fire it. Client-side.
     #[notes = r#"## Frame presentation
 
-`render_frame_post` fires every frame once rendering returns, whatever became of
-the frame. `flip_frame` fires after it, on the game's thread, and only when the
-frame was presented. A frame presented on the game's thread (VSync, the default)
+`render_frame_post` fires once the render call returns, whatever became of the
+frame. With no render call, neither frame event fires. `flip_frame` fires after
+Post, on the game's thread, and only when the frame was presented. A frame presented on the game's thread (VSync, the default)
 was already presented when `render_frame_post` fired: there the two differ only
 on the frames that were skipped.
 

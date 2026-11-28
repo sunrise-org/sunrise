@@ -6,7 +6,6 @@ pub mod mouse_tweaks;
 mod sorting;
 
 use super::Screen;
-use std::time::Duration;
 use sunrise_client::{
     extras::Corner,
     extras_hud::{self, Corners},
@@ -15,17 +14,16 @@ use sunrise_client::{
 
 #[derive(Default)]
 pub(in crate::game) struct ExtrasState {
-    /// Captured before pre listeners; shared by the draw and post listeners.
+    /// Captured before extraction for drawing and both frame hooks.
     pub(in crate::game) frame_partial_ticks: Option<(f32, f32)>,
 }
 
 impl crate::game::ClientGame<'_> {
-    /// Once per frame: capture frame timing and dispatch frame preparation.
-    pub fn extras_frame(&mut self, elapsed: Duration) {
+    /// Once per frame: capture timing and apply effects before extraction.
+    pub fn extras_frame(&mut self) {
         let (world_partial_tick, partial_tick) = self.frame_partial_ticks();
         self.client.extras.frame_partial_ticks = Some((world_partial_tick, partial_tick));
-        self.native_render_frame_pre(elapsed, world_partial_tick, partial_tick);
-        // A clear a mod asked for (in this frame's `RenderFrameEvent.Pre`, or after the last
+        // A clear a mod asked for (in the last frame's `RenderFrameEvent.Pre`, or after that
         // frame was drawn) lands before this frame's particles are drawn, paused or not.
         self.apply_mod_particle_clear();
         self.recipes_received_now();

@@ -75,7 +75,7 @@ fn submit_frame(
     )]
     .into();
     with_mods(mods, || {
-        assert!(game.render().unwrap());
+        assert!(game.render(Duration::ZERO).unwrap());
         let panics = mod_api::__private::take_hook_panics();
         assert!(panics.is_empty(), "{panics:?}");
     });

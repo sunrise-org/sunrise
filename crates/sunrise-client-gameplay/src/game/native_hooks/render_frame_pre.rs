@@ -11,8 +11,7 @@ impl crate::game::ClientGame<'_> {
         (world_partial_tick, partial_tick)
     }
 
-    /// Once a frame, in a world or not, after Sunrise's extras and just
-    /// before the frame is rendered (`RenderFrameEvent.Pre`).
+    /// After extraction, before a frame is rendered (`RenderFrameEvent.Pre`).
     pub fn native_render_frame_pre(
         &mut self,
         elapsed: Duration,

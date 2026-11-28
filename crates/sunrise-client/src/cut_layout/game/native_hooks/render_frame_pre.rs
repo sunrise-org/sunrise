@@ -77,8 +77,8 @@ pub(crate) mod tests {
                 let frame = |game: &mut sunrise_client_gameplay::game::ClientGame<'_>,
                              world: bool| {
                     game.clock.advance(elapsed, 50.0);
-                    game.extras_frame(elapsed);
-                    // A clock change after pre cannot change the captured draw/post value.
+                    game.extras_frame();
+                    // A clock change after capture cannot change the draw or hook values.
                     game.clock.advance(Duration::from_millis(1), 50.0);
                     game.render_and_flip(elapsed).unwrap();
                     let mut h = heard.lock().unwrap();

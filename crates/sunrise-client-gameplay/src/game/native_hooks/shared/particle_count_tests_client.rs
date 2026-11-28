@@ -1,8 +1,6 @@
 use super::super::pickups::{Collector, Taken};
 #[cfg(test)]
 use mod_api::ClientHost;
-#[cfg(test)]
-use std::time::Duration;
 use sunrise_client::particles::FireworkExplosion;
 use sunrise_core::geometry::Vec3;
 use sunrise_level::particle_options::{ParticleOptions, ParticleType};
@@ -63,7 +61,7 @@ fn a_client_mod_counts_and_clears_particles() {
         assert!(host_clear(game));
         let host: &dyn ClientHost = game;
         assert_eq!(host.particle_count(), 0);
-        game.extras_frame(Duration::ZERO);
+        game.extras_frame();
         assert_eq!(game.client.particles.0.group_count(), 0);
         assert!(game.client.pickups.0.live.is_empty());
         assert!(game.client.particles.0.elder_guardians().is_empty());
@@ -333,7 +331,7 @@ fn late_gui_clear_prevents_same_frame_particle_geometry_without_a_tick() {
         super::super::native_entity_refs::tests::with_client_game(|game| {
             game.options.execution_role = super::ExecutionRole::Client;
             fill(game);
-            game.extras_frame(Duration::ZERO);
+            game.extras_frame();
             let camera = glam::DVec3::from_array(game.client.particles.0.camera);
             let mut before = Vec::new();
             game.client_particle_geometry(camera, 0.0, 70.0, None, &mut before);
