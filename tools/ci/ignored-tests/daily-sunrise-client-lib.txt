@@ -71,6 +71,7 @@ sunrise-sim lan::tests::a_flood_of_silent_sockets_is_turned_away lib daily netwo
 sunrise-sim lan::tests::a_full_server_closes_the_connection_that_waited_longest lib daily network
 sunrise-sim lan::tests::a_local_server_accepts_only_the_requested_loopback_address lib daily network
 sunrise-sim lan::tests::actor_ids_never_wrap lib daily network
+sunrise-sim lan::tests::lan_and_loopback_configs_use_the_neutral_reason_without_asking_the_hooks lib daily child-process
 sunrise-sim lan::viewed_levels::tests::a_viewed_sound_reaches_a_viewer_holding_its_chunk_within_its_distance lib daily network
 sunrise-sim lan::viewed_levels::tests::with_no_viewer_no_copy_is_built lib daily network
 sunrise-sim lan::waypoints::tests::moves_by_receiver_match_the_loop lib daily slow

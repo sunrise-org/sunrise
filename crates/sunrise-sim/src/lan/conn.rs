@@ -1754,19 +1754,32 @@ fn login_and_configure(
     if brand != "sunrise"
         && (shared.config.sunrise_clients_only || crate::content_identity::requires_sunrise())
     {
-        let text = if shared.config.sunrise_clients_only {
-            super::SUNRISE_CLIENTS_ONLY_REASON
+        // The clients-only text is translatable, so a Sunrise client reads it in its own
+        // language; its fallback is the readable English the console logs. The console resolves
+        // it in the server's language, as vanilla's `Component.getString` does.
+        let (reason, text) = if shared.config.sunrise_clients_only {
+            let text = shared.config.clients_only_reason.text();
+            let reason = super::data::component_nbt(&text.component());
+            let text = match &shared.config.log {
+                Some(log) => sunrise_protocol::text::plain(&reason, &log.lang),
+                None => text.plain(),
+            };
+            (reason, text)
         } else {
-            crate::content_identity::MISMATCH
+            (
+                sunrise_core::nbt::Tag::String(sunrise_core::nbt::JavaString::from(
+                    crate::content_identity::MISMATCH,
+                )),
+                crate::content_identity::MISMATCH.to_owned(),
+            )
         };
-        let reason = sunrise_core::nbt::Tag::String(sunrise_core::nbt::JavaString::from(text));
         let _ = send(c, cfg::Clientbound::Disconnect(cfg::Disconnect { reason }));
         if let Some(log) = &shared.config.log {
             let line =
                 format!("Disconnecting {name}: its client is \"{brand}\", not Sunrise ({text})");
             (log.write)("Server thread", "INFO", &line);
         }
-        lost(shared, &format!("{name} ({})", uuid_string(uuid)), text);
+        lost(shared, &format!("{name} ({})", uuid_string(uuid)), &text);
         return Ok(None);
     }
     if brand == "sunrise"

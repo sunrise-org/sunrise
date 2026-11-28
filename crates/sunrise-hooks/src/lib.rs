@@ -148,6 +148,30 @@ pub trait Hooks: Sync {
     fn retry(&self) -> Option<connection::Retry> {
         None
     }
+
+    /// The official project's reason for taking only its client on a `sunrise-clients-only`
+    /// server: the refused client is told the origin's host (the scheme is dropped), so the
+    /// text names the website `sunrise-addresses` already holds instead of repeating it. The
+    /// provider also owns the translation key and its English fallback, so the branded text
+    /// stays in the crate above the engine. The first registered answer wins; with none the
+    /// engine's neutral text, which names no address. Asked once on the game thread during
+    /// dedicated server setup and only when the key is on, never for a LAN or loopback config
+    /// and never from login threads.
+    fn clients_only(&self) -> Option<ClientsOnly> {
+        None
+    }
+}
+
+/// The branded reason [`Hooks::clients_only`] supplies: the official project's origin, its
+/// translation key and the English fallback for clients without that key (and for the console).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClientsOnly {
+    /// A URL such as `https://example.org`; the engine sends only its host.
+    pub origin: &'static str,
+    /// The translation key the branded text is stored under.
+    pub key: &'static str,
+    /// The English text, with `%s` for the origin's host.
+    pub fallback: &'static str,
 }
 
 /// What [`Hooks::get_the_game`] answers. The texts are translation keys of the game's own strings
@@ -410,6 +434,11 @@ pub mod engine {
     pub fn retry() -> Option<connection::Retry> {
         all().iter().find_map(|hooks| hooks.retry())
     }
+
+    /// [`Hooks::clients_only`]: the first registered hook's answer.
+    pub fn clients_only() -> Option<ClientsOnly> {
+        all().iter().find_map(|hooks| hooks.clients_only())
+    }
 }
 
 #[cfg(test)]
@@ -453,6 +482,13 @@ mod tests {
         fn retry(&self) -> Option<connection::Retry> {
             Some(connection::Retry::Wait("in 5 s".into()))
         }
+        fn clients_only(&self) -> Option<ClientsOnly> {
+            Some(ClientsOnly {
+                origin: "https://recorder.example",
+                key: "recorder.clients_only",
+                fallback: "Only the recorder: %s",
+            })
+        }
         fn get_the_game(&self) -> Option<GetTheGame> {
             Some(GetTheGame {
                 address: "https://example.org",
@@ -473,13 +509,21 @@ mod tests {
     struct Silent;
     impl Hooks for Silent {}
 
-    /// Registered after the recorder: answers for two servers, one the recorder answers too.
+    /// Registered after the recorder: answers for two servers, one the recorder answers too,
+    /// and offers its own clients-only origin, which must not win over the recorder's.
     struct Later;
     impl Hooks for Later {
         fn retry(&self) -> Option<connection::Retry> {
             Some(connection::Retry::Now(connection::Server::new(
                 "b", "P", false,
             )))
+        }
+        fn clients_only(&self) -> Option<ClientsOnly> {
+            Some(ClientsOnly {
+                origin: "https://later.example",
+                key: "later.clients_only",
+                fallback: "Only later: %s",
+            })
         }
         fn client_identity(&self, server: &str) -> Option<ClientIdentity> {
             matches!(server, "first.example" | "second.example").then(|| ClientIdentity {
@@ -491,69 +535,107 @@ mod tests {
 
     static RECORDER: Recorder = Recorder(StdMutex::new(Vec::new()));
 
-    #[test]
-    fn registered_hooks_hear_the_game_and_late_ones_are_refused() {
-        register(&RECORDER).unwrap();
-        register(&Silent).unwrap();
-        register(&Later).unwrap();
-        engine::started(&Started::new("0.2.31", std::path::Path::new("game")));
-        // Changes only: the same state every frame is said once.
-        for open in [false, true, true, true, false, false] {
-            engine::published(open);
+    /// Runs this case alone in a child test binary: registering seals the process-wide list, and
+    /// libtest keeps running the other cases in the parent process.
+    fn in_own_process(name: &str, body: impl FnOnce()) {
+        const OWN_PROCESS: &str = "SUNRISE_TEST_OWN_PROCESS";
+        if std::env::var_os(OWN_PROCESS).is_some_and(|v| v == name) {
+            return body();
         }
-        let world = Activity::World {
-            play: Play::Singleplayer,
-            dimension: Dimension::Nether,
-            mode: GameMode::Creative,
-        };
-        for now in [Activity::Menus, Activity::Menus, world, world] {
-            engine::activity(now);
-        }
-        engine::shutdown();
-        engine::connecting(&connection::Server::new("a", "P", false));
-        engine::joined();
-        engine::left(connection::Left::Quit);
-        engine::connecting(&connection::Server::new("b", "P", false));
-        engine::ended(&connection::Ended::new(
-            "Timed out",
-            None,
-            connection::By::Server,
-        ));
-        let wait = connection::Retry::Wait("in 5 s".into());
-        assert_eq!(engine::retry(), Some(wait));
-        assert_eq!(
-            engine::get_the_game().map(|g| g.address),
-            Some("https://example.org")
-        );
-        // The first answer wins, a later hook answers what the first leaves, none gives vanilla.
-        let first = engine::client_identity("first.example");
-        assert_eq!(first.brand, "first");
-        assert_eq!(first.payloads, [("recorder:hello".to_owned(), vec![1, 2])]);
-        assert_eq!(engine::client_identity("second.example").brand, "later");
-        assert_eq!(
-            engine::client_identity("other.example"),
-            ClientIdentity::vanilla()
-        );
-        assert_eq!(
-            *RECORDER.0.lock().unwrap(),
-            [
-                "started 0.2.31",
-                "published true",
-                "published false",
-                "Menus",
-                "World { play: Singleplayer, dimension: Nether, mode: Creative }",
-                "shutdown",
-                "connecting a",
-                "joined",
-                "left Quit",
-                "connecting b",
-                "ended Timed out",
-            ]
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([name, "--exact", "--include-ignored", "--test-threads=1"])
+            .env(OWN_PROCESS, name)
+            .output()
+            .unwrap();
+        let report = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
         );
         assert!(
-            !containers::engine::any(),
-            "no registrant offers containers()"
+            out.status.success() && report.contains("test result: ok. 1 passed;"),
+            "{name} failed in its own process:\n{report}"
         );
-        assert_eq!(register(&Silent), Err(TooLate));
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn registered_hooks_hear_the_game_and_late_ones_are_refused() {
+        in_own_process(
+            "tests::registered_hooks_hear_the_game_and_late_ones_are_refused",
+            || {
+                register(&RECORDER).unwrap();
+                register(&Silent).unwrap();
+                register(&Later).unwrap();
+                engine::started(&Started::new("0.2.31", std::path::Path::new("game")));
+                // Changes only: the same state every frame is said once.
+                for open in [false, true, true, true, false, false] {
+                    engine::published(open);
+                }
+                let world = Activity::World {
+                    play: Play::Singleplayer,
+                    dimension: Dimension::Nether,
+                    mode: GameMode::Creative,
+                };
+                for now in [Activity::Menus, Activity::Menus, world, world] {
+                    engine::activity(now);
+                }
+                engine::shutdown();
+                engine::connecting(&connection::Server::new("a", "P", false));
+                engine::joined();
+                engine::left(connection::Left::Quit);
+                engine::connecting(&connection::Server::new("b", "P", false));
+                engine::ended(&connection::Ended::new(
+                    "Timed out",
+                    None,
+                    connection::By::Server,
+                ));
+                let wait = connection::Retry::Wait("in 5 s".into());
+                assert_eq!(engine::retry(), Some(wait));
+                // Two hooks answer: the first registered wins, as documented.
+                assert_eq!(
+                    engine::clients_only(),
+                    Some(ClientsOnly {
+                        origin: "https://recorder.example",
+                        key: "recorder.clients_only",
+                        fallback: "Only the recorder: %s",
+                    })
+                );
+                assert_eq!(
+                    engine::get_the_game().map(|g| g.address),
+                    Some("https://example.org")
+                );
+                // The first answer wins, a later hook answers what the first leaves, none gives vanilla.
+                let first = engine::client_identity("first.example");
+                assert_eq!(first.brand, "first");
+                assert_eq!(first.payloads, [("recorder:hello".to_owned(), vec![1, 2])]);
+                assert_eq!(engine::client_identity("second.example").brand, "later");
+                assert_eq!(
+                    engine::client_identity("other.example"),
+                    ClientIdentity::vanilla()
+                );
+                assert_eq!(
+                    *RECORDER.0.lock().unwrap(),
+                    [
+                        "started 0.2.31",
+                        "published true",
+                        "published false",
+                        "Menus",
+                        "World { play: Singleplayer, dimension: Nether, mode: Creative }",
+                        "shutdown",
+                        "connecting a",
+                        "joined",
+                        "left Quit",
+                        "connecting b",
+                        "ended Timed out",
+                    ]
+                );
+                assert!(
+                    !containers::engine::any(),
+                    "no registrant offers containers()"
+                );
+                assert_eq!(register(&Silent), Err(TooLate));
+            },
+        );
     }
 }

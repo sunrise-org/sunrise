@@ -1,4 +1,5 @@
 {
+  "sunrise.server.clients_only": "This server is for the Sunrise client: %s",
   "sunrise.mods.screen.sunrise.authors": "The Sunrise contributors",
   "sunrise.mods.screen.sunrise.description": "Sunrise is a Rust reimplementation of Minecraft: Java Edition. Mods in the sunrise-mods folder extend it.",
   "sunrise.extras.mod_audio_streams": "Mod audio streams",

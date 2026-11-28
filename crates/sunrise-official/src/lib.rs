@@ -15,7 +15,7 @@ extern crate sunrise_game as _;
 #[cfg(feature = "sunrise-extras")]
 mod mod_audio;
 
-use sunrise_platform::hooks::{self, ClientIdentity, GetTheGame, Hooks};
+use sunrise_platform::hooks::{self, ClientIdentity, ClientsOnly, GetTheGame, Hooks};
 use sunrise_platform::{hud, lang, mod_rows, pages, release, settings};
 
 /// Every Sunrise part in the game, in the order its hooks run.
@@ -26,6 +26,8 @@ const PARTS: &[&dyn Hooks] = &[
     &sunrise_friends::game::HOOKS,
     // Where a game started without its prepared files sends the player.
     &LAUNCHER_PAGE,
+    // The website whose host the official `sunrise-clients-only` server names to refused clients.
+    &CLIENTS_ONLY,
     // "Playing Sunrise" on the player's Discord profile.
     &sunrise_discord::HOOKS,
     // Open and Share for saved performance captures.
@@ -56,6 +58,25 @@ impl Hooks for LauncherPage {
                 "sunrise.get_the_game.download",
             ],
             button: "sunrise.get_the_game.button",
+        })
+    }
+}
+
+/// The official server's branded reason for a client turned away by `sunrise-clients-only`: its
+/// host comes from the website address, so `playsunrise.net` is written once, in
+/// `sunrise-addresses`. The translation key and its English fallback ship in this crate's
+/// language file; registering this here and not in the engine keeps the official text in the
+/// Sunrise layer (docs/layers.md).
+static CLIENTS_ONLY: ClientsOnlyOrigin = ClientsOnlyOrigin;
+
+struct ClientsOnlyOrigin;
+
+impl Hooks for ClientsOnlyOrigin {
+    fn clients_only(&self) -> Option<ClientsOnly> {
+        Some(ClientsOnly {
+            origin: sunrise_addresses::WEBSITE,
+            key: "sunrise.server.clients_only",
+            fallback: "This server is for the Sunrise client: %s",
         })
     }
 }
@@ -189,6 +210,20 @@ mod tests {
         ] {
             assert_eq!(identity(server), None, "{server}");
         }
+    }
+
+    #[test]
+    fn the_clients_only_reason_is_the_official_website_text() {
+        // The engine turns this into the text refused clients read, naming its host.
+        assert_eq!(
+            CLIENTS_ONLY.clients_only(),
+            Some(ClientsOnly {
+                origin: sunrise_addresses::WEBSITE,
+                key: "sunrise.server.clients_only",
+                fallback: "This server is for the Sunrise client: %s",
+            })
+        );
+        assert_eq!(sunrise_addresses::WEBSITE, "https://playsunrise.net");
     }
 
     #[test]

@@ -805,6 +805,7 @@
   "sunrise.repro.started": "Recording started; F3+R stops it and writes the bundle.",
   "sunrise.repro.stopped": "Recording stopped: %s",
   "sunrise.screenshot.canceled": "Screenshot canceled",
+  "sunrise.server.clients_only.neutral": "This server only accepts its own game client.",
   "sunrise.settings.pack_options.none": "None of the selected resource packs has options.",
   "sunrise.settings.shader_options.no_pack": "Pick a shader pack first.",
   "sunrise.settings.shader_options.none": "This pack has no settings to show.",

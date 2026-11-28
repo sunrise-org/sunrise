@@ -8,6 +8,7 @@ description = "Vanilla's logical side: the gameplay the server jar holds, common
 
 [dependencies]
 chrono = { version = "0.4.42", default-features = false, features = ["clock", "std"] }
+sunrise-hooks = { path = "../sunrise-hooks" }
 glam = "0.30"
 indexmap = "2"
 serde = { version = "1", features = ["derive"] }

@@ -32,7 +32,7 @@ use sunrise_server_files::{
     },
 };
 use sunrise_sim::lan::{
-    LoginGate, NetConfig, NetLog, OnlineMode, SessionVerifier,
+    ClientsOnlyReason, LoginGate, NetConfig, NetLog, OnlineMode, SessionVerifier,
     hub::{HubConfig, effective_view_distance},
     viewed_levels::areas as viewed,
 };
@@ -1128,6 +1128,20 @@ impl crate::game::ServerGame<'_> {
                  (Sunrise has no Velocity forwarding any more): turn [transfer] off"
                 .into());
         }
+        let sunrise_clients_only = props
+            .raw
+            .get(sunrise_sim::lan::SUNRISE_CLIENTS_ONLY)
+            .is_some_and(|v| v.trim().eq_ignore_ascii_case("true"));
+        // Ask the hook only here, and only with the key on: a LAN or loopback config never
+        // resolves it (that would seal the registry), and with the key off nothing is sent.
+        // `sunrise-sim` is portable, so the hook itself is read here and not there.
+        let clients_only_reason = if sunrise_clients_only {
+            sunrise_hooks::engine::clients_only().map_or(ClientsOnlyReason::NEUTRAL, |reason| {
+                ClientsOnlyReason::official(reason.origin, reason.key, reason.fallback)
+            })
+        } else {
+            ClientsOnlyReason::NEUTRAL
+        };
         let net = NetConfig {
             bind,
             port,
@@ -1166,10 +1180,8 @@ impl crate::game::ServerGame<'_> {
             // DedicatedServer.serverLinks: `bug-report-link` as the only link
             // (ServerLinks.KnownLinkType.BUG_REPORT is id 0).
             levels: self.server.level_shapes.clone(),
-            sunrise_clients_only: props
-                .raw
-                .get(sunrise_sim::lan::SUNRISE_CLIENTS_ONLY)
-                .is_some_and(|v| v.trim().eq_ignore_ascii_case("true")),
+            sunrise_clients_only,
+            clients_only_reason,
             server_links: if props.bug_report_link.is_empty() {
                 Vec::new()
             } else if sunrise_gameplay_common::game::untrusted_uri::valid_untrusted_uri(

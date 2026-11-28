@@ -320,9 +320,12 @@ To generate the world around spawn ahead of the players, Sunrise has its own `pr
 `server.toml` has `sunrise-pregen = true` under `[properties]`: `sunrise-server cmd pregen start 2500`
 ([pregeneration](pregeneration.md)).
 To let only the Sunrise client join, set `sunrise-clients-only = true` under `[properties]` (off by default).
-Other clients are turned away while they connect with "This server is for the Sunrise client:
-playsunrise.net", and the console says which client it was. The check reads the brand a client names itself
-by (`minecraft:brand`), which any client can fake: it keeps out players who didn't install Sunrise, not
+Other clients are turned away while they connect, and the console says which client it was. The full official
+game executable (shipped to players as `sunrise-client`) sends the branded reason, "This server is for the
+Sunrise client: playsunrise.net", as a translatable text, so a Sunrise client reads it in its own language;
+the packaged Linux headless server (`sunrise-engine`) and other plain builds of the game send the neutral
+"This server only accepts its own game client." and name no address. The check reads the brand a client names
+itself by (`minecraft:brand`), which any client can fake: it keeps out players who didn't install Sunrise, not
 cheaters. The server's own checks (reach, movement) are what protect it.
 
 `sunrise-server report` records the running server for 60 seconds (`report 300` for five minutes, up to 600) into
