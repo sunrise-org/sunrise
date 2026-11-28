@@ -1776,6 +1776,7 @@ fn late_container_sync_invalidation_closes_in_its_original_level() {
             Slots::Block(pos),
             vec![None; 27],
             None,
+            &game.common.world,
         );
         game.player_menu_opening(1);
         let player = game.player(123).unwrap();
@@ -3134,6 +3135,7 @@ fn block_menu_slot_changed_costs_one_index_lookup_at_an_unviewed_block() {
             Slots::Block(BLOCK_PROC_POS),
             vec![None; 3],
             None,
+            &game.common.world,
         );
         game.transaction(|host, tx| {
             assert_eq!(place.insert(host, tx, &resource, 1), Ok(1));
@@ -3175,6 +3177,7 @@ fn block_menu_slot_changed_fires_on_external_container_writes_and_syncs_lan_view
             Slots::Block(BLOCK_PROC_POS),
             vec![None; 3],
             None,
+            &game.common.world,
         );
         let w12 = host.hub.guest(12).unwrap().menu.as_ref().unwrap().window;
         host.hub.open_container(
@@ -3185,6 +3188,7 @@ fn block_menu_slot_changed_fires_on_external_container_writes_and_syncs_lan_view
             Slots::Block(BLOCK_PROC_POS),
             vec![None; 3],
             None,
+            &game.common.world,
         );
         let w13 = host.hub.guest(13).unwrap().menu.as_ref().unwrap().window;
         sent(&rx12);
@@ -3474,6 +3478,7 @@ fn block_menu_slot_changed_gives_identical_context_for_click_and_hopper_writes()
                         Slots::Block(BLOCK_CRAFT_POS),
                         vec![None; 6],
                         None,
+                        &game.common.world,
                     );
                     let window = host.hub.guest(12).unwrap().menu.as_ref().unwrap().window;
                     let oak_log = ItemStack::new("minecraft:oak_log", 1);

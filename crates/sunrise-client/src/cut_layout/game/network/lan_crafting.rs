@@ -540,6 +540,7 @@ mod recipe_check_tests {
                 asks_still_valid: false,
                 opening_item: None,
                 opener_block: None,
+                backing_entities: [None; 2],
                 removed: false,
                 slot_changed_seen: None,
             });

@@ -1,6 +1,6 @@
 pub type ContainerPos = (i32, i32, i32);
 
-/// A menu the player opened, including the block entity instances it opened.
+/// A menu whose open was announced to listeners.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HeardMenu {
     pub window: i32,
@@ -9,6 +9,4 @@ pub struct HeardMenu {
     pub menu: String,
     /// The block the menu is of.
     pub pos: Option<[i32; 3]>,
-    /// Each position and its generation when the menu opened; combined menus hold both halves.
-    pub openers: [Option<(ContainerPos, u64)>; 2],
 }

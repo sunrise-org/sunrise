@@ -394,8 +394,18 @@ impl Hub {
         slots: Slots,
         items: Vec<Option<ItemStack>>,
         extra: Option<Vec<u8>>,
+        world: &World,
     ) {
-        self.open_menu_window(conn, menu_kind, title, Some(pos), slots, items, extra);
+        self.open_menu_window(
+            conn,
+            menu_kind,
+            title,
+            Some(pos),
+            slots,
+            items,
+            extra,
+            world,
+        );
     }
 
     /// Open menu type `menu_kind` for a guest, of a block at `pos` or of none:
@@ -411,6 +421,7 @@ impl Hub {
         slots: Slots,
         items: Vec<Option<ItemStack>>,
         extra: Option<Vec<u8>>,
+        world: &World,
     ) -> Option<i32> {
         self.open_menu_window_at(
             conn,
@@ -421,6 +432,7 @@ impl Hub {
             items,
             extra,
             crate::containers::mod_menu_type(menu_kind),
+            slots.backing_entities(world, pos),
         )
     }
 
@@ -437,6 +449,7 @@ impl Hub {
         items: Vec<Option<ItemStack>>,
         extra: Option<Vec<u8>>,
         mod_type: Option<&'static ModMenuType>,
+        backing_entities: super::menu::BackingEntities,
     ) -> Option<i32> {
         let kind = self.registry_id("minecraft:menu", menu_kind)?;
         let i = self.guests.iter().position(|g| g.conn == conn)?;
@@ -500,6 +513,7 @@ impl Hub {
                 asks_still_valid: super::menu::asks_still_valid(mod_type, menu_kind),
                 opening_item: None,
                 opener_block: None,
+                backing_entities,
                 removed: false,
                 slot_changed_seen,
             });
@@ -531,6 +545,7 @@ impl Hub {
             items,
             None,
             None,
+            [None; 2],
         )
     }
 
@@ -1481,8 +1496,8 @@ impl Hub {
             else {
                 continue;
             };
-            let (total, window, slots) = (menu.slot_count(), menu.window, menu.slots);
-            if !slots.valid(world) {
+            let (total, window) = (menu.slot_count(), menu.window);
+            if !menu.slots.valid(world, menu.pos, menu.backing_entities) {
                 let guest = &self.guests[i];
                 events.push(super::hub::HostEvent::CloseInvalidContainer {
                     conn: guest.conn,
@@ -1616,6 +1631,7 @@ mod tests {
                             items.clone(),
                             None,
                             mod_type,
+                            [None; 2],
                         )
                         .unwrap();
                     let menu = hub.guest(conn).unwrap().menu.as_ref().unwrap();
@@ -1628,6 +1644,46 @@ mod tests {
                 }
             },
         );
+    }
+
+    #[test]
+    fn replacing_either_half_invalidates_an_open_double_chest() {
+        let mut sync = SyncData::empty();
+        sync.builtin.registries.insert(
+            "minecraft:menu".into(),
+            Ids::from_names(vec!["minecraft:generic_9x6".into()]),
+        );
+        let (mut hub, _packets) = hub_with_sync(sync);
+        let conn = hub.guests[0].conn;
+        let mut world = World::new(sunrise_world::registry::BlockStateId(0), 0);
+        let (left, right) = ((0, 64, 0), (1, 64, 0));
+        let slots = Slots::Double(left, right);
+        let chest = || crate::containers::BlockEntity::Chest(vec![None; 27]);
+        world.block_entities.insert(left, chest());
+        world.block_entities.insert(right, chest());
+
+        for replaced in [left, right] {
+            let window = hub
+                .open_menu_window(
+                    conn,
+                    "minecraft:generic_9x6",
+                    Tag::String("Chest".into()),
+                    Some(left),
+                    slots,
+                    vec![None; 54],
+                    None,
+                    &world,
+                )
+                .unwrap();
+            let open = hub.guests[0].menu.as_ref().unwrap();
+            let pos = open.pos;
+            let backing = open.backing_entities;
+            assert_eq!(open.window, window);
+            world.block_entities.insert(replaced, chest()); // An in-place update is not a replacement.
+            assert!(slots.valid(&world, pos, backing));
+            world.block_entities.replace(replaced, chest());
+            assert!(!slots.valid(&world, pos, backing));
+        }
     }
 
     #[test]

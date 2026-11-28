@@ -203,6 +203,7 @@ impl crate::game::ServerGame<'_> {
                     items,
                     extra,
                     content.as_ref().map(|c| c.kind),
+                    [None; 2],
                 )?;
                 if let Some(content) = content {
                     lan.hub.guests.update(gi, |g| {
@@ -494,7 +495,8 @@ impl GuestMenus {
             .as_ref()
             .zip(menu)
             .is_some_and(|(opened, live)| {
-                opened.window == live.window && opened.openers.contains(&Some((pos, generation)))
+                opened.window == live.window
+                    && live.backing_entities.contains(&Some((pos, generation)))
             })
     }
 }
@@ -552,29 +554,11 @@ impl crate::game::ServerGame<'_> {
         let Some(guest) = host.hub.guest(conn) else {
             return;
         };
-        let openers = guest.menu.as_ref().map_or([None; 2], |m| {
-            let positions = match m.slots {
-                Slots::Block(at) => [Some(at), None],
-                Slots::Double(first, second) => [Some(first), Some(second)],
-                Slots::Ender => [m.pos, None],
-                Slots::Native => [None; 2],
-            };
-            positions.map(|pos| {
-                pos.and_then(|pos| {
-                    self.common
-                        .world
-                        .block_entities
-                        .generation(&pos)
-                        .map(|generation| (pos, generation))
-                })
-            })
-        });
         let menu = HeardMenu {
             window,
             generation: guest.menu_generation,
             menu: menu.to_owned(),
             pos,
-            openers,
         };
         host.menus.entry(conn).or_default().menu_heard = Some(menu.clone());
         self.player_menu_changed(conn, menu, true);
@@ -606,12 +590,6 @@ impl crate::game::ServerGame<'_> {
             mod_api::HookId::PlayerContainerClose
         };
         let heard = mod_api::__private::listened(hook);
-        let openers = menu
-            .openers
-            .map(|opener| opener.filter(|&(pos, _)| self.common.mod_menu_at(pos).is_some()));
-        if !heard && openers == [None; 2] {
-            return;
-        }
         let Some(guest) = self
             .server
             .lan
@@ -620,6 +598,15 @@ impl crate::game::ServerGame<'_> {
         else {
             return;
         };
+        let openers = guest
+            .menu
+            .as_ref()
+            .filter(|live| live.window == menu.window && guest.menu_generation == menu.generation)
+            .map_or([None; 2], |live| live.backing_entities)
+            .map(|opener| opener.filter(|&(pos, _)| self.common.mod_menu_at(pos).is_some()));
+        if !heard && openers == [None; 2] {
+            return;
+        }
         let uuid = guest.uuid;
         let name = (heard && open).then(|| guest.name.clone());
         let dimension = self.common.dim.id();

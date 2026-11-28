@@ -83,6 +83,7 @@ fn far_chests(game: &mut crate::game::ServerGame<'_>, cancel: &Mutex<Option<u32>
             Slots::Block(far),
             vec![None; 27],
             None,
+            &game.common.world,
         );
     }
     *cancel.lock().unwrap() = Some(ids[0]);

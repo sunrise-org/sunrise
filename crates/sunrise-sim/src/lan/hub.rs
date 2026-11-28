@@ -4938,6 +4938,8 @@ pub(super) mod tests {
                     asks_still_valid: true,
                     opening_item: None,
                     opener_block: None,
+                    backing_entities: super::super::menu::Slots::Block(k)
+                        .backing_entities(&*ctx.world, Some(k)),
                     removed: false,
                     slot_changed_seen: None,
                 });
@@ -6812,6 +6814,8 @@ pub(super) mod tests {
                 opening_item: None,
                 asks_still_valid: false,
                 opener_block: None,
+                backing_entities: super::super::menu::Slots::Block(pos)
+                    .backing_entities(&world, Some(pos)),
                 removed: false,
                 slot_changed_seen: None,
             });

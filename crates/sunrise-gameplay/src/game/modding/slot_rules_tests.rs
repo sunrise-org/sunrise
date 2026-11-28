@@ -241,6 +241,7 @@ fn the_answers_are_bounded_to_one_to_ninety_nine_and_the_items_limit() {
                 Slots::Block(pos),
                 vec![None; 27],
                 None,
+                &game.common.world,
             );
             let window = host.hub.guests[0].menu.as_ref().unwrap().window;
             host.hub.guests.update(0, |guest| {
@@ -386,6 +387,7 @@ fn a_lan_hub_click_asks_the_same_questions_in_the_same_order() {
                 Slots::Block(pos),
                 vec![None; 27],
                 None,
+                &game.common.world,
             );
             let window = host.hub.guests[0].menu.as_ref().unwrap().window;
             host.hub.guests.update(0, |guest| {
@@ -499,6 +501,7 @@ fn nested_menu_reads_use_base_slot_rules() {
                         Slots::Block(pos),
                         vec![None; 27],
                         None,
+                        &game.common.world,
                     );
                     host.hub.guests.update(0, |guest| {
                         guest.carried = Some(ItemStack::new("minecraft:stone", 8));
@@ -621,6 +624,7 @@ fn open_live_rules_fixture(
         Slots::Block(pos),
         vec![None; menu_type.slots],
         None,
+        &game.common.world,
     );
     host.hub
         .update_guest(12, |guest| {
@@ -775,6 +779,7 @@ fn live_slot_queries_read_live_siblings_limits_acting_armor_and_stale_handles() 
                     Slots::Double(left, right),
                     vec![None; 54],
                     None,
+                    &game.common.world,
                 );
                 assert_eq!(menu.slot_holds(game, 0, &stone_api), None);
                 assert_eq!(menu.slot_gives(game, 0), None);

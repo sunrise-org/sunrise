@@ -163,6 +163,7 @@ fn setup(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> &'static ModMenuT
         asks_still_valid: false,
         opening_item: None,
         opener_block: None,
+        backing_entities: [None; 2],
         removed: false,
         slot_changed_seen: None,
     });

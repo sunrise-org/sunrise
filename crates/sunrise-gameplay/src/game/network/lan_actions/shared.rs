@@ -150,6 +150,7 @@ pub mod tests {
                         Slots::Block(pos),
                         vec![None; 27],
                         None,
+                        &game.common.world,
                     );
                     host.hub.guests.update(0, |guest| {
                         let opened = guest.menu.as_mut().unwrap();

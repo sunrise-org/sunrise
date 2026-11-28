@@ -192,6 +192,7 @@ pub(crate) mod tests {
                         Slots::Block(pos),
                         vec![None; 9],
                         None,
+                        &game.common.world,
                     );
                     game.player_menu_opening(conn);
                 }
@@ -237,6 +238,7 @@ pub(crate) mod tests {
                         slots,
                         vec![None; 9],
                         None,
+                        &game.common.world,
                     );
                     game.player_menu_opening(conn);
                 }
@@ -268,6 +270,7 @@ pub(crate) mod tests {
                         Slots::Block(pos),
                         vec![None; 9],
                         None,
+                        &game.common.world,
                     );
                     game.player_menu_opening(conn);
                 };
@@ -321,6 +324,7 @@ pub(crate) mod tests {
                     Slots::Double(pos, other),
                     vec![None; 18],
                     None,
+                    &game.common.world,
                 );
                 game.player_menu_opening(13);
                 assert_eq!(&notices.lock().unwrap()[before..], [(0, 1), (0, 1)]);

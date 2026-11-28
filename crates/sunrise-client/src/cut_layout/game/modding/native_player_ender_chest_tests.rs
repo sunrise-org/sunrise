@@ -148,6 +148,7 @@ fn a_written_slot_is_what_the_open_ender_chest_menu_shows_and_clicks() {
             Slots::Ender,
             vec![None; 27],
             None,
+            &game.common.world,
         );
         let window = hub.guest(13).unwrap().menu.as_ref().unwrap().window;
         assert_eq!(b.set_ender_chest_slot(game, 3, Some(old)), Ok(()));

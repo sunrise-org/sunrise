@@ -2879,6 +2879,7 @@ pub(crate) mod tests {
                 Slots::Block((0, 64, 0)),
                 vec![None; 27],
                 None,
+                &game.common.world,
             );
             // Opening a window leaves the inventory's cursor parked; seed the chest menu's.
             host.hub.guests.update(0, |guest| {
@@ -2975,6 +2976,7 @@ pub(crate) mod tests {
                 Slots::Block((0, 64, 0)),
                 vec![None; 27],
                 None,
+                &game.common.world,
             );
             let menu = menu_of(game);
             assert_eq!(
@@ -3136,6 +3138,7 @@ pub(crate) mod tests {
                 Slots::Block((0, 64, 0)),
                 vec![None; 3],
                 None,
+                &game.common.world,
             );
             let menu = menu_of(game);
             let (fuel, result) = (

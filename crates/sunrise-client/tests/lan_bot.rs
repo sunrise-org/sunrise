@@ -1276,6 +1276,7 @@ fn menu_extra_data_comes_right_before_its_menu() {
         Slots::Block(key),
         items.clone(),
         None,
+        &s.world,
     );
     let (bot, extras, _) = run(&mut s, move || until_screen(bot));
     assert!(extras.is_empty(), "a stock menu sends no extra data");
@@ -1287,6 +1288,7 @@ fn menu_extra_data_comes_right_before_its_menu() {
         Slots::Block(key),
         items,
         Some(vec![7, 0, 255]),
+        &s.world,
     );
     let window = s.hub.guests[0].menu.as_ref().unwrap().window;
     let (_, extras, opened) = run(&mut s, move || until_screen(bot));
@@ -1356,6 +1358,7 @@ fn a_spectators_container_click_is_taken_back() {
         Slots::Block(key),
         items.clone(),
         None,
+        &s.world,
     );
     let window = s.hub.guests[0].menu.as_ref().unwrap().window;
     // The menu's own contents, as the client first sees them.
@@ -1513,6 +1516,7 @@ fn a_click_past_the_menu_is_ignored() {
         Slots::Block(key),
         items,
         None,
+        &s.world,
     );
     let stone = Some(ItemStack::new("minecraft:stone", 64));
     s.hub.guests.update(0, |g| g.inventory[9] = stone.clone());

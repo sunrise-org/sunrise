@@ -207,6 +207,7 @@ fn with_local_furnace(
             Slots::Block(pos),
             vec![None; 3],
             None,
+            &game.common.world,
         )
         .expect("local furnace window");
         let furnace_menu = hub.guests[0].menu_before_replacement();
@@ -1247,6 +1248,7 @@ fn an_outer_abort_after_an_applied_lan_click_restores_the_guest_and_the_containe
                 Slots::Block(pos),
                 vec![None; 27],
                 None,
+                &game.common.world,
             );
             let window = host.hub.guests[0].menu.as_ref().unwrap().window;
             let packet = |container, slot| {
@@ -1708,6 +1710,7 @@ pub mod item_part_tests {
                     Slots::Block(pos),
                     chest,
                     None,
+                    &game.common.world,
                 );
                 let window = host.hub.guests[0].menu.as_ref().unwrap().window;
                 host.hub.guests.update(0, |guest| {
@@ -1942,6 +1945,7 @@ pub mod item_part_tests {
                     Slots::Block(pos),
                     vec![None; 27],
                     None,
+                    &game.common.world,
                 );
                 let window = host.hub.guests[0].menu.as_ref().unwrap().window;
                 let pkt = |container, slot, button, input| {
@@ -3405,6 +3409,7 @@ pub mod item_part_tests {
                     Slots::Block(pos),
                     chest,
                     None,
+                    &game.common.world,
                 );
                 let window = host.hub.guests[0].menu.as_ref().unwrap().window;
                 let click_pkt = Serverbound::ContainerClick(ContainerClick {

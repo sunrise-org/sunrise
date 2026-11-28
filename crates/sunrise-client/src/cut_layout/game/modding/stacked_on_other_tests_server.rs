@@ -43,6 +43,7 @@ fn a_lan_hub_click_is_decided_the_same_way() {
                     Slots::Block(pos),
                     vec![None; 27],
                     None,
+                    &game.common.world,
                 );
                 let window = host.hub.guests[0].menu.as_ref().unwrap().window;
                 host.hub.guests.update(0, |guest| {

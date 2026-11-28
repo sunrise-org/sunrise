@@ -284,10 +284,10 @@ impl crate::game::ServerGame<'_> {
             };
             // Park the opener's window-0 cursor and build the first contents from
             // their inventory, even when an open through BlockEntityRef runs in their turn.
-            let Some(menu_generation) = game.with_own_record(gi, |host, _, _| {
+            let Some(menu_generation) = game.with_own_record(gi, |host, _, world| {
                 if host
                     .hub
-                    .open_menu_window(conn, menu, title, Some(pos), slots, items, extra)
+                    .open_menu_window(conn, menu, title, Some(pos), slots, items, extra, world)
                     .is_none()
                 {
                     if let Some(container) = previous_window
@@ -433,9 +433,17 @@ impl crate::game::ServerGame<'_> {
                 return MenuOpen::Refused;
             };
             if game
-                .with_own_record(gi, |host, _, _| {
-                    host.hub
-                        .open_menu_window(conn, menu, title, Some(pos), slots, items, None)
+                .with_own_record(gi, |host, _, world| {
+                    host.hub.open_menu_window(
+                        conn,
+                        menu,
+                        title,
+                        Some(pos),
+                        slots,
+                        items,
+                        None,
+                        world,
+                    )
                 })
                 .is_none()
             {

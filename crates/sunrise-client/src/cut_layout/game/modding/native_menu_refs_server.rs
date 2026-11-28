@@ -306,6 +306,7 @@ pub(crate) mod tests {
                 Slots::Double(a, b),
                 vec![None; 5],
                 None,
+                &game.common.world,
             );
             let menu = game.player_container_menu(player).unwrap();
             assert_eq!(
@@ -332,6 +333,7 @@ pub(crate) mod tests {
                 Slots::Block(vehicle),
                 vec![None],
                 None,
+                &game.common.world,
             );
             let menu = game.player_container_menu(player).unwrap();
             assert_eq!(
@@ -361,6 +363,7 @@ pub(crate) mod tests {
                 Slots::Block(a),
                 vec![Some(gold.clone())],
                 None,
+                &game.common.world,
             );
             let overworld_menu = game.player_container_menu(player).unwrap();
             let overworld = game.level("minecraft:overworld").unwrap();
@@ -391,6 +394,7 @@ pub(crate) mod tests {
                 Slots::Block(a),
                 vec![Some(emerald.clone())],
                 None,
+                &game.common.world,
             );
             let other_player = game.player(456).unwrap();
             let nether_menu = game.player_container_menu(other_player).unwrap();

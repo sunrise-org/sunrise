@@ -102,6 +102,7 @@ fn a_mod_menu_part_decides_whether_its_menu_stays_open() {
                     slots,
                     vec![None; 27],
                     None,
+                    &game.common.world,
                 );
                 host.hub.guests.update(0, |guest| {
                     let menu = guest.menu.as_mut().unwrap();
@@ -237,6 +238,8 @@ fn a_mod_menu_part_decides_whether_its_menu_stays_open() {
                 asks_still_valid: asks_still_valid(Some(shell), "test:shell"),
                 opening_item: None,
                 opener_block: None,
+                backing_entities: Slots::Block(vehicle)
+                    .backing_entities(&game.world, Some(vehicle)),
                 removed: false,
                 slot_changed_seen: None,
             };
@@ -327,6 +330,7 @@ fn a_blockless_mod_menu_closes_when_its_part_answers_false() {
                                 Slots::Native,
                                 vec![None; 9],
                                 None,
+                                &game.common.world,
                             )
                             .unwrap()
                     };
@@ -434,6 +438,7 @@ fn acting_guest_container_validity_uses_the_loaned_block_reach() {
                     Slots::Block(pos),
                     vec![None; 27],
                     None,
+                    &game.common.world,
                 )
                 .unwrap();
             game.as_guest(12, |game| {
@@ -519,6 +524,7 @@ fn acting_guest_mod_menu_validity_uses_the_live_opening_hand_and_eye() {
                             Slots::Native,
                             vec![None; 18],
                             None,
+                            &game.common.world,
                         )
                         .unwrap();
                         hub.guests.update(0, |g| {

@@ -61,13 +61,11 @@ impl crate::game::ServerGame<'_> {
             return true;
         };
         g.menu.as_ref().is_none_or(|m| {
-            m.slots.valid(&self.common.world)
-                && m.still_valid_for(
-                    &host.hub.loop_context,
-                    &self.common.world,
-                    &self.live_guest_view(g),
-                )
-                && !matches!(m.slots, Slots::Block((_, y, id))
+            m.still_valid_for(
+                &host.hub.loop_context,
+                &self.common.world,
+                &self.live_guest_view(g),
+            ) && !matches!(m.slots, Slots::Block((_, y, id))
                     if y == sunrise_gameplay_common::game::minecarts::CART_KEY_Y
                         && !self.chest_vehicle_still_valid(id, g))
         })

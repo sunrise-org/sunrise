@@ -76,6 +76,7 @@ pub(crate) mod tests {
                             sunrise_sim::lan::menu::Slots::Ender,
                             vec![Some(stack.clone())],
                             None,
+                            &game.common.world,
                         );
                     } else {
                         host.hub
@@ -1531,6 +1532,7 @@ pub(crate) mod tests {
                     Slots::Native,
                     vec![None; 9],
                     Some(vec![0; sunrise_protocol::menu_extra::MAX_DATA + 1]),
+                    &game.common.world,
                 ),
                 None
             );

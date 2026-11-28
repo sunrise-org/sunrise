@@ -361,6 +361,7 @@ fn installed_slot_rules_change_mod_menu_placement() {
             asks_still_valid: asks_still_valid(mod_type, registry_id),
             opening_item: None,
             opener_block: None,
+            backing_entities: Slots::Block(k).backing_entities(&world, Some(k)),
             removed: false,
             slot_changed_seen: None,
         };
@@ -430,6 +431,7 @@ fn installed_slot_rules_change_mod_menu_placement() {
             asks_still_valid: asks_still_valid(Some(mod_type), "test:rules"),
             opening_item: None,
             opener_block: None,
+            backing_entities: [None; 2],
             removed: false,
             slot_changed_seen: None,
         };

@@ -792,6 +792,7 @@ fn open_native_menu(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> i32 {
         asks_still_valid: false,
         opening_item: None,
         opener_block: None,
+        backing_entities: [None; 2],
         removed: false,
         slot_changed_seen: None,
     };
@@ -910,6 +911,7 @@ fn open_depot(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> i32 {
         Slots::Block(POS),
         vec![None; 9],
         None,
+        &game.common.world,
     );
     host.hub.guests[0].menu.as_ref().unwrap().window
 }
@@ -1467,6 +1469,7 @@ fn menu_quick_move_validates_writes_and_contains_panics_on_live_resident_block_e
                 Slots::Block(SECOND),
                 vec![None; 9],
                 None,
+                &game.common.world,
             );
             let healthy_window = host.hub.guests[0].menu.as_ref().unwrap().window;
             script(edits);
