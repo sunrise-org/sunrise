@@ -39,6 +39,9 @@ properties calls nothing; metadata that cannot enumerate returns `Unavailable`. 
 | `collision_is_full_block(state) -> Option<bool>` | `BlockState.isCollisionShapeFullBlock` at the origin with an empty getter, as vanilla caches it (stone and leaves yes, slabs and fences no); `None` for a dynamic shape (shulker boxes, moving pistons, bamboo, scaffolding), which vanilla never caches |
 | `poi_type(state) -> Option<Identifier>` | `PoiTypes.forState`: the point of interest type (`minecraft:librarian` for a lectern, `minecraft:meeting` for a bell), mods' `extend_poi_types` states included |
 | `propagates_skylight_down(state) -> Option<bool>` | `BlockState.propagatesSkylightDown()`: sky light passes down unchanged, the block's own answer included (glass and air yes, stone no) |
+| `light_block(state) -> Option<u8>` | `BlockState.getLightBlock()`: the light the state stops, as the light engine reads it (stone 15, glass and air 0) |
+| `is_suffocating(state) -> Option<bool>` | `BlockState.isSuffocating` by the open world's rules, its data packs' `#minecraft:causes_suffocation` included; `None` where the answer depends on the position (shulker boxes, shapes that change with where they are) |
+| `is_valid_spawn(state, entity_type) -> Option<bool>` | `BlockState.isValidSpawn` for a mob type, mods' declared spawn rules included (leaves take ocelots and parrots, ice polar bears, magma blocks fire-immune mobs); `None` for a type that is not a mob |
 | `is_air(state) -> Option<bool>` | `BlockState.isAir()`: air, cave air and void air, by the block's flag rather than the `#minecraft:air` tag |
 | `is_redstone_conductor(state) -> Option<bool>` | `BlockState.isRedstoneConductor` when it depends only on the block state; `None` when a position is needed |
 | `map_color(state) -> Option<u8>` | `BlockState.getMapColor`: the `MapColor.id` a map item colours a column by, 0 for none |

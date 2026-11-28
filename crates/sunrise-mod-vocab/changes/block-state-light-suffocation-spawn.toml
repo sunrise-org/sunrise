@@ -1,0 +1,3 @@
+ids = ["handle:BlockStates::light_block", "handle:BlockStates::is_suffocating", "handle:BlockStates::is_valid_spawn"]
+why = "#6035: BlockStates reads a state's light block (BlockState.getLightBlock), whether it suffocates (isSuffocating, None where the answer depends on the position, such as a shulker box) and whether a mob type may spawn on it (isValidSpawn, mods' declared spawn rules included), so a mod can ask another state for vanilla's answers, as a camouflaged block or a cable bus does. New methods only."
+migrate = "Nothing to change."

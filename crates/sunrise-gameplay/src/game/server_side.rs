@@ -12,6 +12,9 @@ mod fluid_passage_tests;
 #[cfg(test)]
 #[path = "modding/native_block_metadata_reads_tests.rs"]
 mod native_block_metadata_reads_tests;
+#[cfg(test)]
+#[path = "modding/native_block_state_reads_tests.rs"]
+mod native_block_state_reads_tests;
 #[path = "modding/native_chunk_requests.rs"]
 pub(in crate::game) mod native_chunk_requests;
 #[cfg(test)]

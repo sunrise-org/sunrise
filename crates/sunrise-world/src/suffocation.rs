@@ -99,6 +99,15 @@ impl<'r> SuffocationRegistry<'r> {
         Ok(Self { collisions, rules })
     }
 
+    /// The answer `state` gives wherever it is placed; None for a state that asks its position
+    /// (a shulker box, or a collision shape that depends on where it is) or outside the registry.
+    pub fn state_suffocates(&self, state: BlockStateId) -> Option<bool> {
+        match self.rules.get(state.0 as usize)? {
+            Rule::Constant(value) => Some(*value),
+            Rule::Shulker | Rule::DynamicFull => None,
+        }
+    }
+
     pub fn is_suffocating<W: DynamicCollisionWorld>(
         &self,
         world: &mut W,

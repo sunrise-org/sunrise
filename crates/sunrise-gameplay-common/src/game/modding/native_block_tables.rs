@@ -23,15 +23,43 @@ use sunrise_world::registry::BlockStateId;
 pub struct BlockTables<'a> {
     res: &'a Resources,
     pack: &'a PackResources,
+    /// The level's suffocation rules: its data packs' `causes_suffocation` once a world is
+    /// open, the built-in ones before.
+    suffocation: &'a sunrise_world::suffocation::SuffocationRegistry<'static>,
 }
 
 impl<'a> BlockTables<'a> {
+    /// The tables with the built-in suffocation rules, for a caller with no side at hand.
     pub fn new(res: &'a Resources, pack: &'a PackResources) -> Self {
-        Self { res, pack }
+        Self::with_suffocation(res, pack, res.suffocation())
     }
 
+    /// The tables with the level's suffocation rules, for a caller that borrows the game's other
+    /// fields at the same time ([`crate::game::level_suffocation_of`]).
+    pub fn with_suffocation(
+        res: &'a Resources,
+        pack: &'a PackResources,
+        suffocation: &'a sunrise_world::suffocation::SuffocationRegistry<'static>,
+    ) -> Self {
+        Self {
+            res,
+            pack,
+            suffocation,
+        }
+    }
+
+    /// The tables of the common game alone: the built-in suffocation rules, since only a side
+    /// reaches the world's tables.
     pub fn of(game: &'a CommonGame<'_>) -> Self {
         Self::new(&game.res, &game.pack)
+    }
+
+    /// The tables a side's host reads: the level's suffocation rules, its data packs'
+    /// `causes_suffocation` once a world is open.
+    pub fn of_side<'g: 'a, G: crate::game::SideGame<'g>>(game: &'a G) -> Self {
+        use crate::game::tables::GameItems as _;
+        let common = game.common();
+        Self::with_suffocation(&common.res, &common.pack, game.level_suffocation())
     }
 
     /// The item table the generated forwarders convert item values with.
@@ -448,6 +476,35 @@ impl<'a> BlockTables<'a> {
         Some(self.res.facts().get(state).skylight_down)
     }
 
+    /// `BlockState.getLightBlock()`: the light the state stops, the exported value the light
+    /// engine reads. None for an unknown state.
+    pub fn block_state_light_block(&self, state: BlockStateId) -> Option<u8> {
+        self.pack.assets.registry.state(state)?;
+        Some(self.res.facts().get(state).dampening)
+    }
+    /// `BlockState.isSuffocating` where the state alone decides, by the level's suffocation
+    /// rules. None for an unknown state or one whose answer depends on its position.
+    pub fn block_state_is_suffocating(&self, state: BlockStateId) -> Option<bool> {
+        self.pack.assets.registry.state(state)?;
+        self.suffocation.state_suffocates(state)
+    }
+    /// `BlockState.isValidSpawn` of `state` for the mob type `entity_type`. None for an unknown
+    /// state or a type that is not a mob type.
+    pub fn block_state_is_valid_spawn(
+        &self,
+        state: BlockStateId,
+        entity_type: &str,
+    ) -> Option<bool> {
+        self.pack.assets.registry.state(state)?;
+        let id = sunrise_command::args::normalized(entity_type);
+        let species = self.res.mob_types().get(&*id)?.species;
+        Some(sunrise_sim::mobs::spawn_rules::is_valid_spawn_state(
+            species,
+            self.res.facts(),
+            self.res.mob_data(),
+            state,
+        ))
+    }
     /// `BlockState.isAir()`, the exported per-state flag. None for an unknown state.
     pub fn block_state_is_air(&self, state: BlockStateId) -> Option<bool> {
         self.pack.assets.registry.state(state)?;

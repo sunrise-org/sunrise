@@ -841,7 +841,10 @@ fn render_forwarders(
                         } else {
                             format!(", {args}")
                         };
-                        format!("{table}::{name}(&{table}::of(&self.common){args})")
+                        // The side game, not its common half: the table reads the level's
+                        // world tables (its data packs' suffocation rules), which only a side
+                        // reaches.
+                        format!("{table}::{name}(&{table}::of_side(self){args})")
                     } else {
                         format!("{table}::of(self).{name}({args})")
                     }

@@ -337,6 +337,15 @@ macro_rules! impl_block_states_without_tables {
                 fn block_state_propagates_skylight_down(&self, _: BlockState) -> Option<bool> {
                     None
                 }
+                fn block_state_light_block(&self, _: BlockState) -> Option<u8> {
+                    None
+                }
+                fn block_state_is_suffocating(&self, _: BlockState) -> Option<bool> {
+                    None
+                }
+                fn block_state_is_valid_spawn(&self, _: BlockState, _: &str) -> Option<bool> {
+                    None
+                }
                 fn block_state_is_air(&self, _: BlockState) -> Option<bool> {
                     None
                 }
@@ -674,6 +683,29 @@ impl BlockStates<'_> {
     /// None as for `replaceable`.
     pub fn propagates_skylight_down(&self, state: BlockState) -> Option<bool> {
         self.backend.block_state_propagates_skylight_down(state)
+    }
+    /// `BlockState.getLightBlock()`: how much light `state` stops, 0 to 15, as the light engine
+    /// reads it (15 for a full opaque block, 0 for air and glass, 1 for water and leaves). None
+    /// as for `replaceable`.
+    pub fn light_block(&self, state: BlockState) -> Option<u8> {
+        self.backend.block_state_light_block(state)
+    }
+    /// `BlockState.isSuffocating(level, pos)`: whether an entity whose eyes are inside `state`
+    /// suffocates, which also pushes a player out and blocks bed and spawn positions. Most
+    /// states answer alone (their block's rule, or a full collision shape of a
+    /// `#minecraft:causes_suffocation`-style block); None for a state whose answer depends on
+    /// where it is placed (a shulker box, open or closed; a block whose collision shape is
+    /// positional), and as for `replaceable`.
+    pub fn is_suffocating(&self, state: BlockState) -> Option<bool> {
+        self.backend.block_state_is_suffocating(state)
+    }
+    /// `BlockState.isValidSpawn(level, pos, entity_type)`: whether a mob of `entity_type`
+    /// (`minecraft:zombie`) may spawn standing on `state`, by the block's spawn predicate,
+    /// mods' declared spawn rules included: leaves for ocelots and parrots, ice for polar bears,
+    /// magma blocks only for fire-immune types. None for an entity type that is not a mob type,
+    /// and as for `replaceable`.
+    pub fn is_valid_spawn(&self, state: BlockState, entity_type: &str) -> Option<bool> {
+        self.backend.block_state_is_valid_spawn(state, entity_type)
     }
     /// `BlockState.isAir()`: air, cave air and void air (`LevelReader.isEmptyBlock`), by the
     /// block's own flag, not the `#minecraft:air` tag. None as for `replaceable`.

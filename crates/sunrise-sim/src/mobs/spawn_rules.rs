@@ -140,12 +140,22 @@ fn immune_tag(s: Species) -> Option<&'static str> {
 }
 /// `BlockState.isValidSpawn(level, pos, type)` for the block at a position.
 pub fn is_valid_spawn<L: SpawnLevel>(s: Species, l: &L, x: i32, y: i32, z: i32) -> bool {
+    is_valid_spawn_state(s, l.facts(), l.mob_data(), l.state(x, y, z))
+}
+/// `BlockState.isValidSpawn` of `state` for species `s`: the state's exported flag for the
+/// species' predicate (mods' declared spawn rules included), a magma block for a fire-immune one.
+pub fn is_valid_spawn_state(
+    s: Species,
+    facts: &BlockFacts,
+    mob_data: &data::MobData,
+    state: BlockStateId,
+) -> bool {
     let bit = match s {
         Species::Ocelot | Species::Parrot => data::VALID_SPAWN_LEAVES,
         Species::PolarBear => data::VALID_SPAWN_ICE,
         _ => data::VALID_SPAWN,
     };
-    valid_spawn_surface(l, x, y, z, bit, fire_immune(s))
+    valid_spawn_state(facts, mob_data, state, bit, fire_immune(s))
 }
 
 fn valid_spawn_surface<L: SpawnLevel>(
@@ -156,11 +166,20 @@ fn valid_spawn_surface<L: SpawnLevel>(
     bit: u16,
     fire_immune: bool,
 ) -> bool {
-    let state = l.state(x, y, z);
-    if &*l.facts().get(state).name == "minecraft:magma_block" {
+    valid_spawn_state(l.facts(), l.mob_data(), l.state(x, y, z), bit, fire_immune)
+}
+
+fn valid_spawn_state(
+    facts: &BlockFacts,
+    mob_data: &data::MobData,
+    state: BlockStateId,
+    bit: u16,
+    fire_immune: bool,
+) -> bool {
+    if &*facts.get(state).name == "minecraft:magma_block" {
         fire_immune
     } else {
-        l.mob_data().state(state).flags & bit != 0
+        mob_data.state(state).flags & bit != 0
     }
 }
 /// `NaturalSpawner.isValidEmptySpawnBlock` for an entity type.

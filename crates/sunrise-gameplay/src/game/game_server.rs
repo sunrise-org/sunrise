@@ -2519,7 +2519,14 @@ impl crate::game::ServerGame<'_> {
             trigger_extras,
             world: &mut self.common.world,
             facts: self.common.res.facts(),
-            tables: native_block_tables::BlockTables::new(&self.common.res, &self.common.pack),
+            tables: native_block_tables::BlockTables::with_suffocation(
+                &self.common.res,
+                &self.common.pack,
+                sunrise_gameplay_common::game::level_suffocation_of(
+                    &self.server.world_tables.0,
+                    &self.common.res,
+                ),
+            ),
             collision: self.common.collision,
             events: &mut self.common.level_events,
             dimension,

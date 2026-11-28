@@ -226,6 +226,16 @@ pub trait BlockStatesBackend {
     /// shape's). None for an unknown state.
     fn block_state_propagates_skylight_down(&self, state: BlockState) -> Option<bool>;
     /// Side: both.
+    /// `BlockState.getLightBlock()`, read by `BlockStates::light_block`.
+    fn block_state_light_block(&self, state: BlockState) -> Option<u8>;
+    /// Side: both.
+    /// `BlockState.isSuffocating` where the state alone decides, read by
+    /// `BlockStates::is_suffocating`.
+    fn block_state_is_suffocating(&self, state: BlockState) -> Option<bool>;
+    /// Side: both.
+    /// `BlockState.isValidSpawn` for an entity type, read by `BlockStates::is_valid_spawn`.
+    fn block_state_is_valid_spawn(&self, state: BlockState, entity_type: &str) -> Option<bool>;
+    /// Side: both.
     /// `BlockState.isAir()`: air, cave air and void air, by the block's own flag rather than
     /// the `#minecraft:air` tag a data pack may change. None for an unknown state.
     fn block_state_is_air(&self, state: BlockState) -> Option<bool>;

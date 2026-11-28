@@ -137,7 +137,14 @@ macro_rules! game_side {
                 ))
             }),
             facts: $s.res.facts(),
-            tables: $crate::game::native_block_tables::BlockTables::new(&$s.res, &$s.pack),
+            tables: $crate::game::native_block_tables::BlockTables::with_suffocation(
+                &$s.res,
+                &$s.pack,
+                {
+                    use $crate::game::tables::GameItems as _;
+                    ($s).level_suffocation()
+                },
+            ),
             biomes: $crate::world_biomes!($s),
             behaviours: $s.res.behaviours(),
             features: $crate::game::side_ops::tables::SideOps::side_level_features(
@@ -187,17 +194,35 @@ macro_rules! game_side {
                 )
             } else {
                 session_lock.then(|| $s.res.items())
-            }
+            },
+            Some({
+                use $crate::game::tables::GameItems as _;
+                ($s).level_suffocation()
+            })
         )
     }};
-    ($s:expr, $meta:expr, $features:expr, $tags:expr) => {{
+    ($s:expr, $meta:expr, $features:expr, $tags:expr) => {
+        $crate::game_side!($s, $meta, $features, $tags, None)
+    };
+    // `$suffocation`: `Some` of the level's suffocation rules, which only a side reaches
+    // (`level_suffocation`); `None`, as the 4-argument form passes, for the built-in ones.
+    ($s:expr, $meta:expr, $features:expr, $tags:expr, $suffocation:expr) => {{
         let (player_uuid, level, _session_lock): (Option<u128>, Option<mod_api::LevelRef>, bool) =
             $meta;
         $crate::game::native_surface::GameSide {
             dim: $s.dim,
             level,
             facts: $s.res.facts(),
-            tables: $crate::game::native_block_tables::BlockTables::new(&$s.res, &$s.pack),
+            tables: match $suffocation {
+                Some(suffocation) => {
+                    $crate::game::native_block_tables::BlockTables::with_suffocation(
+                        &$s.res,
+                        &$s.pack,
+                        suffocation,
+                    )
+                }
+                None => $crate::game::native_block_tables::BlockTables::new(&$s.res, &$s.pack),
+            },
             biomes: $crate::world_biomes!($s),
             behaviours: $s.res.behaviours(),
             features: $features,

@@ -231,7 +231,10 @@ pub fn dispatch_borrowed(_: &dyn Host) { CALLS.fetch_add(1000, Relaxed); }
             r#"
 pub mod game {{
     use mod_api::prelude::TablesBackend;
-    pub trait SideGame<'g>: SharedRead {{ fn as_host(&self) -> &dyn mod_api::Host; }}
+    pub trait SideGame<'g>: SharedRead {{
+        fn as_host(&self) -> &dyn mod_api::Host;
+        fn common(&self) -> &CommonGame<'g>;
+    }}
     pub trait SharedRead {{
         fn shared(&self) -> u32 {{ self.items() + 2 }}
         fn items(&self) -> u32;
@@ -246,6 +249,7 @@ pub mod game {{
     pub struct BlockTables<'a>(&'a u32);
     impl<'a> BlockTables<'a> {{
         pub fn of(game: &'a CommonGame<'_>) -> Self {{ Self(game.0) }}
+        pub fn of_side<'g: 'a, G: SideGame<'g>>(game: &'a G) -> Self {{ Self::of(game.common()) }}
         pub fn table(&self) -> u32 {{ *self.0 }}
     }}
     pub struct Borrowed<'a>(pub &'a u32);
@@ -375,7 +379,10 @@ pub mod game {{
     use mod_api::prelude::*;
     pub struct {ty}<'g> {{ pub common: common::CommonGame<'g>, pub {name}: u32 }}
     impl mod_api::Host for {ty}<'_> {{}}
-    impl<'g> common::SideGame<'g> for {ty}<'g> {{ fn as_host(&self) -> &dyn mod_api::Host {{ self }} }}
+    impl<'g> common::SideGame<'g> for {ty}<'g> {{
+        fn as_host(&self) -> &dyn mod_api::Host {{ self }}
+        fn common(&self) -> &common::CommonGame<'g> {{ &self.common }}
+    }}
     impl common::SharedRead for {ty}<'_> {{ fn items(&self) -> u32 {{ self.{name} }} }}
     impl common::SideOperation for {ty}<'_> {{ fn operation(&self) -> u32 {{ self.{name} + 1 }} }}
     impl {ty}<'_> {{ fn local(&self) -> u32 {{ self.{name} }} }}

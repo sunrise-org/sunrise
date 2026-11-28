@@ -49,7 +49,11 @@ macro_rules! server_game_side {
             (player_uuid, level, session_lock),
             $s.common.level.enabled_features.as_arc(),
             (session_lock && !$s.common.options.execution_role.is_client())
-                .then(|| $s.common.res.items())
+                .then(|| $s.common.res.items()),
+            Some(sunrise_gameplay_common::game::level_suffocation_of(
+                &$s.server.world_tables.0,
+                &$s.common.res
+            ))
         )
     }};
 }
