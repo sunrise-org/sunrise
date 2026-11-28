@@ -1,11 +1,4 @@
 //! Per-level-tick state digest to `SUNRISE_STATE_DIGEST` (`_DETAIL=1` adds per-entity lines).
-use super::{
-    Dim, FallingBlock, Game,
-    boats_common::Boat,
-    entity::{Entity as _, EntityHandle, entity_lists_of, with_entity},
-    fireworks, general, minecarts,
-    tnt_common::PrimedTnt,
-};
 use std::{
     hash::{DefaultHasher, Hash, Hasher},
     io::Write,
@@ -16,7 +9,18 @@ use std::{
     time::Instant,
 };
 use sunrise_core::{geometry::Vec3, random::LegacyRandom};
+use sunrise_gameplay_common::game::{
+    Dim, FallingBlock,
+    boats_common::Boat,
+    entity::{Entity as _, EntityHandle, entity_lists_of, with_entity},
+    fireworks, general, minecarts,
+    tnt_common::PrimedTnt,
+};
 use sunrise_sim::{join_seq::JoinSeq, thrown_trident::ThrownTrident};
+
+#[path = "state_digest_groups.rs"]
+mod groups;
+use groups::BodyDigest as _;
 
 struct Sink {
     out: std::io::BufWriter<std::fs::File>,
@@ -110,6 +114,9 @@ impl DigestParts for sunrise_sim::entities::ArmorStand {
     fn health_bits(&self) -> Option<u64> {
         Some(u64::from(self.health.to_bits()))
     }
+    fn own_random(&self) -> Option<&LegacyRandom> {
+        Some(&self.random)
+    }
 }
 impl DigestParts for PrimedTnt {
     fn extra(&self) -> i64 {
@@ -130,7 +137,11 @@ impl DigestParts for sunrise_sim::projectiles::Projectile {
         Some(&self.random.0)
     }
 }
-impl DigestParts for fireworks::Rocket {}
+impl DigestParts for fireworks::Rocket {
+    fn own_random(&self) -> Option<&LegacyRandom> {
+        Some(&self.random)
+    }
+}
 impl DigestParts for general::GeneralRow {}
 impl DigestParts for ThrownTrident {
     fn own_random(&self) -> Option<&LegacyRandom> {
@@ -154,9 +165,11 @@ impl crate::game::ServerGame<'_> {
         let mut details = String::new();
 
         let (mut entities, mut randoms) = (hasher(), hasher());
+        let mut shared = groups::EntityGroups::default();
         let (mut count, mut with_random) = (0u64, 0u64);
         let mut visit = |handle: EntityHandle, seq: JoinSeq| {
-            with_entity!(self, handle, e => {
+            with_entity!(self.common, handle, e => {
+                groups::typed_shared(self, &mut shared, e);
                 let mut one = hasher();
                 std::mem::discriminant(&handle).hash(&mut one);
                 e.native_type().hash(&mut one);
@@ -170,6 +183,7 @@ impl crate::game::ServerGame<'_> {
                 e.health_bits().hash(&mut one);
                 e.is_removed().hash(&mut one);
                 e.extra().hash(&mut one);
+                e.hash_body(&mut one, self.common.res.items());
                 let one = one.finish();
                 one.hash(&mut entities);
                 count += 1;
@@ -198,15 +212,16 @@ impl crate::game::ServerGame<'_> {
                 }
             })
         };
-        let walk = entity_lists_of!(self).walk_in_join_order(&mut visit);
+        let walk = entity_lists_of!(self.common).walk_in_join_order(&mut visit);
         let walk_error = walk.err().map(|e| format!("{e:?}"));
         if walk_error.is_some() {
             // The join-order walk refused the lists; hash them list by list instead.
-            for handle in self.entity_handles() {
+            for handle in self.common.entity_handles() {
                 visit(handle, JoinSeq::UNJOINED);
             }
         }
 
+        let extra = groups::level(self, &mut shared, detail.then_some(&mut details));
         let mut block_entities = hasher();
         let tickers = self.common.world.block_entities.ticker_slots();
         let mut be_count = 0u64;
@@ -243,10 +258,10 @@ impl crate::game::ServerGame<'_> {
         fluid_ticks.hash(&mut ticks);
 
         let line = format!(
-            "tick={} dim={} run={} entities={count}:{:016x} randoms={with_random}:{:016x} \
+            "tick={} dim={} run={} entities={count}:{:016x} randoms={with_random}:{:016x} {extra} entity_identity={:016x} entity_shared={:016x} \
              block_entities={be_count}:{:016x} level_random={:012x}/{:?}/{} counters={}/{} \
              scheduled={}/{}:{:016x}{}\n",
-            self.world.game_time,
+            self.common.world.game_time,
             dim.id(),
             match running {
                 Some(true) => "1",
@@ -255,11 +270,13 @@ impl crate::game::ServerGame<'_> {
             },
             entities.finish(),
             randoms.finish(),
+            shared.identity.finish(),
+            shared.shared.finish(),
             block_entities.finish(),
             level_random.0,
             level_random.1,
-            self.block_ticks.random_tick_value,
-            self.side.next_entity,
+            self.common.block_ticks.random_tick_value,
+            self.server.next_entity,
             next_join,
             block_ticks.len(),
             fluid_ticks.len(),
@@ -310,5 +327,3 @@ fn sorted_ticks(ticks: &sunrise_core::ticks::LevelTicks) -> Vec<(i64, u32, [i32;
     all.sort_unstable();
     all
 }
-
-use sunrise_gameplay_common::game::tables::GameItems as _;

@@ -1033,17 +1033,41 @@ pub fn set(language: Language) {
         ((), true)
     });
 }
+/// Publish cached fixture language to this thread, never to the process-wide table.
 #[cfg(feature = "test-language-publication")]
-pub fn set_shared(language: Arc<Language>) {
-    update_publication(|current, mods| {
-        if mods.entries.is_empty() && language.shadowed.is_empty() {
-            *current = Some(language);
+pub fn set_fixture_language(language: Arc<Language>) {
+    PUBLICATION.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let publication = slot.get_or_insert_with(|| IsolatedPublication {
+            current: None,
+            mods: ModEntries::default(),
+        });
+        if publication.mods.entries.is_empty() && language.shadowed.is_empty() {
+            publication.current = Some(language);
         } else {
-            commit_language(current, mods, Language::clone(&language));
+            commit_language(
+                &mut publication.current,
+                &publication.mods,
+                Language::clone(&language),
+            );
         }
-        ((), true)
     });
+    scope_changed();
 }
+#[cfg(all(test, feature = "test-language-publication"))]
+#[test]
+fn fixture_language_is_visible_only_to_its_thread() {
+    let key = "test.fixture_language_is_visible_only_to_its_thread";
+    set_fixture_language(Arc::new(Language::of(
+        DEFAULT,
+        [(key.into(), "fixture text".into())],
+    )));
+    assert_eq!(get(key), "fixture text");
+    std::thread::spawn(move || assert_eq!(get(key), key))
+        .join()
+        .unwrap();
+}
+
 pub fn current() -> Option<Arc<Language>> {
     if let Some(language) = SCOPE.with(|s| s.borrow().as_ref().map(|s| s.language.clone())) {
         return Some(language);

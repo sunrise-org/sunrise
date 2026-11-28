@@ -26,21 +26,8 @@ pub const MAX_FILE: u64 = 64 << 20;
 /// The biggest native binary build ID, in bytes.
 pub const MAX_NATIVE_BUILD: usize = 128;
 
-// The GitHub API takes the repository slug; the index needs the full download prefix.
-macro_rules! registry_repo {
-    () => {
-        "sunrise-org/sunrise-mods"
-    };
-}
-
-/// The default GitHub repository for the registry's staging and published releases.
-pub const REGISTRY_REPO: &str = registry_repo!();
 /// The default base URL for mirrored packages and native binaries.
-pub const FILE_HOST: &str = concat!(
-    "https://github.com/",
-    registry_repo!(),
-    "/releases/download/"
-);
+pub const FILE_HOST: &str = "https://github.com/sunrise-org/sunrise-mods/releases/download/";
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Index {
@@ -1418,8 +1405,7 @@ fn pack_format(zip: &mut zip::ZipArchive<std::fs::File>) -> Result<String, Strin
     Ok(format)
 }
 
-/// The kinds the registry takes submissions for; other kinds wait for their
-/// formats.
+/// The kinds the registry accepts; other kinds wait for their formats.
 pub fn open(kind: &Kind) -> Result<(), String> {
     match kind {
         Kind::Mod

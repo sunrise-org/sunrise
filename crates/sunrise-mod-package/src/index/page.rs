@@ -1,6 +1,6 @@
 //! A project page's rules: its categories, tags,
-//! description and images. Shared by the registry's CI ([`super::registry`]),
-//! the submission service and the index's readers.
+//! description and images. Shared by the registry's CI ([`super::registry`])
+//! and the index's readers.
 use super::Kind;
 
 /// At most this many categories, at least one ([`check_required`]).

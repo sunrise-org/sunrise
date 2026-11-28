@@ -15,7 +15,6 @@
   },
   "workspaces": [
     "Cargo.toml",
-    "crates/sunrise-mod-registry/Cargo.toml",
     "crates/sunrise-telemetry-server/Cargo.toml"
   ],
   "crates": {
@@ -69,7 +68,6 @@
     "sunrise-discord": "sunrise",
     "sunrise-friends": "sunrise",
     "sunrise-heartbeat": "sunrise",
-    "sunrise-mod-registry": "sunrise",
     "sunrise-official": "sunrise",
     "sunrise-perf-share": "sunrise",
     "sunrise-perf-overlay": "sunrise",
@@ -177,7 +175,6 @@
     "sunrise-client-render -> sunrise-shaders",
     "sunrise-render-shaderpack -> sunrise-shaders",
     "sunrise-native-build -> sunrise-mod-package",
-    "sunrise-mod-registry -> sunrise-mod-package",
     "sunrise-client -> sunrise-telemetry",
     "sunrise-client-gameplay -> sunrise-dualsense",
     "sunrise-client-gameplay -> sunrise-friends",
@@ -196,7 +193,6 @@
     "sunrise-hot-paths-game": "Workspace development fixtures, not a shipped runtime dependency.",
     "sunrise-modding-examples": "Workspace development fixtures, not a shipped runtime dependency.",
     "sunrise-bench -> sunrise-system": "Existing fork dependency across the upstream layer split; recorded baseline, not a new dependency.",
-    "sunrise-mod-registry -> sunrise-mod-package": "Separate registry workspace: reads and writes the registry index format (feature index only); recorded baseline, not a new dependency.",
     "sunrise-client -> sunrise-telemetry": "Restored upstream Horizon layer: existing engine dependency pending the upstream layer extraction.",
     "sunrise-client-lib -> sunrise-telemetry": "Restored upstream Horizon layer: existing engine dependency pending the upstream layer extraction."
   }

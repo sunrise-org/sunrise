@@ -39,6 +39,8 @@ mod io_pool;
 pub mod login_profile;
 pub mod menu;
 pub mod menu_extra_rev;
+#[cfg(feature = "net-trace")]
+mod packet_capture;
 #[cfg(test)]
 mod payload_bounds_tests;
 pub mod player_shown;
@@ -533,6 +535,16 @@ impl Handoff {
     }
 }
 
+#[cfg(feature = "net-trace")]
+enum CaptureAdmission {
+    Disabled,
+    Opened(
+        Arc<std::sync::atomic::AtomicI64>,
+        packet_capture::SessionWriter,
+    ),
+    Sealed,
+}
+
 /// State shared with the connection threads.
 pub struct Shared {
     payload_local: Arc<crate::raw_payloads::Local>,
@@ -574,6 +586,8 @@ pub struct Shared {
     turned_away: Mutex<(usize, Option<Instant>)>,
     /// A stop waits for a proxy to move the players out (`arrivals::StopWait`): no login comes in.
     shutting_down: AtomicBool,
+    #[cfg(feature = "net-trace")]
+    capture: Option<Arc<packet_capture::CaptureRun>>,
 }
 impl Shared {
     /// `IntegratedServer.isSingleplayerOwner`: the integrated server's own player, by name
@@ -669,6 +683,42 @@ impl Shared {
     /// A stop has begun: every login from now on is refused as the server's shutdown.
     pub fn refuse_logins(&self) {
         self.shutting_down.store(true, Ordering::Relaxed);
+    }
+    #[cfg(feature = "net-trace")]
+    pub fn set_capture_tick(&self, tick: i64) {
+        if let Some(capture) = &self.capture {
+            capture.set_tick(tick);
+        }
+    }
+    #[cfg(feature = "net-trace")]
+    fn open_capture(&self, conn: u32, player: &str) -> CaptureAdmission {
+        let Some(capture) = self.capture.as_ref() else {
+            return CaptureAdmission::Disabled;
+        };
+        match capture.open_session(conn, player) {
+            packet_capture::OpenSession::Opened(clock, writer) => {
+                CaptureAdmission::Opened(clock, writer)
+            }
+            packet_capture::OpenSession::Sealed => CaptureAdmission::Sealed,
+        }
+    }
+    #[cfg(feature = "net-trace")]
+    fn seal_capture(&self) {
+        if let Some(capture) = &self.capture {
+            capture.seal();
+        }
+    }
+    #[cfg(feature = "net-trace")]
+    fn capture_sealed(&self) -> bool {
+        self.capture
+            .as_ref()
+            .is_some_and(|capture| capture.is_sealed())
+    }
+    #[cfg(feature = "net-trace")]
+    fn finish_capture(&self) {
+        if let Some(capture) = &self.capture {
+            capture.finish();
+        }
     }
     fn is_online(&self, uuid: u128) -> bool {
         self.online.lock().unwrap().iter().any(|(u, _)| *u == uuid)
@@ -848,11 +898,35 @@ impl Lan {
     ) -> io::Result<Self> {
         Self::start_listener(sync, config, true, true)
     }
+    #[cfg(all(test, feature = "net-trace"))]
+    fn start_in_capture_dir(
+        sync: Arc<data::SyncData>,
+        config: NetConfig,
+        dir: &std::path::Path,
+    ) -> io::Result<Self> {
+        Self::start_listener_inner(sync, config, false, false, Some(dir))
+    }
     fn start_listener(
         sync: Arc<data::SyncData>,
         config: NetConfig,
         drive_game: bool,
         prepare_spawn: bool,
+    ) -> io::Result<Self> {
+        Self::start_listener_inner(
+            sync,
+            config,
+            drive_game,
+            prepare_spawn,
+            #[cfg(all(test, feature = "net-trace"))]
+            None,
+        )
+    }
+    fn start_listener_inner(
+        sync: Arc<data::SyncData>,
+        config: NetConfig,
+        drive_game: bool,
+        prepare_spawn: bool,
+        #[cfg(all(test, feature = "net-trace"))] capture_dir: Option<&std::path::Path>,
     ) -> io::Result<Self> {
         let (tx, events) = event_channel();
         let (request_tx, request_rx) = if drive_game {
@@ -874,6 +948,13 @@ impl Lan {
         let lan_incarnation = NEXT_LAN_INCARNATION
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
             .map_err(|_| io::Error::other("LAN incarnation identifiers exhausted"))?;
+        #[cfg(all(test, feature = "net-trace"))]
+        let capture = match capture_dir {
+            Some(dir) => Some(packet_capture::CaptureRun::open_in(dir, lan_incarnation)?),
+            None => packet_capture::CaptureRun::from_env(lan_incarnation)?,
+        };
+        #[cfg(all(not(test), feature = "net-trace"))]
+        let capture = packet_capture::CaptureRun::from_env(lan_incarnation)?;
         let shared = Arc::new(Shared {
             payload_local: crate::raw_payloads::Local::capture(crate::raw_payloads::Side::Server)
                 .map_err(io::Error::other)?,
@@ -903,6 +984,8 @@ impl Lan {
             closing: AtomicUsize::new(0),
             turned_away: Mutex::new((0, None)),
             shutting_down: AtomicBool::new(false),
+            #[cfg(feature = "net-trace")]
+            capture,
             random: Mutex::new(sunrise_java_properties::now_millis() as u64 | 1),
             config,
         });
@@ -1043,6 +1126,17 @@ impl Lan {
 impl Drop for Lan {
     fn drop(&mut self) {
         self.stop();
+        #[cfg(feature = "net-trace")]
+        {
+            self.shared.seal_capture();
+            while let Ok(receipt) = self.events.try_recv_owned() {
+                let (event, _lease) = receipt.into_parts();
+                if let NetEvent::Joined(joined, _) = event {
+                    joined.sender.close();
+                }
+            }
+            self.shared.finish_capture();
+        }
     }
 }
 

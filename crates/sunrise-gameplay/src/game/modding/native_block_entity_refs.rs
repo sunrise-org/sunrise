@@ -1608,6 +1608,75 @@ mod tests {
 
     #[test]
     #[ignore = "daily"]
+    fn block_entity_remove_effects_follow_nested_transaction_level() {
+        sunrise_gameplay_common::game::in_own_process(
+            "game::server_side::native_block_entity_refs::tests::block_entity_remove_effects_follow_nested_transaction_level",
+            || {
+                use super::super::Dim;
+                use super::super::native_entity_refs::tests::with_game;
+
+                with_game(|game| {
+                    let gateway = game
+                        .pack
+                        .assets
+                        .registry
+                        .default_state("minecraft:end_gateway")
+                        .unwrap();
+                    let cases = [([4, 64, 4], Ok(())), ([8, 64, 4], Err(()))];
+                    for dim in [Dim::Nether, Dim::Overworld] {
+                        game.enter_level(dim).unwrap();
+                        let chunk = Chunk::with_layout(0, 0, game.world.layout());
+                        game.world.chunks.insert((0, 0), Arc::new(chunk));
+                        for ([x, y, z], _) in cases {
+                            game.world.set(x, y, z, gateway).unwrap();
+                            game.world
+                                .block_entities
+                                .insert((x, y, z), BlockEntity::EndGateway(Default::default()));
+                            assert!(game.gateway_enter([x, y, z]));
+                            assert!(!game.gateway_available([x, y, z]));
+                        }
+                    }
+                    let overworld = game.level("minecraft:overworld").unwrap();
+                    let nether = game.level("minecraft:the_nether").unwrap();
+
+                    // A gateway's cooldown is level-local and can be read without recreating its entity.
+                    let cooling_down = cases.map(|(pos, outer_outcome)| {
+                        let overworld_ref = game.block_entity(overworld, pos).unwrap();
+                        let nether_ref = game.block_entity(nether, pos).unwrap();
+                        let settled = game.storage_transaction_settled(|game, _| {
+                            game.with_effect_level(Dim::Nether, |game| {
+                                game.storage_transaction_settled(|game, _| nether_ref.remove(game))
+                                    .unwrap();
+                            })
+                            .unwrap();
+                            outer_outcome
+                        });
+                        assert_eq!(settled, outer_outcome.map_err(TransactionError::Aborted));
+                        assert!(
+                            game.block_entity(nether, pos).is_none(),
+                            "Nether removal must survive outer {outer_outcome:?}"
+                        );
+                        assert_eq!(game.block_entity(overworld, pos), Some(overworld_ref));
+                        (
+                            !game.gateway_available(pos),
+                            game.with_effect_level(Dim::Nether, |game| {
+                                !game.gateway_available(pos)
+                            })
+                            .unwrap(),
+                        )
+                    });
+                    assert_eq!(
+                        cooling_down,
+                        [(true, false), (true, false)],
+                        "gateway cooldowns (Overworld, Nether) after outer commit and outer abort"
+                    );
+                });
+            },
+        );
+    }
+
+    #[test]
+    #[ignore = "daily"]
     fn block_entity_remove_transactions_and_self_removal_in_tick() {
         use super::super::native_entity_refs::tests::{run_fresh_cases, with_game_at};
         use mod_api::{

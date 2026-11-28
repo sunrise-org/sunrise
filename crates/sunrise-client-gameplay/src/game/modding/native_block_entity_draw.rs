@@ -2082,8 +2082,10 @@ impl crate::game::ClientGame<'_> {
     }
     /// Keeps what this call drew, with neither `native_block_entity_submit` nor
     /// `native_block_entity_render_bounding_box` called until its state, block entity,
-    /// light or resource packs change. Parts marked with `spin` keep turning on the
-    /// animation clock; other geometry stays as submitted. Do not bake frame-dependent
+    /// light, resource packs or the font's glyph cache change. A kept draw not drawn for
+    /// `KEPT_FOR` ticks is dropped, and one that fills the quad batch is not kept, even
+    /// when it fits exactly (it may have been cut short). Parts marked with `spin` keep
+    /// turning on the animation clock; other geometry stays as submitted. Do not bake frame-dependent
     /// values into kept vertices: item glint and time-dependent item models stop
     /// where they were, and neighboring blocks do not invalidate the cache.
     pub(in crate::game) fn native_draw_keep(&self, draw: &mut BlockEntityDraw) {

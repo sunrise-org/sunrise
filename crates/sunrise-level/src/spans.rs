@@ -300,6 +300,23 @@ impl SpanTotal {
         }
     }
 
+    pub fn start_wall() -> Option<Instant> {
+        recording_here().then(Instant::now)
+    }
+
+    #[inline]
+    pub fn add_wall(&mut self, elapsed: Duration) {
+        self.wall += elapsed;
+        self.depth = Some(DEPTH.with(Cell::get));
+    }
+
+    #[inline]
+    pub fn add_wall_sample(&mut self, started: Option<Instant>) {
+        if let Some(started) = started {
+            self.add_wall(started.elapsed());
+        }
+    }
+
     pub fn record(self, name: &'static str) {
         if let Some(depth) = self.depth {
             push(Span {
@@ -1155,5 +1172,21 @@ mod tests {
             timeline::drain().is_empty(),
             "a stopped timeline records nothing"
         );
+    }
+
+    #[test]
+    fn wall_only_span_total_keeps_cpu_zero() {
+        let _lock = spans_switch();
+        super::enable(true);
+        let _ = super::take_raw();
+        let mut total = super::SpanTotal::default();
+        total.add_wall(std::time::Duration::from_millis(5));
+        total.record("wall_only_test");
+        let recorded = super::take_raw();
+        super::enable(false);
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].name, "wall_only_test");
+        assert!(recorded[0].ms >= 4.9);
+        assert_eq!(recorded[0].cpu_ms, 0.0);
     }
 }

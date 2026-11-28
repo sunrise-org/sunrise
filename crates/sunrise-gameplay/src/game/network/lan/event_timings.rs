@@ -1,7 +1,7 @@
 //! The slow-step notes' `LanHost` side: who a burst or an event came from.
 
 use super::LanHost;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use sunrise_gameplay::lan::event_timings::{Burst, EventKind};
 pub use sunrise_gameplay::lan::event_timings::{EventTimings, UseDetail, event_kind};
 
@@ -11,14 +11,14 @@ pub(in crate::game) fn note_event(
     host: &LanHost,
     started: Option<(Instant, EventKind, Option<UseDetail>)>,
     timings: &mut EventTimings<(Option<u32>, Option<String>), UseDetail>,
-) {
-    let Some((started, kind, detail)) = started else {
-        return;
-    };
-    let ms = started.elapsed().as_secs_f32() * 1000.0;
+) -> Option<Duration> {
+    let (started, kind, detail) = started?;
+    let elapsed = started.elapsed();
+    let ms = elapsed.as_secs_f32() * 1000.0;
     sunrise_level::spans::note(ms, || describe_event(host, &kind, detail.as_ref()));
     let (name, conn, player) = kind;
     timings.add(name, (conn, player), detail, ms);
+    Some(elapsed)
 }
 
 /// The player an event came from: its name, else its connection.

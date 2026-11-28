@@ -4,7 +4,15 @@
 //! entity asked about it in a synchronous check.
 use super::*;
 use crate::game::api_values::TryIntoApi;
+use std::cell::RefCell;
 use sunrise_sim::mobs::equip::CanEquip;
+
+thread_local! {
+    /// Held while this thread asks `can_equip` Parts. A Part's nested menu read
+    /// (`MenuRef::slot_holds` on an armour slot asks `ArmorSlot.mayPlace` again) answers with the
+    /// stack's own data instead of asking Parts again, as nested `menu_slot_rules` reads do.
+    static ASKING_CAN_EQUIP: RefCell<()> = const { RefCell::new(()) };
+}
 
 /// A stack converted once for the parts of its item, ready for any number of `can_equip`
 /// questions in a synchronous check. `DataOnly` when no part of the item listens (the component's
@@ -47,21 +55,28 @@ pub trait EquipAnswersGameExt1<'__sg>: crate::game::SideGame<'__sg> {
             EquipStack::Refused => return false,
             EquipStack::Ready(stack) => stack,
         };
-        let Some(entity) = self.entity(entity) else {
-            return false;
-        };
-        let native = crate::game::native_hooks::NativeHookHost {
-            host: <Self::State as crate::game::Side>::as_host(self),
-        };
-        let mut can_equip = data;
-        native.native_can_equip(
-            stack,
-            slot,
-            mod_api::LivingRef::new(entity),
-            kind,
-            &mut can_equip,
-        );
-        can_equip
+        ASKING_CAN_EQUIP.with(|active| {
+            // Inside a `can_equip` Part on this thread: keep the data answer rather than asking
+            // the Parts again, so a Part that reads an armour slot cannot recurse.
+            let Ok(_asking) = active.try_borrow_mut() else {
+                return data;
+            };
+            let Some(entity) = self.entity(entity) else {
+                return false;
+            };
+            let native = crate::game::native_hooks::NativeHookHost {
+                host: <Self::State as crate::game::Side>::as_host(self),
+            };
+            let mut can_equip = data;
+            native.native_can_equip(
+                stack,
+                slot,
+                mod_api::LivingRef::new(entity),
+                kind,
+                &mut can_equip,
+            );
+            can_equip
+        })
     }
 
     /// `can_equip` lent to a menu click that runs while the game is at hand (the player's own

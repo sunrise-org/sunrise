@@ -250,6 +250,8 @@ impl crate::game::ServerGame<'_> {
                 });
             }
             sunrise_level::spans::time("random_ticks", || {
+                let _rng =
+                    crate::rng_count::guard_consumer(crate::rng_count::Consumer::RandomBlockTicks);
                 for (x, z) in scratch.ticking.drain(..).filter(|_| !debug) {
                     // The last answer, asked from Y `from` at a world revision:
                     // the next ticking section. It stands for a later Y up to
@@ -375,6 +377,11 @@ impl crate::game::ServerGame<'_> {
     /// events) happen before the next tick runs, as they do inline in vanilla.
     pub fn tick_scheduled(&mut self) -> Result<()> {
         for fluids in [false, true] {
+            let _rng = crate::rng_count::guard_consumer(if fluids {
+                crate::rng_count::Consumer::ScheduledFluids
+            } else {
+                crate::rng_count::Consumer::ScheduledBlocks
+            });
             let mut laps = sunrise_level::spans::laps();
             let name = if fluids { "tb_fluids" } else { "tb_scheduled" };
             if !self.with_level(|b, level, ticks| b.scheduled_begin(level, ticks, fluids)) {

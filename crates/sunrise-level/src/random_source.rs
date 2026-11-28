@@ -136,7 +136,7 @@ fn still() -> bool {
 }
 
 /// `SUNRISE_TEST_SEEDS=1`, a dev switch for parity harnesses, read once.
-fn test_seeds() -> bool {
+pub fn test_seeds() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| {
         let on = std::env::var("SUNRISE_TEST_SEEDS").is_ok_and(|v| v == "1");

@@ -1,7 +1,7 @@
 //! `Zombie.hurtServer`'s reinforcements: a hurt zombie on Hard may call
 //! another of its kind from 7 to 40 blocks away to fight its target.
 use crate::game::ServerGame;
-use sunrise_core::random::{LegacyRandom, LevelRandom, RandomSource};
+use sunrise_core::random::{LegacyRandom, RandomSource};
 use sunrise_sim::mobs::{
     MobType, Species, Who,
     finalize::{self, Attr, Op},
@@ -63,7 +63,7 @@ impl ServerGame<'_> {
         let mut own = std::mem::replace(&mut zombie.random, LegacyRandom::new(0));
         let mut rules = std::mem::replace(
             &mut self.common.world.random,
-            LevelRandom::for_level(LegacyRandom::new(0)),
+            crate::rng_count::placeholder_level(LegacyRandom::new(0)),
         );
         let spot = self.reinforcement_spot(&kind, from, &mut own, &mut rules);
         self.common.mobs[index].random = own;

@@ -387,6 +387,8 @@ impl crate::game::ServerGame<'_> {
         );
         self.lan_update_tag_sources(&mut encoder);
         let lan = super::lan_configuration_tasks::start(sync.clone(), net)?;
+        #[cfg(feature = "net-trace")]
+        lan.shared.set_capture_tick(self.common.world.game_time);
         let mut hub = Hub::new(lan, sync, encoder, config, self.common.loop_context.clone());
         hub.allow_commands = self.allow_commands();
         hub.dispatch_move_effects = true;
@@ -973,6 +975,7 @@ impl crate::game::ServerGame<'_> {
         after: u32,
         mut kept: Option<&mut super::lan_idle::IdlePass<'_>>,
     ) {
+        let mut laps = sunrise_level::spans::laps();
         out.clear();
         let mut speeds = super::lan_attributes::SpeedByType::default();
         if mod_api::__private::listened(mod_api::HookId::EffectParticleModification) {
@@ -1043,6 +1046,7 @@ impl crate::game::ServerGame<'_> {
             };
             mob_equipment(m, &mut host.hub, &mut e.equipment);
         }
+        laps.lap("lan_states_mobs");
         for d in self.common.dropped.iter().filter(|d| d.id > after) {
             let Some(host) = self.server.lan.as_ref() else {
                 return;
@@ -1106,9 +1110,11 @@ impl crate::game::ServerGame<'_> {
             // ExperienceOrb.DATA_VALUE.
             e.meta.push((8, serializer::INT, Value::Int(o.value)));
         }
+        laps.lap("lan_states_items");
         self.lan_object_states(out, drain_minecart_steps, after);
         // PersistentEntitySectionManager only tracks accessible sections.
         out.retain(|entity| self.entity_position_accessible(entity.position));
+        laps.lap("lan_states_objects");
     }
 
     /// `LivingEntity.updateSynchronizedMobEffectParticles` while a native mod
@@ -1227,9 +1233,46 @@ impl crate::game::ServerGame<'_> {
         // again on the way through.
         self.server.lan = Some(host);
         let mut timings = EventTimings::new(sunrise_level::spans::NOTE_MS);
+        #[derive(Clone, Copy)]
+        enum EventCategory {
+            Movement,
+            Gameplay,
+            Session,
+        }
+        #[derive(Default)]
+        struct EventCategorySpans {
+            movement: sunrise_level::spans::SpanTotal,
+            gameplay: sunrise_level::spans::SpanTotal,
+            session: sunrise_level::spans::SpanTotal,
+        }
+        impl EventCategorySpans {
+            fn add(
+                &mut self,
+                category: Option<EventCategory>,
+                elapsed: Option<std::time::Duration>,
+            ) {
+                if let (Some(category), Some(elapsed)) = (category, elapsed) {
+                    match category {
+                        EventCategory::Movement => self.movement.add_wall(elapsed),
+                        EventCategory::Gameplay => self.gameplay.add_wall(elapsed),
+                        EventCategory::Session => self.session.add_wall(elapsed),
+                    }
+                }
+            }
+        }
+        impl Drop for EventCategorySpans {
+            fn drop(&mut self) {
+                std::mem::take(&mut self.movement).record("lan_events_move");
+                std::mem::take(&mut self.gameplay).record("lan_events_gameplay");
+                std::mem::take(&mut self.session).record("lan_events_session");
+            }
+        }
+        let mut category_spans = EventCategorySpans::default();
+        let mut prev_category: Option<EventCategory> = None;
         for event in events {
             if timed && let Some(host) = self.server.lan.as_ref() {
-                note_event(host, previous.take(), &mut timings);
+                let elapsed = note_event(host, previous.take(), &mut timings);
+                category_spans.add(prev_category.take(), elapsed);
             }
             if timed {
                 let detail = self
@@ -1237,6 +1280,13 @@ impl crate::game::ServerGame<'_> {
                     .lan
                     .as_ref()
                     .and_then(|host| self.event_detail(host, &event));
+                prev_category = Some(match &event {
+                    HostEvent::AcceptedMove(..) | HostEvent::PlayerMove(_) => {
+                        EventCategory::Movement
+                    }
+                    HostEvent::Packet(..) | HostEvent::RawPayload(_) => EventCategory::Gameplay,
+                    _ => EventCategory::Session,
+                });
                 previous = Some((Instant::now(), event_kind(&event), detail));
             }
             match event {
@@ -1750,7 +1800,8 @@ impl crate::game::ServerGame<'_> {
             }
         }
         if timed && let Some(host) = self.server.lan.as_ref() {
-            note_event(host, previous, &mut timings);
+            let elapsed = note_event(host, previous, &mut timings);
+            category_spans.add(prev_category.take(), elapsed);
             for burst in timings.bursts() {
                 sunrise_level::spans::note(burst.ms, || describe_burst(host, &burst));
             }
@@ -1764,6 +1815,7 @@ impl crate::game::ServerGame<'_> {
     /// sees the support (#4510). `tick_lan` then syncs the level; a paused
     /// tick that never calls this still drains inside `tick_lan`.
     pub fn tick_lan_packets(&mut self) {
+        let _rng = crate::rng_count::guard_consumer(crate::rng_count::Consumer::LanPackets);
         if self.server.level_pass.packets_drained {
             return;
         }
@@ -1794,7 +1846,9 @@ impl crate::game::ServerGame<'_> {
         let entities = std::mem::take(&mut host.states);
         let spawn = self.world_spawn_position();
         let mut solids = std::mem::take(&mut host.hub.move_solids);
-        self.fill_move_solids(&mut solids, !host.hub.guests.is_empty());
+        sunrise_level::spans::time("lan_move_solids", || {
+            self.fill_move_solids(&mut solids, !host.hub.guests.is_empty());
+        });
         host.hub.move_solids = solids;
         let events = {
             let clock_rate = self.network_clock_rate();
@@ -2142,10 +2196,17 @@ impl crate::game::ServerGame<'_> {
         // level tick (e.g. a fixture) has no outer server pass.
         let defer_connections = self.server.level_pass.running.is_some();
         if !paused {
-            sunrise_level::spans::time("lan_guests", || self.tick_level_guests());
+            sunrise_level::spans::time("lan_guests", || {
+                crate::rng_count::in_consumer(crate::rng_count::Consumer::LanGuests, || {
+                    self.tick_level_guests()
+                })
+            });
             if !defer_connections {
-                self.tick_guest_connections(false)
-                    .expect("the current-level connection pass does not switch levels");
+                crate::rng_count::in_consumer(
+                    crate::rng_count::Consumer::LanGuestConnections,
+                    || self.tick_guest_connections(false),
+                )
+                .expect("the current-level connection pass does not switch levels");
             }
             // Ridden vehicles enter their portals on the level path.
             let Some(host) = self.server.lan.as_ref() else {
@@ -2386,7 +2447,9 @@ impl crate::game::ServerGame<'_> {
                 return;
             };
             let processed = sunrise_level::spans::time("lan_process_events", || {
-                self.lan_process_events(host, events, entities, spawn)
+                crate::rng_count::in_consumer(crate::rng_count::Consumer::LanEvents, || {
+                    self.lan_process_events(host, events, entities, spawn)
+                })
             });
             let Some(back) = processed else {
                 return;
@@ -2434,18 +2497,22 @@ impl crate::game::ServerGame<'_> {
         {
             self.run_native_tracking();
         }
-        self.flush_guest_connection_effects();
-        self.lan_stuck(paused);
-        self.tick_server_travel();
-        self.lan_swings();
-        self.lan_update_streaming();
-        self.lan_guest_poses();
-        self.lan_update_waypoints();
-        self.lan_sync_scoreboard();
+        sunrise_level::spans::time("lan_post_sync", || {
+            self.flush_guest_connection_effects();
+            self.lan_stuck(paused);
+            self.tick_server_travel();
+            self.lan_swings();
+            self.lan_update_streaming();
+            self.lan_guest_poses();
+            self.lan_update_waypoints();
+            self.lan_sync_scoreboard();
+        });
         drop(holding);
         self.flush_attachment_sync();
         if let Some(host) = self.server.lan.as_ref() {
-            lan::flush_all(host.hub.guests.iter().map(|g| &g.sender));
+            sunrise_level::spans::time("lan_handoff", || {
+                lan::flush_all(host.hub.guests.iter().map(|g| &g.sender));
+            });
         }
         self.flush_native_sounds();
         // `tick_server` resets the pass after all dimensions; outside a pass

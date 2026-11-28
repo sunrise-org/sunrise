@@ -633,6 +633,10 @@ pub fn random_uuid() -> [i32; 4] {
     };
     static NEXT: OnceLock<AtomicU64> = OnceLock::new();
     let next = NEXT.get_or_init(|| {
+        // Under the harness switch the UUIDs repeat run to run, like the unseeded randoms.
+        if crate::random_source::test_seeds() {
+            return AtomicU64::new(0x5EED_5EED_5EED_5EED);
+        }
         let t = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos() as u64);

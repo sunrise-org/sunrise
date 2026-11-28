@@ -317,6 +317,7 @@ pub enum FrameGraphError {
     /// (`FrameGraphBuilder`: `"Frame graph cycle detected between ..."`).
     Cycle {
         /// Labels of the passes and/or anchors involved in the cycle, in deterministic order.
+        /// Acyclic nodes that only depend on a cycle are excluded.
         passes: Vec<String>,
     },
     /// Target cannot be used as the write target of a mod offscreen pass (built-in

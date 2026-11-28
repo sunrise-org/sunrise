@@ -3,7 +3,7 @@
 //! keys players insert (`VaultBlock.useItemOn`) and the display item spinning
 //! inside (`VaultRenderer`).
 use crate::game::ServerGame;
-use sunrise_core::random::{LegacyRandom, LevelRandom};
+use sunrise_core::random::LegacyRandom;
 use sunrise_game_data::Result;
 use sunrise_items::items::ItemStack;
 use sunrise_level::{
@@ -111,7 +111,7 @@ impl ServerGame<'_> {
         } = self.take_vault(key)?;
         let mut random = std::mem::replace(
             &mut self.common.world.random,
-            LevelRandom::for_level(LegacyRandom::new(0)),
+            crate::rng_count::placeholder_level(LegacyRandom::new(0)),
         );
         let mut sequences = std::mem::take(&mut self.server.rand_sequences);
         let loot = self.server.server_loot.0.get();

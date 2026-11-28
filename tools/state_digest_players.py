@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""State-digest scene with players: BINARY RESOURCES TEMPLATE OUT BOTS [--integrated] [--nether] [--detail] [--ticks N] [--no-digest] [--coverage], or --compare OUT_A OUT_B; template from `state_digest_scene.py --generate`, gate in SUNRISE_SCENE_GATE. --coverage adds the base scene's coverage commands, stands Alice in its village and Bob south of it, makes both immune to damage, gives Alice a returning Loyalty trident, defaults --ticks to 2500 and fails when a spot of coverage.txt is missed; its digest is not reproducible run to run, so only its spots are checked."""
+"""State-digest scene with players: BINARY RESOURCES TEMPLATE OUT BOTS [--integrated] [--ctl CTL] [--nether] [--detail] [--ticks N] [--no-digest] [--coverage], or --compare OUT_A OUT_B [--ignore-group GROUP]...; template from `state_digest_scene.py --generate`, gate in SUNRISE_SCENE_GATE. --coverage adds the base scene's coverage commands, stands Alice in its village and Bob south of it, makes both immune to damage, gives Alice a returning Loyalty trident, defaults --ticks to 2500 and fails when a spot of coverage.txt is missed."""
+import argparse
 import json
 import os
 import re
@@ -15,7 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from tools import lab, state_digest_scene as base
-from tools.state_digest_compare import compare_coverage
+from tools.state_digest_compare import IGNORABLE_GROUPS, compare as compare_digest, compare_coverage
 
 STATE_PATHS = ('Pos', 'Health', 'foodLevel', 'XpLevel', 'XpTotal', 'Inventory', 'active_effects[0].id', 'active_effects[1].id', 'Dimension')
 PLAYERS = ['Alice0', 'Bob0']  # dedicated: two scripted bots; integrated: Alice0 joins the host's LAN
@@ -138,7 +139,7 @@ def settle(server, names, targets):
 
 
 def final_state(server):
-    """What the players ended with: their data and scores, which the digest does not hash."""
+    """The players’ final command-visible state."""
     lines = []
     for name in PLAYERS:
         for path in STATE_PATHS:
@@ -161,51 +162,59 @@ def wait_loaded(server, dim, at):
 
 
 def by_dimension(digest):
-    """digest.txt cut into one text per dimension (a level's lines can start on a different step run to run)."""
+    """Group level headers and their player detail rows by dimension."""
     parts, current = {}, None
-    for line in digest.read_text().splitlines(keepends=True):
-        if line.startswith('tick='):
-            current = line.split()[1].removeprefix('dim=')
-        if current is not None:
-            parts.setdefault(current, []).append(line)
-    return {dim: ''.join(lines) for dim, lines in parts.items()}
+    with digest.open() as lines:
+        for line in lines:
+            if line.startswith('tick='):
+                current = line.split()[1].removeprefix('dim=')
+                parts.setdefault(current, []).append(line)
+            elif current is not None and line.startswith('  p\t'):
+                parts[current].append(line)
+    return parts
 
 
-def compare(a, b):
-    """The digest compare for each dimension (the exit code), and the players' final data, which the settle makes noisy."""
+def compare(a, b, ignore_groups=()):
+    """Compare stepped digests per dimension, coverage, and final player data."""
     status = 0
-    with tempfile.TemporaryDirectory() as tmp:
-        left, right = by_dimension(a / 'digest.txt'), by_dimension(b / 'digest.txt')
-        for dim in sorted(left.keys() | right.keys()):
-            print(f'== {dim}', flush=True)
-            paths = []
-            for side, parts in (('a', left), ('b', right)):
-                path = Path(tmp) / f'{side}-{dim.replace(":", "_")}.txt'
-                path.write_text(parts.get(dim, ''))
-                paths.append(path)
-            if dim not in left or dim not in right:
-                print('only in one run')
-                status = 1
-                continue
-            if ' run=1 ' not in left[dim] and ' run=1 ' not in right[dim]:
-                print('no stepped tick digested in this level (frozen ticks only)')
-                continue
-            status |= subprocess.run([sys.executable, Path(__file__).with_name('state_digest_compare.py'), *paths]).returncode
+    left, right = by_dimension(a / 'digest.txt'), by_dimension(b / 'digest.txt')
+    compared = False
+    for dim in sorted(left.keys() | right.keys()):
+        print(f'== {dim}', flush=True)
+        if dim not in left or dim not in right:
+            print('only in one run')
+            status = 1
+            continue
+        if not any(
+            line.startswith('tick=') and 'run=1' in line.split()
+            for lines in (left[dim], right[dim]) for line in lines
+        ):
+            print('no stepped tick digested in this level (frozen ticks only)')
+            continue
+        compared = True
+        report, same = compare_digest(left[dim], right[dim], ignore_groups)
+        print('\n'.join(report))
+        status |= int(not same)
+    if not compared:
+        print('no stepped ticks compared')
+        status = 1
     coverage = compare_coverage(a, b)
     if coverage:
         print('\n'.join(coverage[0]))
-        status |= 0 if coverage[1] else 1
+        status |= int(not coverage[1])
     same = (a / 'players.txt').read_text() == (b / 'players.txt').read_text()
-    print('== players\n' + ('identical' if same else 'different (the settle\'s frozen ticks vary run to run; not a failure)'))
-    return status
+    ignored = 'player_summary' in ignore_groups
+    print('== player_summary')
+    print('identical' if same else 'different (ignored)' if ignored else 'different')
+    return status | int(not same and not ignored)
 
 
 def server_properties(port):
     return dict(base.PROPERTIES, **{'server-port': str(port), 'white-list': 'false', 'enforce-whitelist': 'false'})
 
 
-def run_dedicated(args, home, out, timings):
-    binary, resources, template, _, bots = args[:5]
+def run_dedicated(args, home, timings):
+    out = args.out
     run_dir = out / 'server'
     if run_dir.exists():
         shutil.rmtree(run_dir)
@@ -213,22 +222,22 @@ def run_dedicated(args, home, out, timings):
     port = free_port()
     (run_dir / 'server.properties').write_text(''.join(f'{k}={v}\n' for k, v in server_properties(port).items()))
     (run_dir / 'eula.txt').write_text('eula=true\n')
-    shutil.copytree(template / 'world', run_dir / 'world')
+    shutil.copytree(args.template / 'world', run_dir / 'world')
     (run_dir / 'world' / 'session.lock').unlink(missing_ok=True)
-    coverage = '--coverage' in sys.argv
+    coverage = args.coverage
     if coverage:
         base.seed_coverage_world(run_dir / 'world')
-    digest = None if '--no-digest' in sys.argv else out / 'digest.txt'
-    server = base.Server(binary, resources, run_dir, lab.game_env(base.scratch_env(home, digest, '--detail' in sys.argv)), freeze=True)
-    players = Bots(bots, port, out)
-    ticks = base.default_ticks()
-    nether = '--nether' in sys.argv
+    digest = None if args.no_digest else out / 'digest.txt'
+    server = base.Server(args.binary, args.resources, run_dir, base.scratch_env(home, digest, args.detail), freeze=True)
+    players = Bots(args.bots, port, out)
+    ticks = args.ticks
+    nether = args.nether
     missed = []
     try:
         server.wait_for('Done (')
         server.run(['forceload query'])
         time.sleep(3)
-        server.run(base.scene_commands(False, coverage))
+        server.run_seeded(base.scene_commands(False, coverage), require_sync=digest is not None)
         players.join(server, 'Alice')
         players.join(server, 'Bob')
         server.run(player_commands(PLAYERS, nether, coverage))
@@ -237,7 +246,7 @@ def run_dedicated(args, home, out, timings):
         if nether:
             wait_loaded(server, 'minecraft:the_nether', tuple(int(v) for v in NETHER_SPOT))
         owner = uuid_ints(server.run([f'data get entity {PLAYERS[0]} UUID'])) if coverage else None
-        server.run(near_player_commands(at, owner))
+        server.run_seeded(near_player_commands(at, owner), require_sync=digest is not None)
         before = server.game_time()
         start = time.time()
         server.run(['tick rate 10000', f'tick step {ticks}'])
@@ -268,22 +277,22 @@ def ctl_run(ctl, socket_path, env, cwd, *words, timeout=600):
     return reply
 
 
-def run_integrated(args, home, out, timings):
+def run_integrated(args, home, timings):
     """The host's window runs a server thread, opened to LAN; one bot joins as a guest beside the host's own player."""
-    binary, resources, template, _, bots = args[:5]
-    ctl = Path(os.environ.get('SUNRISE_SCENE_CTL') or binary.parent / 'sunrise-ctl')
+    out = args.out
+    ctl = Path(args.ctl or os.environ.get('SUNRISE_SCENE_CTL') or args.binary.parent / 'sunrise-ctl').resolve()
     work = out / 'host'
     if work.exists():
         shutil.rmtree(work)
     (work / 'game' / 'saves').mkdir(parents=True)
     world = work / 'game' / 'saves' / 'T'
-    shutil.copytree(template / 'world', world)
+    shutil.copytree(args.template / 'world', world)
     (world / 'session.lock').unlink(missing_ok=True)
-    coverage = '--coverage' in sys.argv
+    coverage = args.coverage
     if coverage:
         base.seed_coverage_world(world)
-    digest = None if '--no-digest' in sys.argv else out / 'digest.txt'
-    env = lab.game_env(base.scratch_env(home, digest, '--detail' in sys.argv), SUNRISE_HOME=work / 'home')
+    digest = None if args.no_digest else out / 'digest.txt'
+    env = lab.game_env(base.scratch_env(home, digest, args.detail), SUNRISE_HOME=work / 'home')
     sock = work / 'c.sock'
 
     def run(*words, timeout=600):
@@ -292,10 +301,11 @@ def run_integrated(args, home, out, timings):
     def command(line):
         return run('command', line)
 
-    run('launch', '--world', 'T', '--headless', '--wait', '--game', binary, '--game-dir', work / 'game', '--resources', resources)
+    run('launch', '--world', 'T', '--headless', '--wait', '--game', args.binary,
+        '--game-dir', work / 'game', '--resources', args.resources)
     bot_log = open(out / 'bot-Alice.log', 'w')
-    players = Bots(bots, None, out)
-    ticks = base.default_ticks()
+    players = Bots(args.bots, None, out)
+    ticks = args.ticks
     missed = []
     try:
         run('wait-ready', 400)
@@ -313,7 +323,7 @@ def run_integrated(args, home, out, timings):
         for line in base.scene_commands(False, coverage)[1:]:
             command(line)
         players.processes.append(subprocess.Popen(
-            [bots, '--server', f'127.0.0.1:{port}', '--bots', '1', '--behaviour', 'stand', '--name', 'Alice', '--seconds', '3600',
+            [args.bots, '--server', f'127.0.0.1:{port}', '--bots', '1', '--behaviour', 'stand', '--name', 'Alice', '--seconds', '3600',
              '--view-distance', '4', '--seed', '12345'], stdout=bot_log, stderr=subprocess.STDOUT))
         deadline = time.time() + 120
         while not any(g['name'] == 'Alice0' for g in run('lan', 'status')['guests']):
@@ -370,19 +380,29 @@ def integrated_state(command, host):
 
 
 def main():
-    if sys.argv[1] == '--compare':
-        raise SystemExit(compare(Path(sys.argv[2]), Path(sys.argv[3])))
-    args = [a for a in sys.argv[1:] if not a.startswith('--')]
-    if '--ctl' in sys.argv:
-        args.remove(sys.argv[sys.argv.index('--ctl') + 1])
-    args = [Path(a).resolve() for a in args]
-    out = args[3]
+    if '--compare' in sys.argv[1:]:
+        parser = argparse.ArgumentParser(description=__doc__)
+        parser.add_argument('--compare', nargs=2, required=True, type=Path, metavar=('LEFT', 'RIGHT'))
+        parser.add_argument('--ignore-group', action='append', choices=(*IGNORABLE_GROUPS, 'player_summary'), default=[])
+        args = parser.parse_args()
+        raise SystemExit(compare(*args.compare, args.ignore_group))
+    parser = argparse.ArgumentParser(description=__doc__)
+    for name in ('binary', 'resources', 'template', 'out', 'bots'):
+        parser.add_argument(name, type=lambda path: Path(path).resolve())
+    for flag in ('integrated', 'nether', 'detail', 'no-digest', 'coverage'):
+        parser.add_argument(f'--{flag}', action='store_true')
+    parser.add_argument('--ticks', type=int)
+    parser.add_argument('--ctl', type=Path)
+    args = parser.parse_args()
+    if args.ticks is None:
+        args.ticks = 2500 if args.coverage else 200
+    out = args.out
     out.mkdir(parents=True, exist_ok=True)
     home = Path(tempfile.mkdtemp(prefix='state-digest-home-'))
     base.hold_gate()
     timings = {}
     try:
-        (run_integrated if '--integrated' in sys.argv else run_dedicated)(args, home, out, timings)
+        (run_integrated if args.integrated else run_dedicated)(args, home, timings)
     finally:
         shutil.rmtree(home, ignore_errors=True)
     (out / 'timings.txt').write_text(f'{timings}\n')

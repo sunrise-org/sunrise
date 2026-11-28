@@ -28,8 +28,8 @@ pub struct ModuleFile {
 /// One contribution to a module's items, from a file or an inline declaration in that file.
 pub struct ModuleVariant {
     pub file: ModuleFile,
-    /// The item indices from the file's root down to the inline module (empty for a file module).
-    pub inline: Vec<usize>,
+    /// The parsed items of this file or inline module.
+    pub items: Vec<Item>,
 }
 
 /// A normalized Rust cfg predicate. Both attribute extraction and stored module predicates use
@@ -509,7 +509,7 @@ pub struct ModuleWalk {
 }
 
 trait WalkSink {
-    fn inline(&mut self, _file: ModuleFile, _inline: &[usize]) {}
+    fn inline(&mut self, _file: ModuleFile, _items: &[Item]) {}
     fn file(&mut self, file: ModuleFile, parsed: syn::File);
 }
 
@@ -532,17 +532,17 @@ impl WalkSink for FileCollector {
 struct VariantCollector(Vec<ModuleVariant>);
 
 impl WalkSink for VariantCollector {
-    fn inline(&mut self, file: ModuleFile, inline: &[usize]) {
+    fn inline(&mut self, file: ModuleFile, items: &[Item]) {
         self.0.push(ModuleVariant {
             file,
-            inline: inline.to_vec(),
+            items: items.to_vec(),
         });
     }
 
-    fn file(&mut self, file: ModuleFile, _parsed: syn::File) {
+    fn file(&mut self, file: ModuleFile, parsed: syn::File) {
         self.0.push(ModuleVariant {
             file,
-            inline: Vec::new(),
+            items: parsed.items,
         });
     }
 }
@@ -624,15 +624,7 @@ impl ModuleWalk {
             }
             file.cfg.extend(walker.conditions(&parsed.attrs));
             let here = file.path.parent().expect("a source file has a folder");
-            walker.children(
-                &file,
-                &parsed.items,
-                here,
-                &dir,
-                &mut Vec::new(),
-                &ancestors,
-                scope,
-            );
+            walker.children(&file, &parsed.items, here, &dir, &ancestors, scope);
             walker.sink.file(file, parsed);
         }
         Ok(())
@@ -695,12 +687,11 @@ impl<D: FnMut(&str) -> bool, S: WalkSink> Walker<'_, D, S> {
         items: &[Item],
         here: &Path,
         dir: &Path,
-        inline: &mut Vec<usize>,
         ancestors: &[PathBuf],
         scope: IncludeScope,
     ) {
         let mut cursor = scope.with_imports(items);
-        for (index, item) in items.iter().enumerate() {
+        for item in items {
             let scope = cursor.before(item);
             if let Some((relative, attrs)) = literal_include(item, scope.shadowed())
                 && self.keep(attrs)
@@ -773,18 +764,15 @@ impl<D: FnMut(&str) -> bool, S: WalkSink> Walker<'_, D, S> {
                         cfg,
                         included: file.included,
                     };
-                    inline.push(index);
                     self.children(
                         &child,
                         inner,
                         &inner_dir,
                         &inner_dir,
-                        inline,
                         ancestors,
                         scope.child(),
                     );
-                    self.sink.inline(child, inline);
-                    inline.pop();
+                    self.sink.inline(child, inner);
                 } else {
                     let (path, child_dir) = if let Some(relative) = explicit {
                         let child = here.join(relative);
@@ -1084,6 +1072,61 @@ pub fn generated() {
                     "wanted_part.rs".into(),
                     vec!["from_include".into()],
                 ),
+            ]
+        );
+    }
+
+    #[test]
+    fn walk_module_variants_returns_file_and_nested_inline_items() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(
+            root.path().join("lib.rs"),
+            r#"
+fn root_fn() {}
+mod outer {
+    fn outer_fn() {}
+    mod inner {
+        fn inner_fn() {}
+    }
+}
+mod file_child;
+"#,
+        )
+        .unwrap();
+        fs::write(root.path().join("file_child.rs"), "fn child_fn() {}\n").unwrap();
+
+        let variants = walk_module_variants(
+            "lower".into(),
+            root.path().join("lib.rs"),
+            root.path().to_owned(),
+            false,
+            false,
+            |path, text| syn::parse_file(text).map_err(|e| format!("{}: {e}", path.display())),
+        )
+        .unwrap();
+
+        let mut by_module: Vec<_> = variants
+            .iter()
+            .map(|variant| {
+                let fns: Vec<_> = variant
+                    .items
+                    .iter()
+                    .filter_map(|item| match item {
+                        Item::Fn(func) => Some(func.sig.ident.to_string()),
+                        _ => None,
+                    })
+                    .collect();
+                (variant.file.module.clone(), fns)
+            })
+            .collect();
+        by_module.sort();
+        assert_eq!(
+            by_module,
+            [
+                ("lower".into(), vec!["root_fn".into()]),
+                ("lower::file_child".into(), vec!["child_fn".into()]),
+                ("lower::outer".into(), vec!["outer_fn".into()]),
+                ("lower::outer::inner".into(), vec!["inner_fn".into()]),
             ]
         );
     }

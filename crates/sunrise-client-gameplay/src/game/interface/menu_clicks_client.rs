@@ -370,78 +370,17 @@ impl crate::game::ClientGame<'_> {
         }
         done
     }
-    /// Like `menu_session`, with read-only access to connection state before
-    /// deciding whether to keep the prediction.
-    pub(in crate::game) fn menu_session_with_game(
-        &mut self,
-        run: impl FnOnce(
-            &Self,
-            &mut sunrise_sim::menu::Menu,
-            &sunrise_sim::menu::Env,
-            &dyn Fn(usize) -> Option<usize>,
-        ) -> Option<bool>,
-    ) -> bool {
+    /// The open menu as the verified engine (`sunrise_client::menu`) models it, built from the
+    /// game's slots with the same `Env` a click gets, for `run` to click on or ask. Nothing of the
+    /// game changes. `item_picker` builds the creative item or search tab's `ItemPickerMenu` while
+    /// one is open; without it the player's `InventoryMenu` is built, which is the menu a
+    /// `MenuRef` names on those tabs too. None when the open screen is not one the engine models.
+    pub(in crate::game) fn with_client_menu<R>(
+        &self,
+        item_picker: bool,
+        run: impl FnOnce(ClientMenu, &sunrise_sim::menu::Env) -> R,
+    ) -> Option<R> {
         use sunrise_sim::menu::{Env, Kind, Menu};
-        #[derive(Clone, Copy)]
-        struct Map {
-            container: usize,
-            base: usize,
-            table: bool,
-            cells: usize,
-            plain: bool,
-        }
-        impl Map {
-            fn main(&self) -> usize {
-                match (self.plain, self.table) {
-                    (false, _) => self.container,
-                    (true, true) => 10,
-                    (true, false) => 9,
-                }
-            }
-            fn to_menu(self, g: usize) -> Option<usize> {
-                let main = self.main();
-                if self.plain {
-                    match g {
-                        200 => Some(0),
-                        100..109 if g - 100 < self.cells => Some(1 + g - 100),
-                        500..504 if !self.table => Some(5 + g - 500),
-                        504 if !self.table => Some(45),
-                        9..36 => Some(main + g - 9),
-                        0..9 => Some(main + 27 + g),
-                        _ => None,
-                    }
-                } else {
-                    match g {
-                        g if g >= self.base && g < self.base + self.container => {
-                            Some(g - self.base)
-                        }
-                        9..36 => Some(main + g - 9),
-                        0..9 => Some(main + 27 + g),
-                        _ => None,
-                    }
-                }
-            }
-            fn to_game(self, i: usize) -> Option<usize> {
-                let main = self.main();
-                if self.plain {
-                    match i {
-                        0 => None,
-                        1..=9 if i - 1 < self.cells => Some(100 + i - 1),
-                        5..9 if !self.table => Some(500 + i - 5),
-                        45 if !self.table => Some(504),
-                        _ if i >= main && i < main + 27 => Some(9 + i - main),
-                        _ if i >= main + 27 && i < main + 36 => Some(i - main - 27),
-                        _ => None,
-                    }
-                } else if i < self.container {
-                    Some(self.base + i)
-                } else if i < self.container + 27 {
-                    Some(9 + i - self.container)
-                } else {
-                    Some(i - self.container - 27)
-                }
-            }
-        }
         // Menu slot -> game slot, for every menu slot.
         let mut plain_map = None;
         let crafter_open = matches!(self.container_kind(), Some(BlockEntity::Crafter(_)));
@@ -467,7 +406,8 @@ impl crate::game::ClientGame<'_> {
         let smithing_open = station_kind == Some(stations::Kind::Smithing);
         let enchanting_open = station_kind == Some(stations::Kind::Enchanting);
         let beacon_open = station_kind == Some(stations::Kind::Beacon);
-        let (kind, game_of): (Kind, Vec<Option<usize>>) = if self.creative_tab_open() {
+        let (kind, game_of): (Kind, Vec<Option<usize>>) = if item_picker && self.creative_tab_open()
+        {
             // ItemPickerMenu: the display slots (clicked by the screen), then the hotbar.
             let mut v = vec![None; 45];
             v.extend((0..9).map(Some));
@@ -558,10 +498,13 @@ impl crate::game::ClientGame<'_> {
                 let size = self.common.open_container_size();
                 let (kind, count) = match self.common.container_kind() {
                     Some(BlockEntity::Chest(_)) => {
-                        let shulker = self.common.container.is_some_and(|k| {
-                            let id = self.common.world.block(k.0, k.1, k.2);
-                            storage::is_shulker_box(&self.common.res.facts().get(id).name)
-                        });
+                        // ShulkerBoxMenu's slots refuse shulker boxes whichever block opened
+                        // it: the opened menu type says so too when no clicked block is tracked.
+                        let shulker = self.remote_menu_type() == Some("minecraft:shulker_box")
+                            || self.common.container.is_some_and(|k| {
+                                let id = self.common.world.block(k.0, k.1, k.2);
+                                storage::is_shulker_box(&self.common.res.facts().get(id).name)
+                            });
                         let kind = match size {
                             5 => Kind::Hopper,
                             9 => Kind::Dispenser,
@@ -572,13 +515,10 @@ impl crate::game::ClientGame<'_> {
                     }
                     Some(BlockEntity::Brewing(_)) => (Kind::Brewing, 5),
                     Some(BlockEntity::Mod(_)) => {
-                        match self
+                        let t = self
                             .remote_menu_type()
-                            .and_then(sunrise_level::containers::mod_menu_type)
-                        {
-                            Some(t) => (Kind::Mod(t), t.slots),
-                            None => return false,
-                        }
+                            .and_then(sunrise_level::containers::mod_menu_type)?;
+                        (Kind::Mod(t), t.slots)
                     }
                     Some(BlockEntity::Furnace(f)) => (
                         Kind::Furnace(
@@ -590,9 +530,9 @@ impl crate::game::ClientGame<'_> {
                         ),
                         3,
                     ),
-                    _ => return false,
+                    _ => return None,
                 };
-                let map = Map {
+                let map = MenuSlotMap {
                     container: count,
                     base: if matches!(kind, Kind::Mod(_)) {
                         sunrise_gameplay_common::game::inventory_slots::MOD_MENU_SLOT_BASE
@@ -606,7 +546,7 @@ impl crate::game::ClientGame<'_> {
                 (kind, map)
             } else if self.common.station.is_none() && !self.mount_active() {
                 let table = self.common.craft_size == 3;
-                let map = Map {
+                let map = MenuSlotMap {
                     container: 0,
                     base: 300,
                     table,
@@ -622,23 +562,18 @@ impl crate::game::ClientGame<'_> {
                     map,
                 )
             } else {
-                return false;
+                return None;
             };
             let total = Menu::new(kind).slot_count();
             plain_map = Some(map);
             (kind, (0..total).map(|i| map.to_game(i)).collect())
-        };
-        // The plain map also takes the crafting result slot (a shift-click on it).
-        let to_menu = |g: usize| match plain_map {
-            Some(map) => map.to_menu(g),
-            None => game_of.iter().position(|x| *x == Some(g)),
         };
         let mut menu = Menu::new(kind);
         if self.client.remote.is_some() {
             menu.set_drop_spam_throttler(self.client.drop_spam_throttler);
         }
         let menu_id = if matches!(kind, Kind::Mount(_)) {
-            Some("sunrise:mount_inventory")
+            Some(sunrise_gameplay_common::game::native_menu_ids::MOUNT_MENU)
         } else if kind == Kind::Inventory {
             Some(sunrise_sim::menu::INVENTORY_MENU)
         } else if kind == Kind::ItemPicker {
@@ -653,10 +588,9 @@ impl crate::game::ClientGame<'_> {
         if matches!(kind, Kind::Mount(_)) {
             menu.mount = self.mount_menu_entity();
         }
-        let total = menu.slot_count();
         let before: Vec<Option<ItemStack>> = game_of
             .iter()
-            .map(|g| g.and_then(|g| self.slot_mut(g).clone()))
+            .map(|g| g.and_then(|g| self.slot_view(g)))
             .collect();
         let carried = self.common.carried.clone();
         let creative = self.common.creative;
@@ -786,7 +720,54 @@ impl crate::game::ClientGame<'_> {
         }
         // Clear any createResult flag raised while populating the menu before the click.
         let _ = menu.anvil_created();
-        let outcome = run(self, &mut menu, &env, &to_menu);
+        Some(run(
+            ClientMenu {
+                menu,
+                kind,
+                game_of,
+                plain_map,
+                before,
+                inventory_omitted,
+                offhand_mapped,
+            },
+            &env,
+        ))
+    }
+    /// Like `menu_session`, with read-only access to connection state before
+    /// deciding whether to keep the prediction.
+    pub(in crate::game) fn menu_session_with_game(
+        &mut self,
+        run: impl FnOnce(
+            &Self,
+            &mut sunrise_sim::menu::Menu,
+            &sunrise_sim::menu::Env,
+            &dyn Fn(usize) -> Option<usize>,
+        ) -> Option<bool>,
+    ) -> bool {
+        use sunrise_sim::menu::Kind;
+        let Some((outcome, scratch)) = self.with_client_menu(true, |mut scratch, env| {
+            let ClientMenu {
+                menu,
+                plain_map,
+                game_of,
+                ..
+            } = &mut scratch;
+            let to_menu = |g: usize| menu_index_of(*plain_map, game_of, g);
+            let outcome = run(self, menu, env, &to_menu);
+            (outcome, scratch)
+        }) else {
+            return false;
+        };
+        let ClientMenu {
+            mut menu,
+            kind,
+            game_of,
+            before,
+            inventory_omitted,
+            offhand_mapped,
+            ..
+        } = scratch;
+        let total = menu.slot_count();
         // Any creative-screen drop sent live inside `run` already updated `menu`'s
         // throttler; keep `self.drop_spam_throttler` in step even if a later click failed.
         if self.client.remote.is_some()
@@ -969,3 +950,92 @@ use sunrise_gameplay_common::game::native_hooks::ModGameExt1 as _;
 use sunrise_gameplay_common::game::player_identity::PlayerIdentityGameExt1 as _;
 
 use sunrise_gameplay_common::game::stations_common::StationsCommonGameExt1 as _;
+
+/// The open menu built for one click session or slot ask (`ClientGame::with_client_menu`),
+/// with what a session needs to copy its result back into the game.
+pub(in crate::game) struct ClientMenu {
+    pub(in crate::game) menu: sunrise_sim::menu::Menu,
+    kind: sunrise_sim::menu::Kind,
+    /// Menu slot -> game slot, for every menu slot.
+    game_of: Vec<Option<usize>>,
+    /// The inventory and crafting menus' fixed layout, which also maps the crafting result.
+    plain_map: Option<MenuSlotMap>,
+    /// The game's stacks copied in, in menu order.
+    before: Vec<Option<ItemStack>>,
+    /// A mod menu without player inventory slots: the 36 backing slots were lent separately.
+    inventory_omitted: bool,
+    /// The off hand has a menu slot (InventoryMenu's 45).
+    offhand_mapped: bool,
+}
+
+/// The menu slot showing game slot `g`. The plain map also takes the crafting result slot (a
+/// shift-click on it).
+fn menu_index_of(
+    plain_map: Option<MenuSlotMap>,
+    game_of: &[Option<usize>],
+    g: usize,
+) -> Option<usize> {
+    match plain_map {
+        Some(map) => map.to_menu(g),
+        None => game_of.iter().position(|x| *x == Some(g)),
+    }
+}
+
+#[derive(Clone, Copy)]
+struct MenuSlotMap {
+    container: usize,
+    base: usize,
+    table: bool,
+    cells: usize,
+    plain: bool,
+}
+impl MenuSlotMap {
+    fn main(&self) -> usize {
+        match (self.plain, self.table) {
+            (false, _) => self.container,
+            (true, true) => 10,
+            (true, false) => 9,
+        }
+    }
+    fn to_menu(self, g: usize) -> Option<usize> {
+        let main = self.main();
+        if self.plain {
+            match g {
+                200 => Some(0),
+                100..109 if g - 100 < self.cells => Some(1 + g - 100),
+                500..504 if !self.table => Some(5 + g - 500),
+                504 if !self.table => Some(45),
+                9..36 => Some(main + g - 9),
+                0..9 => Some(main + 27 + g),
+                _ => None,
+            }
+        } else {
+            match g {
+                g if g >= self.base && g < self.base + self.container => Some(g - self.base),
+                9..36 => Some(main + g - 9),
+                0..9 => Some(main + 27 + g),
+                _ => None,
+            }
+        }
+    }
+    fn to_game(self, i: usize) -> Option<usize> {
+        let main = self.main();
+        if self.plain {
+            match i {
+                0 => None,
+                1..=9 if i - 1 < self.cells => Some(100 + i - 1),
+                5..9 if !self.table => Some(500 + i - 5),
+                45 if !self.table => Some(504),
+                _ if i >= main && i < main + 27 => Some(9 + i - main),
+                _ if i >= main + 27 && i < main + 36 => Some(i - main - 27),
+                _ => None,
+            }
+        } else if i < self.container {
+            Some(self.base + i)
+        } else if i < self.container + 27 {
+            Some(9 + i - self.container)
+        } else {
+            Some(i - self.container - 27)
+        }
+    }
+}

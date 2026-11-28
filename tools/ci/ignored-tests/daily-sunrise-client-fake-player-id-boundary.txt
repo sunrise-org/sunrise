@@ -1,0 +1,2 @@
+# A fake player takes an entity ID past i32::MAX from the shared counter (#6374); needs prepared resources.
+sunrise-client cut_layout::game::server_side::native_entity_refs::tests::a_fake_player_takes_an_id_past_the_signed_boundary lib daily resources

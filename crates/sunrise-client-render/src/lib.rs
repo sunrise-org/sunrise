@@ -42,6 +42,7 @@ pub use sunrise_level::containers;
 pub mod controller_ui;
 pub mod core_shader;
 pub use sunrise_level::crash;
+pub mod custom_lightmap;
 pub mod custom_sky;
 pub mod datapack;
 pub mod dynamic_light;

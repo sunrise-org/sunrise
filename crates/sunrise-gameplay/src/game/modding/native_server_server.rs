@@ -194,7 +194,9 @@ impl crate::game::ServerGame<'_> {
             ));
         }
         let id = self.server.next_entity.checked_add(1)?;
-        let entity_id = i32::try_from(id).ok()?;
+        // The guest record keeps the same 32 bits as its signed carrier, as `Hub::admit` does
+        // for a joining player: IDs from 0x8000_0000 on are as good as any (#6374).
+        let entity_id = id as i32;
         let motion = PlayerMotion::new(
             self.common.motion,
             sunrise_core::geometry::Vec3::new(0.0, 0.0, 0.0),

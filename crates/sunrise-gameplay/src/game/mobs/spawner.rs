@@ -111,7 +111,7 @@ impl crate::game::ServerGame<'_> {
         let pos = [key.0, key.1, key.2];
         let mut random = std::mem::replace(
             &mut self.common.world.random,
-            LevelRandom::for_level(LegacyRandom::new(0)),
+            crate::rng_count::placeholder_level(LegacyRandom::new(0)),
         );
         let mut sequences = std::mem::take(&mut self.server.rand_sequences);
         let mut events = Vec::new();
@@ -473,7 +473,7 @@ impl crate::game::ServerGame<'_> {
             let mut events = Vec::new();
             let mut random = std::mem::replace(
                 &mut self.common.world.random,
-                LevelRandom::for_level(LegacyRandom::new(0)),
+                crate::rng_count::placeholder_level(LegacyRandom::new(0)),
             );
             if let Some(BlockEntity::Spawner(s)) = self.common.world.block_entities.get_mut(&key) {
                 match data {

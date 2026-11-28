@@ -23,11 +23,19 @@ impl crate::game::ServerGame<'_> {
         // server's players count theirs down in `tick_guests`).
         self.server.shield_cooldown = self.server.shield_cooldown.saturating_sub(1);
         self.common.cooldowns.tick();
-        sunrise_level::spans::time("tick_using", || self.tick_using_server());
+        sunrise_level::spans::time("tick_using", || {
+            crate::rng_count::in_consumer(crate::rng_count::Consumer::PlayerUsing, || {
+                self.tick_using_server()
+            })
+        });
         sunrise_level::spans::time("postprocess_chunks", || self.postprocess_chunks())?;
         let mut sent = None;
         if running {
-            sunrise_level::spans::time("tick_lan_packets", || self.tick_lan_packets());
+            sunrise_level::spans::time("tick_lan_packets", || {
+                crate::rng_count::in_consumer(crate::rng_count::Consumer::LanPackets, || {
+                    self.tick_lan_packets()
+                })
+            });
             sent = sunrise_level::spans::time("tick_blocks", || self.tick_blocks())?;
             // What the blocks spawned (a dispensed minecart, a lit TNT, a
             // placed boat) joins before the entities tick.
@@ -70,7 +78,11 @@ impl crate::game::ServerGame<'_> {
             sunrise_level::spans::time("tick_carts", || self.tick_carts());
             self.tick_vehicle_watch();
             let from = self.lan_synced_from();
-            sunrise_level::spans::time("tick_thunder", || self.tick_thunder());
+            sunrise_level::spans::time("tick_thunder", || {
+                crate::rng_count::in_consumer(crate::rng_count::Consumer::Thunder, || {
+                    self.tick_thunder()
+                })
+            });
             self.lan_synced_since(from);
             sunrise_level::spans::time("tick_lecterns", || self.tick_lecterns());
             sunrise_level::spans::time("tick_maps", || self.tick_maps());
@@ -166,18 +178,35 @@ impl crate::game::ServerGame<'_> {
         // tick in the late pass above (#10063).
         self.server.ordered.announced = sunrise_sim::join_seq::JoinSeq::upcoming();
         if running {
-            sunrise_level::spans::time("tick_moving_pistons", || self.tick_moving_pistons())?;
-            sunrise_level::spans::time("tick_block_entities", || self.tick_block_entities())?;
+            sunrise_level::spans::time("tick_moving_pistons", || {
+                crate::rng_count::in_consumer(crate::rng_count::Consumer::MovingPistons, || {
+                    self.tick_moving_pistons()
+                })
+            })?;
+            sunrise_level::spans::time("tick_block_entities", || {
+                crate::rng_count::in_consumer(crate::rng_count::Consumer::BlockEntities, || {
+                    self.tick_block_entities()
+                })
+            })?;
+            let _rng = crate::rng_count::guard_consumer(crate::rng_count::Consumer::Sculk);
             sunrise_level::spans::time("tick_sculk_entities", || self.tick_sculk_entities());
             sunrise_level::spans::time("tick_sculk_blocks", || self.tick_sculk_blocks())?;
         }
         if running {
             // The bells' and conduits' server tickers, after the other block entities.
             sunrise_level::spans::time("tick_block_entity_servers", || {
-                self.tick_block_entity_servers()
+                crate::rng_count::in_consumer(
+                    crate::rng_count::Consumer::BlockEntityServers,
+                    || self.tick_block_entity_servers(),
+                )
             });
             // A conduit's hurt teleports an enderman now (`Enderman.hurtServer`).
-            span("settle_hurt_teleports", || self.settle_hurt_teleports())?;
+            span("settle_hurt_teleports", || {
+                crate::rng_count::in_consumer(
+                    crate::rng_count::Consumer::ConduitHurtTeleports,
+                    || self.settle_hurt_teleports(),
+                )
+            })?;
         }
         // ServerLevel.tick's `entityManager.tick()`, frozen or not, after every
         // block entity ticker (the bells, conduits and gateways above too): the

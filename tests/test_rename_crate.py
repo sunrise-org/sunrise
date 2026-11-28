@@ -48,8 +48,6 @@ path = "../crates/sunrise-mod-package"
                          "crates/sunrise-mod-package/tests/file.smod")
         self.assertEqual(rename.destination("crates/sunrise-mods-other/src/lib.rs"),
                          "crates/sunrise-mods-other/src/lib.rs")
-        self.assertEqual(rename.rewrite("crates/sunrise-mod-registry/tests/submit.rs", '../sunrise-mods/tests/index'),
-                         '../sunrise-mod-package/tests/index')
 
     def test_rust_library_identifiers_and_link_arguments_change(self):
         source = '''use sunrise_mods::{Content, Side};

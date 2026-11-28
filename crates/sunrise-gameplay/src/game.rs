@@ -639,8 +639,6 @@ pub(in crate::game) use server_side::player_server;
 pub(in crate::game) use server_side::sign_edit_server;
 #[allow(unused_imports)]
 pub(in crate::game) use server_side::spawner_server;
-#[allow(unused_imports)]
-#[allow(unused_imports)]
 #[cfg(feature = "state-digest")]
 #[allow(unused_imports)]
 pub(in crate::game) use server_side::state_digest;

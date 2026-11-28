@@ -1549,10 +1549,22 @@ impl crate::game::ServerGame<'_> {
 
     /// Tick shared functions before levels, then player connections, between the server tick hooks.
     pub fn tick_server(&mut self, paused: bool) -> Result<()> {
-        self.with_residency_tick(|game| game.tick_server_body(paused))
+        let rng_tick = crate::rng_count::begin_tick();
+        let result = self.with_residency_tick(|game| game.tick_server_body(paused));
+        if result.is_ok() {
+            rng_tick.publish();
+        }
+        result
     }
 
     fn tick_server_body(&mut self, paused: bool) -> Result<()> {
+        #[cfg(feature = "net-trace")]
+        if let Some(host) = self.server.lan.as_ref() {
+            host.hub
+                .lan
+                .shared
+                .set_capture_tick(self.common.world.game_time);
+        }
         // A panic something caught left a game that carried on: its record ends with the tick.
         self.server.interrupted_turns.clear();
         // `tickRateManager.tick()` once per server tick, before any level
@@ -1618,7 +1630,10 @@ impl crate::game::ServerGame<'_> {
                 if running.is_some() && self.server.lan.is_some() {
                     let holding = sunrise_sim::lan::Holding::start();
                     result = sunrise_level::spans::time("lan_guest_connections", || {
-                        self.tick_guest_connections(true)
+                        crate::rng_count::in_consumer(
+                            crate::rng_count::Consumer::LanGuestConnections,
+                            || self.tick_guest_connections(true),
+                        )
                     });
                     if result.is_ok()
                         && let Some(host) = self.server.lan.as_mut()
@@ -1627,7 +1642,9 @@ impl crate::game::ServerGame<'_> {
                     }
                     drop(holding);
                     if let Some(host) = self.server.lan.as_ref() {
-                        sunrise_sim::lan::flush_all(host.hub.guests.iter().map(|g| &g.sender));
+                        sunrise_level::spans::time("lan_handoff", || {
+                            sunrise_sim::lan::flush_all(host.hub.guests.iter().map(|g| &g.sender));
+                        });
                     }
                 }
                 break;
@@ -2467,6 +2484,13 @@ impl crate::game::ServerGame<'_> {
         if running {
             self.tick_level_environment(self.common.dim);
             self.common.world.game_time += 1;
+            #[cfg(feature = "net-trace")]
+            if let Some(host) = self.server.lan.as_ref() {
+                host.hub
+                    .lan
+                    .shared
+                    .set_capture_tick(self.common.world.game_time);
+            }
         } else if self.common.clock.still() {
             // Under `SUNRISE_STILL` a frozen world's rain and thunder sit at their levels, as a
             // shader pack's smoothed values do, so `/weather rain` shows full rain without

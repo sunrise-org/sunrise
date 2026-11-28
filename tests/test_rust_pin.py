@@ -21,7 +21,7 @@ from tests.os_support import needs_runner_shell
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github/workflows"
 # Upstream's workflows, disabled on this fork and kept as upstream writes them for syncs: nothing runs them.
-DISABLED = {"ci.yml", "launcher.yml", "mod-registry.yml", "pack-bench.yml"}
+DISABLED = {"ci.yml", "launcher.yml", "pack-bench.yml"}
 RELEASE = r"(?:stable|beta|nightly|\d+\.\d+(?:\.\d+)?)\b"
 FORBIDDEN = [
     (re.compile(rf"rustup_install\.sh\s+{RELEASE}"), "rustup_install.sh takes the pin itself"),

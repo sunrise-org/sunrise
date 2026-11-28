@@ -1,0 +1,2 @@
+# The nested can_equip read through a guest's armour slot uses prepared resources.
+sunrise-gameplay game::slot_rules_tests::a_can_equip_part_reads_its_own_armour_slot_without_recursing lib daily resources

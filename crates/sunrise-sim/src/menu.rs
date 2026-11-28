@@ -4953,6 +4953,62 @@ pub(crate) mod tests {
         });
     }
 
+    /// `MenuRef`'s read-only pickup query on an occupied armour slot must not
+    /// ask a listening item part whether the worn stack could be equipped:
+    /// the stack is only being taken out, never placed (#6790).
+    #[test]
+    fn issue_6790_a_worn_armour_slot_gives_without_asking_can_equip() {
+        use crate::mobs::equip::CanEquip;
+        use std::cell::Cell;
+
+        #[derive(Default)]
+        struct Counting {
+            asks: Cell<usize>,
+        }
+        impl CanEquip for Counting {
+            fn can_equip(&self, _: &ItemStack, _: &str, _: u32, _: &str, _: bool) -> bool {
+                self.asks.set(self.asks.get() + 1);
+                true
+            }
+            fn with_stack(&self, _: &ItemStack, body: &mut dyn FnMut(&dyn CanEquip)) {
+                body(self)
+            }
+        }
+
+        with_bare_menu(Kind::Inventory, |env, _menu| {
+            let parts = Counting::default();
+            let env = Env {
+                can_equip: Some(&parts),
+                ..*env
+            };
+            let helmet = Some(ItemStack::new("minecraft:iron_helmet", 1));
+            let armor = [helmet.clone(), None, None, None];
+            let offhand = None;
+            let rules = LiveSlotRules {
+                kind: Kind::Inventory,
+                registry_id: Some("test:menu"),
+                pos: None,
+                main: &[],
+                main_second: &[],
+                linked: None,
+                grid: &[],
+                result: &[],
+                player_slots: &[],
+                player_armor: &armor,
+                player_offhand: &offhand,
+                container_limit: None,
+                crafter_disabled: false,
+                creative: false,
+            };
+            assert_eq!(rules.slot_gives(&env, 5, helmet.as_ref()), Some(true));
+            assert_eq!(
+                parts.asks.get(),
+                0,
+                "the read-only pickup query asked can_equip"
+            );
+        });
+    }
+
     mod crafted_stat_tests;
     mod mod_grid_tests;
     mod server_stonecutter_tests;

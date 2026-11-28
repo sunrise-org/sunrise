@@ -25,6 +25,7 @@ pub mod initial_spawn;
 pub mod lan;
 pub mod mob_level;
 pub mod mob_looting;
+pub mod rng_count;
 pub mod teleport_transition;
 pub mod tick_profile;
 pub mod trident;

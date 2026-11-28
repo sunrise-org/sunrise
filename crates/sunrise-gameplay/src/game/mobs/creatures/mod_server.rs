@@ -6224,8 +6224,11 @@ impl crate::game::ServerGame<'_> {
         self.tick_leads();
         // Vanilla's spawning and raids run before ChunkMap.tick.
         self.tick_spawners();
-        let ticked =
-            sunrise_level::spans::time("tick_creature_entities", || self.tick_creature_entities());
+        let ticked = sunrise_level::spans::time("tick_creature_entities", || {
+            crate::rng_count::in_consumer(crate::rng_count::Consumer::MobBatch, || {
+                self.tick_creature_entities()
+            })
+        });
         self.dismount_underwater_mob_riders();
         ticked
     }

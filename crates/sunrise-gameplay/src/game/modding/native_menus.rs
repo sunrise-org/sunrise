@@ -53,6 +53,24 @@ pub(in crate::game) struct PendingModMenuOpen {
     replace: MenuReplace,
 }
 
+/// The minimum \`menu_extra\` revision a mod menu needs: a menu carrying live
+/// data, one without the player's inventory, or one with no slots reads live
+/// data; everything else is revision 1. Both the first open and the deferred
+/// finish use this (#6770).
+fn required_menu_extra_revision(data_len: usize, player_inventory: bool, slots: usize) -> u8 {
+    if data_len != 0 || !player_inventory || slots == 0 {
+        sunrise_protocol::menu_extra::LIVE_DATA_REVISION
+    } else {
+        1 // Client must have negotiated menu_extra revision 1 or higher.
+    }
+}
+
+/// A connected guest may open a mod menu when its brand reaches the menu and
+/// it negotiated at least the required revision.
+fn guest_may_open_mod_menu(brand: &str, id: &str, negotiated: u8, revision: u8) -> bool {
+    sunrise_level::containers::menu_reaches(brand, id) && negotiated >= revision
+}
+
 pub(in crate::game) struct NativeMenuOpen {
     menu: String,
     title: Tag,
@@ -288,14 +306,8 @@ impl crate::game::ServerGame<'_> {
             .online_player_record(player)
             .filter(|g| !g.dead && !g.disconnect_pending)
             .ok_or(OpenMenuError::PlayerUnavailable)?;
-        let revision = if !data.is_empty() || !kind.player_inventory || kind.slots == 0 {
-            menu_extra::LIVE_DATA_REVISION
-        } else {
-            1 // Client must have negotiated menu_extra revision 1 or higher.
-        };
-        if !sunrise_level::containers::menu_reaches(&guest.brand, &id)
-            || guest.sender.menu_extra_rev < revision
-        {
+        let revision = required_menu_extra_revision(data.len(), kind.player_inventory, kind.slots);
+        if !guest_may_open_mod_menu(&guest.brand, &id, guest.sender.menu_extra_rev, revision) {
             return Err(OpenMenuError::PlayerUnavailable);
         }
         let conn = guest.conn;
@@ -333,7 +345,6 @@ impl crate::game::ServerGame<'_> {
         open: PendingModMenuOpen,
     ) -> Result<Option<MenuRef>, mod_api::OpenMenuError> {
         use mod_api::OpenMenuError;
-        use sunrise_protocol::menu_extra;
 
         let PendingModMenuOpen {
             player,
@@ -350,14 +361,8 @@ impl crate::game::ServerGame<'_> {
             .online_player_record(player)
             .filter(|g| g.conn == conn && !g.dead && !g.disconnect_pending)
             .ok_or(OpenMenuError::PlayerUnavailable)?;
-        let revision = if !data.is_empty() || !kind.player_inventory || kind.slots == 0 {
-            menu_extra::LIVE_DATA_REVISION
-        } else {
-            1
-        };
-        if !sunrise_level::containers::menu_reaches(&guest.brand, &id)
-            || guest.sender.menu_extra_rev < revision
-        {
+        let revision = required_menu_extra_revision(data.len(), kind.player_inventory, kind.slots);
+        if !guest_may_open_mod_menu(&guest.brand, &id, guest.sender.menu_extra_rev, revision) {
             return Err(OpenMenuError::PlayerUnavailable);
         }
         self.server
@@ -814,6 +819,43 @@ pub mod tests {
         assert_eq!(native_menu_inventory_slot(54, 90), None);
         assert_eq!(native_menu_inventory_slot(54, -999), None);
         assert_eq!(native_menu_inventory_slot(9, 9), Some(9));
+    }
+
+    /// Both open paths share one minimum `menu_extra` revision rule (#6770).
+    #[test]
+    fn issue_6770_the_minimum_menu_extra_revision_is_one_rule() {
+        use sunrise_protocol::menu_extra;
+        // Live data, no player inventory, or no slots read live data.
+        assert_eq!(
+            required_menu_extra_revision(1, true, 9),
+            menu_extra::LIVE_DATA_REVISION
+        );
+        assert_eq!(
+            required_menu_extra_revision(0, false, 9),
+            menu_extra::LIVE_DATA_REVISION
+        );
+        assert_eq!(
+            required_menu_extra_revision(0, true, 0),
+            menu_extra::LIVE_DATA_REVISION
+        );
+        // A plain slotted menu with the player's inventory only needs 1.
+        assert_eq!(required_menu_extra_revision(0, true, 9), 1);
+    }
+
+    /// Reachability and the negotiated revision are one guard for both paths (#6770).
+    #[test]
+    fn issue_6770_the_reach_and_revision_guard_is_one_rule() {
+        assert!(guest_may_open_mod_menu("sunrise", "test:menu", 2, 2));
+        assert!(guest_may_open_mod_menu(
+            "minecraft",
+            "minecraft:chest",
+            1,
+            1
+        ));
+        // A Sunrise menu needs the revision its live data requires.
+        assert!(!guest_may_open_mod_menu("sunrise", "test:menu", 1, 2));
+        // A vanilla client's brand cannot reach a mod menu.
+        assert!(!guest_may_open_mod_menu("fabric", "test:menu", 2, 2));
     }
 }
 

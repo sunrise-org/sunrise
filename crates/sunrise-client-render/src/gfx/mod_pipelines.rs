@@ -371,6 +371,8 @@ pub struct Batch<'a> {
 
 /// A run as uploaded: where its quads start in the vertex buffer.
 struct Run {
+    // Stage callbacks select indices in the submitted batch, even if an earlier run was skipped.
+    submitted_index: usize,
     slot: usize,
     stage: usize,
     quads: std::ops::Range<u32>,
@@ -2846,7 +2848,7 @@ impl ModPipelines {
             None => crate::mod_pipelines::registered_modifiers(),
         };
         let mut next = 0;
-        for run in batch.runs {
+        for (submitted_index, run) in batch.runs.iter().enumerate() {
             let quads = next..next + run.quads;
             next = quads.end;
             if quads.end as usize * 4 > batch.vertices.len() {
@@ -2874,6 +2876,7 @@ impl ModPipelines {
                 None => u32::MAX,
             };
             self.runs.push(Run {
+                submitted_index,
                 slot: run.slot as usize,
                 stage: run.stage as usize,
                 quads,
@@ -2881,7 +2884,7 @@ impl ModPipelines {
             });
         }
         let mut oit_next = 0;
-        for run in batch.oit_runs {
+        for (submitted_index, run) in batch.oit_runs.iter().enumerate() {
             let quads = oit_next..oit_next + run.quads;
             oit_next = quads.end;
             if quads.end as usize * 4 > batch.oit_vertices.len() || run.stage >= 3 {
@@ -2911,6 +2914,7 @@ impl ModPipelines {
                 None => u32::MAX,
             };
             self.oit_runs.push(Run {
+                submitted_index,
                 slot: run.slot as usize,
                 stage: run.stage as usize,
                 quads,
@@ -4449,8 +4453,12 @@ impl ModPipelines {
     }
 
     fn prepared_runs(&self, range: std::ops::Range<u32>) -> &[Run] {
-        let start = (range.start as usize).min(self.runs.len());
-        let end = (range.end as usize).min(self.runs.len());
+        let start = self
+            .runs
+            .partition_point(|run| run.submitted_index < range.start as usize);
+        let end = self
+            .runs
+            .partition_point(|run| run.submitted_index < range.end as usize);
         &self.runs[start..end]
     }
 
@@ -4569,8 +4577,12 @@ impl ModPipelines {
             stage_idx,
             indices,
             ranges.into_iter().flat_map(|r| {
-                let start = (r.start as usize).min(self.oit_runs.len());
-                let end = (r.end as usize).min(self.oit_runs.len());
+                let start = self
+                    .oit_runs
+                    .partition_point(|run| run.submitted_index < r.start as usize);
+                let end = self
+                    .oit_runs
+                    .partition_point(|run| run.submitted_index < r.end as usize);
                 self.oit_runs[start..end]
                     .iter()
                     .filter(move |run| run.stage == stage_idx)
@@ -8519,43 +8531,58 @@ void main() {
     fn read_sample<const N: usize>(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        mut encoder: wgpu::CommandEncoder,
+        encoder: wgpu::CommandEncoder,
         texture: &wgpu::Texture,
     ) -> [u8; N] {
+        read_sample_at(device, queue, encoder, texture, &[[SIZE / 2, SIZE / 2]])[0]
+    }
+
+    fn read_sample_at<const N: usize>(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        mut encoder: wgpu::CommandEncoder,
+        texture: &wgpu::Texture,
+        points: &[[u32; 2]],
+    ) -> Vec<[u8; N]> {
+        let stride = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("sampled variant readback"),
-            size: 256,
+            size: u64::from(stride) * points.len() as u64,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                origin: wgpu::Origin3d {
-                    x: SIZE / 2,
-                    y: SIZE / 2,
-                    z: 0,
+        for (i, &[x, y]) in points.iter().enumerate() {
+            encoder.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    origin: wgpu::Origin3d { x, y, z: 0 },
+                    ..texture.as_image_copy()
                 },
-                ..texture.as_image_copy()
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &readback,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(256),
-                    rows_per_image: None,
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &readback,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: u64::from(stride) * i as u64,
+                        bytes_per_row: Some(stride),
+                        rows_per_image: None,
+                    },
                 },
-            },
-            wgpu::Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-        );
+                wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
         queue.submit([encoder.finish()]);
         let slice = readback.slice(..);
         slice.map_async(wgpu::MapMode::Read, |result| result.unwrap());
         device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-        slice.get_mapped_range().unwrap()[..N].try_into().unwrap()
+        let bytes = slice.get_mapped_range().unwrap();
+        (0..points.len())
+            .map(|i| {
+                let start = i * stride as usize;
+                bytes[start..start + N].try_into().unwrap()
+            })
+            .collect()
     }
 
     #[test]
@@ -9588,5 +9615,320 @@ void main() {
         assert_eq!(texel(256), 0.0, "level 1 texel (0, 1)");
         assert_eq!(texel(260), 0.0, "level 1 texel (1, 1)");
         assert_eq!(texel(512), 0.0, "level 0 texel (0, 0)");
+    }
+
+    fn draw_prepared_run_samples<const N: usize>(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        primitives: &WorldPrimitives,
+        format: wgpu::TextureFormat,
+        clear: wgpu::Color,
+        oit: Option<super::super::oit::Stage>,
+        range: std::ops::Range<u32>,
+    ) -> [[u8; N]; 2] {
+        let texture = |format, usage| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d {
+                    width: SIZE,
+                    height: SIZE,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage,
+                view_formats: &[],
+            })
+        };
+        let color = texture(
+            format,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        );
+        let depth = texture(
+            wgpu::TextureFormat::Depth32Float,
+            wgpu::TextureUsages::RENDER_ATTACHMENT,
+        );
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let color_view = color.create_view(&Default::default());
+            let depth_view = depth.create_view(&Default::default());
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &color_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(clear),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth_view,
+                    depth_ops: oit.is_none().then_some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(0.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            assert!(primitives.draw_prepared(
+                &mut pass,
+                oit,
+                &[world_primitives::DrawRanges {
+                    pipeline_runs: range,
+                    ..Default::default()
+                }],
+            ));
+        }
+        read_sample_at::<N>(device, queue, encoder, &color, &[[16, 32], [48, 32]])
+            .try_into()
+            .unwrap()
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn prepared_run_ranges_after_rejected_run_draw_their_own_pipeline() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, queue)) = device() else {
+            return;
+        };
+        let solid = |r, g| {
+            format!(
+                "#version 330\nout vec4 fragColor;\nvoid main() {{ fragColor = vec4({r}, {g}, 0.0, 1.0); }}\n"
+            )
+        };
+        let (red, green) = (solid("1.0", "0.0"), solid("0.0", "1.0"));
+        let set = load(
+            6670,
+            &[
+                (
+                    "void nothing() {}",
+                    PipelineBlend::Opaque,
+                    WorldDepth::ThroughWalls,
+                ),
+                (&red, PipelineBlend::Opaque, WorldDepth::ThroughWalls),
+                (&green, PipelineBlend::Opaque, WorldDepth::ThroughWalls),
+            ],
+        );
+        assert!(set.built()[0].is_none());
+
+        let vertices = [
+            quad([0.0, 0.0, 32.0, 64.0], 2.0, [255; 4]),
+            quad([0.0, 0.0, 32.0, 64.0], 2.0, [255; 4]),
+            quad([32.0, 0.0, 64.0, 64.0], 2.0, [255; 4]),
+        ]
+        .concat();
+        let runs: [PipelineRun; 3] = std::array::from_fn(|slot| PipelineRun {
+            slot: slot as u32,
+            stage: 0,
+            quads: 1,
+            modifier_stack: 0,
+        });
+
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let mut primitives = WorldPrimitives::new(&device, (format, false));
+        primitives.pipelines.build(&device, &set, None).unwrap();
+        let atlas = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        assert!(primitives.prepare(
+            &device,
+            &mut |buffer, bytes| queue.write_buffer(buffer, 0, bytes),
+            &world_primitives::Batch {
+                pipelines: Batch {
+                    set: Some(&set),
+                    vertices: &vertices,
+                    runs: &runs,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            view_proj(),
+            [SIZE, SIZE],
+            &atlas.create_view(&Default::default()),
+            None,
+        ));
+        assert_eq!(primitives.pipelines.runs.len(), 2);
+
+        // Prepared pack fallback checks (`has_unbound_prepared`) must resolve submitted indices too.
+        assert!(!primitives.pipelines.has_unbound_prepared(0..1, 0..0, &[]));
+        assert!(!primitives.pipelines.has_unbound_prepared(1..2, 0..0, &[1]));
+        assert!(primitives.pipelines.has_unbound_prepared(1..2, 0..0, &[2]));
+        assert!(primitives.pipelines.has_unbound_prepared(2..3, 0..0, &[1]));
+        assert!(!primitives.pipelines.has_unbound_prepared(2..3, 0..0, &[2]));
+
+        let sample = |range| {
+            draw_prepared_run_samples::<4>(
+                &device,
+                &queue,
+                &primitives,
+                format,
+                wgpu::Color::BLACK,
+                None,
+                range,
+            )
+        };
+        assert_eq!(
+            sample(0..1),
+            [[0, 0, 0, 255], [0, 0, 0, 255]],
+            "rejected submitted run 0 must draw nothing"
+        );
+        assert_eq!(
+            sample(1..2),
+            [[255, 0, 0, 255], [0, 0, 0, 255]],
+            "submitted run 1 must draw slot 1 (red) after run 0 was rejected"
+        );
+        assert_eq!(
+            sample(2..3),
+            [[0, 0, 0, 255], [0, 255, 0, 255]],
+            "submitted run 2 must draw slot 2 (green) instead of clamping past self.runs.len()"
+        );
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn prepared_oit_run_ranges_after_rejected_run_draw_their_own_pipeline() {
+        use super::super::oit::{CloudSamples, Stage};
+        let _guard = crate::gfx::test_gpu::lock();
+        let Some((device, queue)) = crate::gfx::test_gpu::oit_device() else {
+            return;
+        };
+        let oit_alpha = |alpha: &str| {
+            format!(
+                "#version 330\n#include <minecraft:oit.glsl>\n#ifndef OIT_ALPHA_ONLY\nout vec4 fragColor;\n#endif\nvoid main() {{\n#ifdef OIT_ALPHA_ONLY\n    executeAlphaOnlyPhase(gl_FragCoord.z, {alpha});\n#else\n#ifdef OIT_ACCUMULATE\n    fragColor = sampleColorForAccumulation(vec4(1.0, 0.0, 0.0, {alpha}));\n#else\n    fragColor = vec4(1.0, 0.0, 0.0, {alpha});\n#endif\n#endif\n}}\n"
+            )
+        };
+        let shaders = [
+            "#version 330\nout vec4 fragColor;\nvoid main() { fragColor = vec4(1.0); }\n"
+                .to_owned(),
+            oit_alpha("0.5"),
+            oit_alpha("0.25"),
+        ];
+        let registered: [RenderPipeline; 3] = std::array::from_fn(|slot| {
+            let p = RenderPipeline::new(
+                Identifier::parse(&format!("test:oit_p{slot}")).unwrap(),
+                Identifier::parse(&format!("test:core/oit{slot}")).unwrap(),
+                if slot == 0 {
+                    PipelineBlend::Opaque
+                } else {
+                    PipelineBlend::Translucent
+                },
+                WorldDepth::ThroughWalls,
+            );
+            if slot == 0 { p } else { p.order_independent() }
+        });
+        let set = Pipelines::build(&registered, 6671, |file| {
+            if let Some(rest) = file.strip_prefix("assets/test/shaders/core/oit") {
+                if rest.ends_with(".vsh") {
+                    return Ok(Some(VSH.to_owned()));
+                }
+                if let Some(num) = rest.strip_suffix(".fsh") {
+                    let slot: usize = num.parse().unwrap();
+                    return Ok(Some(shaders[slot].clone()));
+                }
+            }
+            Ok(stub_asset(file))
+        })
+        .unwrap();
+
+        let oit_vertices = [
+            quad([0.0, 0.0, 32.0, 64.0], 2.0, [255; 4]),
+            quad([0.0, 0.0, 32.0, 64.0], 2.0, [255; 4]),
+            quad([32.0, 0.0, 64.0, 64.0], 2.0, [255; 4]),
+        ]
+        .concat();
+        let oit_runs: [PipelineRun; 3] = std::array::from_fn(|slot| PipelineRun {
+            slot: slot as u32,
+            stage: Stage::DepthBounds as u32,
+            quads: 1,
+            modifier_stack: 0,
+        });
+
+        let mut primitives =
+            WorldPrimitives::new(&device, (wgpu::TextureFormat::Rgba8Unorm, false));
+        primitives.pipelines.build(&device, &set, None).unwrap();
+        let aux = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d {
+                    width: SIZE,
+                    height: SIZE,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba16Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&Default::default());
+        assert!(primitives.prepare(
+            &device,
+            &mut |buffer, bytes| queue.write_buffer(buffer, 0, bytes),
+            &world_primitives::Batch {
+                pipelines: Batch {
+                    set: Some(&set),
+                    oit_vertices: &oit_vertices,
+                    oit_runs: &oit_runs,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            view_proj(),
+            [SIZE, SIZE],
+            &aux,
+            None,
+        ));
+        primitives.prepare_oit_mod_pipelines(
+            &device,
+            Some(CloudSamples {
+                generation: 1,
+                views: [&aux; 3],
+            }),
+        );
+        assert_eq!(primitives.pipelines.oit_runs.len(), 2);
+
+        let alphas = |range| {
+            draw_prepared_run_samples::<16>(
+                &device,
+                &queue,
+                &primitives,
+                wgpu::TextureFormat::Rgba32Float,
+                wgpu::Color::TRANSPARENT,
+                Some(Stage::DepthBounds),
+                range,
+            )
+            .map(|px| f32::from_le_bytes(px[12..16].try_into().unwrap()))
+        };
+        assert_eq!(
+            alphas(0..1),
+            [0.0, 0.0],
+            "rejected non-OIT submitted run 0 must draw nothing"
+        );
+        assert_eq!(
+            alphas(1..2),
+            [0.5, 0.0],
+            "submitted OIT run 1 must draw slot 1 after non-OIT run 0 was rejected"
+        );
+        assert_eq!(
+            alphas(2..3),
+            [0.0, 0.25],
+            "submitted OIT run 2 must draw slot 2 instead of clamping past self.oit_runs.len()"
+        );
     }
 }

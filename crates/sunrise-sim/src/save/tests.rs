@@ -1059,20 +1059,32 @@ fn work_shared_out_is_all_done_in_order_when_no_helper_can_start() {
 }
 
 /// `RegionFile.getVersion` writes a chunk with the version
-/// `region-file-compression` selected: `compress_records` asks
-/// `Compression::selected()` for every record it encodes, so a server told
-/// to write lz4, gzip or uncompressed regions does
+/// `region-file-compression` selected: `compress_records` snapshots
+/// `Compression::selected()` once per batch (`compression_pool.rs:243`), so a
+/// server told to write lz4 or uncompressed regions does
 /// (`RegionFileVersion.configure`).
 #[test]
+#[ignore = "daily"]
 fn a_chunk_is_written_with_the_selected_region_version() {
     use super::{Record, compress_records};
+
+    const CHILD: &str = "SUNRISE_SAVE_REGION_VERSION_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        crate::fresh_process::run_in_fresh_process(
+            "save::tests::a_chunk_is_written_with_the_selected_region_version",
+            CHILD,
+            "1",
+        );
+        return;
+    }
+
     let tag = Arc::new(NamedTag {
         name: "".into(),
         tag: Tag::compound([("xPos", Tag::Int(3))]),
     });
     let records = [((3, 4), Record::Tag(Arc::clone(&tag)))];
     let refs: Vec<_> = records.iter().map(|(k, r)| (*k, r)).collect();
-    for name in ["none", "lz4", "gzip", "deflate"] {
+    for name in ["none", "lz4", "deflate"] {
         assert!(Compression::configure(name), "{name}");
         let written = compress_records(&refs, 99)
             .pop()
@@ -1088,8 +1100,6 @@ fn a_chunk_is_written_with_the_selected_region_version() {
         // The bytes are that codec's, and read back as the chunk.
         assert_eq!(written.nbt(Limits::default()).unwrap(), *tag);
     }
-    // Leave the default behind for the rest of this process's tests.
-    assert!(Compression::configure("deflate"));
 }
 
 #[test]

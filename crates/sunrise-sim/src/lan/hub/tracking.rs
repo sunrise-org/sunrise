@@ -565,6 +565,7 @@ impl Hub {
     /// sent: nothing changes the level in between, and each player's packets
     /// keep their order.
     pub(super) fn update_chunks(&mut self, ctx: &TickCtx) {
+        let mut laps = crate::spans::laps();
         let world = &*ctx.world;
         let watching = self.chunk_watches.recording();
         let mut batches = Vec::new();
@@ -578,6 +579,7 @@ impl Hub {
             }
         }
         if batches.is_empty() {
+            laps.lap("lan_chunks_select");
             return;
         }
         // Each column once, however many players it goes to, with the
@@ -593,7 +595,9 @@ impl Hub {
                 (i, taken, bodies)
             })
             .collect();
+        laps.lap("lan_chunks_select");
         self.encoder.warm(&columns.chunks);
+        laps.lap("lan_chunks_warm");
         let encoded_results = self.encoder.bodies_with(&columns.chunks, world, &|x, z| {
             ctx.streaming.and_then(|s| s.proto_sections(x, z))
         });
@@ -613,6 +617,7 @@ impl Hub {
                 }
             })
             .collect();
+        laps.lap("lan_chunks_encode");
         let uses = &mut columns.uses;
         let chunks = &columns.chunks;
         for (i, taken, batch) in batches {
@@ -706,6 +711,7 @@ impl Hub {
                 }
             });
         }
+        laps.lap("lan_chunks_send");
     }
 
     /// ChunkMap.move's view change: the new centre, the chunks that left

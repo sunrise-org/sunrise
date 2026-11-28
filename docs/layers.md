@@ -14,7 +14,7 @@ The split comes first, inside this repository, one checked step at a time. The r
 
 Both checks below run in CI's verify job and in `tools/pr_ready.py`, against the fork's baseline: the explicit
 rows and reasons in `tools/layers.json` and `tools/addresses.json`, which cover the split mod crates and the separate
-launcher, registry and telemetry-server workspaces. No engine/API refactor is implied by importing these tools.
+launcher and telemetry-server workspaces. No engine/API refactor is implied by importing these tools.
 
 This page says:
 
@@ -149,7 +149,7 @@ Sunrise's own extras and its product, and every built-in address of an outside s
   music page, auto-reconnect...), Play with Friends and its relay, Discord, the "I'm playing" ping,
   telemetry and benchmark uploads, releases and updates, the hosting supervisor, the launcher.
 - **Examples:** `sunrise-addresses`, `sunrise-friends`, `sunrise-relay`, `sunrise-telemetry`,
-  `sunrise-perf-share`, `sunrise-perf-overlay`, `sunrise-release-sign`, `sunrise-server`, `sunrise-mod-registry`,
+  `sunrise-perf-share`, `sunrise-perf-overlay`, `sunrise-release-sign`, `sunrise-server`,
   `sunrise-heartbeat`, `sunrise-official`, `sunrise-discord`, `sunrise-reconnect`, `https://github.com/sunrise-org/sunrise-launcher`. Still in
   engine crates today:
   `game/extras.rs` and `game/extras/`, `extras_ui.rs`, `chat_options.rs`.
@@ -637,7 +637,7 @@ Controllers are platform ([above](#controllers-and-ui-pages)).
 ## The checks
 
 `python3 tools/check_layers.py` runs in CI's verify job and in `tools/pr_ready.py`. It reads the `cargo metadata` of the
-four workspaces `tools/layers.json` lists (the game, `https://github.com/sunrise-org/sunrise-launcher`, `crates/sunrise-mod-registry/` and
+three workspaces `tools/layers.json` lists (the game, `https://github.com/sunrise-org/sunrise-launcher` and
 `crates/sunrise-telemetry-server/`; no build, about a second) and [`tools/layers.json`](../tools/layers.json), which
 gives every crate its layer. It fails when:
 
@@ -660,9 +660,9 @@ left.
 ### Today's exceptions
 
 The current dependency inventory is in `tools/layers.json`, with fork-specific classifications and reasons in
-`_fork_baselines`. It records existing fork dependencies and the restored upstream Horizon layer dependencies. The separate launcher and registry workspaces take two engine crates: `sunrise-mod-package` (the launcher's
-package, modpack and index reads; the registry's index format) and `sunrise-system` (the launcher's bug reports).
-Those three edges are `allowed` rows like the launcher's other engine dependencies.
+`_fork_baselines`. It records existing fork dependencies and the restored upstream Horizon layer dependencies. The separate launcher workspace takes two engine crates: `sunrise-mod-package` (the launcher's
+package, modpack and index reads) and `sunrise-system` (the launcher's bug reports).
+Those two edges are `allowed` rows like the launcher's other engine dependencies.
 
 ## Built-in addresses
 
@@ -707,7 +707,6 @@ Sunrise's own and third-party addresses (Sunrise layer):
 | `play.playhorizon.dev` | the official Horizon server, which the client identity hook answers for | `sunrise-addresses`, `sunrise-official` |
 | `playsunrise.net` | the download link shown with no resources | `no_resources.rs` |
 | `api.github.com`, `discord.com` | hosting: updates, Discord webhooks | `sunrise-server` |
-| `api.github.com`, `uploads.github.com`, `playsunrise.net` | the registry's submission service | `sunrise-mod-registry` |
 | Modrinth, CurseForge, Fabric, Quilt, Forge, NeoForge, GitHub, Microsoft and Xbox sign-in, Tailscale, `discord.gg`, `mclo.gs`, `static.rust-lang.org` | the launcher's browsers, loaders, sign-in, logs and hosting | `https://github.com/sunrise-org/sunrise-launcher/tree/main/src/`, `https://github.com/sunrise-org/sunrise-launcher/blob/main/links.json` |
 
 These are not addresses:

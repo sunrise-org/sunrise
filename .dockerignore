@@ -1,4 +1,4 @@
-# Docker builds (the relay, the mod registry) need the Rust sources only.
+# Docker builds (the relay, the telemetry server) need the Rust sources only.
 target/
 **/target/
 .local/

@@ -1555,11 +1555,17 @@ impl<'a> crate::game::ServerGame<'a> {
             return;
         }
         let from = self.lan_synced_from();
-        sunrise_level::spans::time("spawn_raids", || self.tick_raids());
+        sunrise_level::spans::time("spawn_raids", || {
+            crate::rng_count::in_consumer(crate::rng_count::Consumer::Raids, || self.tick_raids())
+        });
         // `ServerChunkCache.tickChunks` skips the entire chunk-spawning phase
         // (natural spawning and custom spawners) in debug worlds.
         if !self.server.world_debug {
-            sunrise_level::spans::time("spawn_natural", || self.spawn_natural());
+            sunrise_level::spans::time("spawn_natural", || {
+                crate::rng_count::in_consumer(crate::rng_count::Consumer::NaturalSpawning, || {
+                    self.spawn_natural()
+                })
+            });
             // ServerChunkCache.tickChunks: the custom spawners tick only with spawn_mobs.
             if self
                 .common
@@ -1567,7 +1573,12 @@ impl<'a> crate::game::ServerGame<'a> {
                 .rules
                 .bool_at(sunrise_game_data::gamerules::vanilla::SPAWN_MOBS)
             {
-                sunrise_level::spans::time("spawn_custom", || self.tick_custom_spawners());
+                sunrise_level::spans::time("spawn_custom", || {
+                    crate::rng_count::in_consumer(
+                        crate::rng_count::Consumer::CustomSpawners,
+                        || self.tick_custom_spawners(),
+                    )
+                });
             }
         }
         self.lan_synced_since(from);
@@ -1608,7 +1619,7 @@ impl<'a> crate::game::ServerGame<'a> {
         laps.lap("sn_inhabited");
         let mut random = std::mem::replace(
             &mut self.common.world.random,
-            sunrise_core::random::LevelRandom::for_level(LegacyRandom::new(0)),
+            crate::rng_count::placeholder_level(LegacyRandom::new(0)),
         );
         scratch.pass.players.refresh(self);
         scratch.pass.costed.clear();

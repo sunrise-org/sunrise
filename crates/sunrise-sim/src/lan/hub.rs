@@ -2685,6 +2685,7 @@ impl Hub {
             &crate::fast_hash::FxHashMap<u32, sunrise_mod_runtime::attachments::Attachments>,
         >,
     ) {
+        let prepare_span = crate::spans::guard("lan_track_prepare");
         let mut all: Vec<EntityState> = Vec::with_capacity(ctx.entities.len() + self.guests.len());
         let modified_particles =
             mod_api::__private::listened(mod_api::HookId::EffectParticleModification);
@@ -2767,11 +2768,13 @@ impl Hub {
             self.sync_attachments.then_some(&attachment_lookup);
         level.range_percent = Some(self.entity_range_percent);
         let (types, sync) = (&mut self.entity_types, &self.sync);
+        drop(prepare_span);
         level.tick(&entities, &self.riding, &mut viewers, attachments, |kind| {
             entity_type(types, sync, kind)
         });
         drop(viewers);
         drop(player_attachments);
+        let send_span = crate::spans::guard("lan_track_send");
         // While a mod listens, a player's output that started or stopped tracking waits for the
         // game to tell the mods at each pairing's packet (`tracking_pass`).
         let hold = tracking_pass::tracking_listened();
@@ -2799,6 +2802,7 @@ impl Hub {
         }
         self.entity_out = outs;
         self.send_view_entities(views);
+        drop(send_span);
         self.entities.insert(self.config.dimension.clone(), level);
     }
 
