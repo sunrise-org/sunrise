@@ -144,6 +144,8 @@ impl ClientGame<'_> {
     /// settings are saved as Controls saves them.
     fn mod_keys_changed(&mut self) {
         self.bind_mod_mappings();
+        // Config lays out the current binding and whether Reset is enabled.
+        self.client.chat_ui.options.layout_changed();
         self.client
             .settings
             .save(&sunrise_gameplay_common::game::options_path());

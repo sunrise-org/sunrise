@@ -85,17 +85,18 @@ pub struct Installed {
     pub native: Option<NativePage>,
 }
 
-/// A native mod's settings page: its keys as Key Binds rows, then the settings it registered
-/// (`Registrar::register_setting`). The keys the player chooses are kept in `ModList::keys`, the
-/// settings in the mod's data folder.
+/// A native mod's generated Config page: its registered key mappings, then the settings it
+/// registered (`Registrar::register_setting`). The mappings also appear in Options > Controls.
+/// Player-chosen keys are kept in `ModList::keys`; setting values live in the mod's data folder.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct NativePage {
-    /// The keys the mod registers on Options > Controls, under its title.
+    /// The keys the mod registers on Options > Controls and, unless it has its own Config screen,
+    /// on its generated Config page.
     pub mappings: Vec<KeyMapping>,
     /// Its settings, in registration order, with the values the page shows.
     pub settings: Vec<NativeSetting>,
     /// The mod registered its own config screen (`Registrar::register_config_screen`): Config
-    /// shows for it and opens that screen, not this page's settings.
+    /// opens that screen instead of this generated page. Its mappings remain in Options > Controls.
     pub own_screen: bool,
 }
 
