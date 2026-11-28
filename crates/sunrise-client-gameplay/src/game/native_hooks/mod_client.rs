@@ -326,7 +326,7 @@ impl crate::game::ClientGame<'_> {
     }
     /// The staged or shown native screen belonging to this opening, not a
     /// prior opening of the same numeric window id.
-    pub(in crate::game) fn active_native_screen(&self) -> Option<&OpenNativeScreen> {
+    pub fn active_native_screen(&self) -> Option<&OpenNativeScreen> {
         let screen = self.client.mod_screen.0.as_ref()?;
         let remote = &self.client.remote.as_ref()?.menu;
         (!screen.detached
@@ -341,9 +341,21 @@ impl crate::game::ClientGame<'_> {
         if self.client.screen_grab {
             self.capture(false);
         }
+        // A mod's own screen opened over the open menu (`mod_screen_open_over_menu`) keeps
+        // it, as one replacing that screen keeps it, while the menu is still the one it was
+        // opened over; any other screen ends the sub-screen and leaves the menu as it leaves
+        // a replaced container screen.
+        let keeps_menu = screen == Screen::Mod
+            && self
+                .client
+                .native_mod_screen_menu
+                .is_some_and(|kept| self.open_menu_key() == Some(kept));
+        if !keeps_menu {
+            self.client.native_mod_screen_menu = None;
+        }
         // `before` may already have closed it. Overlays that keep Inventory
         // underneath don't pass through this replacement path.
-        if screen != Screen::Inventory {
+        if screen != Screen::Inventory && !keeps_menu {
             if self.active_native_screen().is_some() {
                 self.remote_close_container();
             } else if self
@@ -389,6 +401,11 @@ impl crate::game::ClientGame<'_> {
         let replacing = std::mem::replace(&mut self.client.screen_state.0.replacing, true);
         match self.client.screen {
             Screen::Inventory => self.close_container_client(),
+            // A mod's screen over a kept menu: the menu closes as its container screen's would.
+            Screen::Mod if self.mod_screen_menu().is_some() => {
+                self.client.native_mod_screen_menu = None;
+                self.close_container_client();
+            }
             Screen::Creative => self.close_creative_menu(),
             Screen::Options => self.client.chat_ui.options.discard_draw(),
             _ => {}
@@ -1920,7 +1937,7 @@ impl crate::game::ClientGame<'_> {
         self.screen_view_at(screen, self.screen_rect(batch, screen))
     }
     /// `screen_view` with an explicit panel `rect` for container layout.
-    pub(in crate::game) fn screen_view_at(&self, screen: Screen, rect: [f32; 4]) -> ScreenView<'_> {
+    pub fn screen_view_at(&self, screen: Screen, rect: [f32; 4]) -> ScreenView<'_> {
         // Only the inventory screen shows a server's menu.
         let menu_shown = screen == Screen::Inventory;
         let shown_native = menu_shown.then(|| self.shown_native_screen()).flatten();
@@ -1943,7 +1960,13 @@ impl crate::game::ClientGame<'_> {
                 .filter(|_| menu_shown)
                 .or_else(|| shown_native.and_then(|s| s.menu.title.as_ref())),
             rect,
-            slots: self.slot_count(),
+            // A mod's screen over a kept menu shows none of the covered container screen's
+            // slots (they stay in the menu, as the covered screen's `screen_slot` answers say).
+            slots: if screen == Screen::Mod && self.mod_screen_menu().is_some() {
+                0
+            } else {
+                self.slot_count()
+            },
             mouse: self.cursor(),
             partial_tick: self.common.clock.fraction() as f32,
             regions: self.screen_regions(screen),

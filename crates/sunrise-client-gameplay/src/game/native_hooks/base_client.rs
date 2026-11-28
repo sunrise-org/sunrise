@@ -132,6 +132,95 @@ impl crate::game::ClientGame<'_> {
         self.apply_screen(Screen::Mod, Some(mod_id));
         self.mod_screen() == Some(mod_id)
     }
+    /// Opens mod `mod_id`'s own screen over the open menu's container screen, keeping the menu:
+    /// vanilla's `Minecraft.setScreen(new Screen(..))` with `player.containerMenu` untouched,
+    /// as AE2's `AEBaseScreen.switchToScreen` opens its sub-screens. The menu goes on syncing;
+    /// Escape, `close_screen` or `mod_screen_close` return to the same container screen
+    /// (`setScreen(parent)`), with the same menu, slots and carried stack and nothing sent. A
+    /// server close of the menu, or any other screen replacing it, ends it as it ends the
+    /// container screen.
+    ///
+    /// The container screen is covered, not closed, as NeoForge's `pushScreenLayer` covers one:
+    /// it gets no `screen_closing` and its `removed()` does not run, so its screen state (the
+    /// recipe book page, a search) stays. `screen_opening` fires for the sub-screen. Its mounted
+    /// widgets and the gamepad's focus are the covered screen's own and go; on return they are
+    /// built again by `screen_init_post`, as after a resize, with no focus carried over from
+    /// the sub-screen. Opened from another such screen, it replaces that one (one level).
+    /// False, with nothing changed, where `mod_screen_open` refuses, with no menu the server
+    /// opened shown (the player's own inventory, creative, the world), with an overlay over the
+    /// container screen, or when `screen_opening` cancels it. A `Vanilla` answer returns false
+    /// too, but that screen opens in place of the container screen and the menu closes with it,
+    /// as for `mod_screen_open`; the container screen then hears `screen_closing`.
+    pub fn mod_screen_open_over_menu(&mut self, mod_id: &str) -> bool {
+        if self.client.renderer.0.is_none() || self.common.player.is_none() || self.remote_loading()
+        {
+            return false;
+        }
+        self.open_mod_screen_over_menu(mod_id)
+    }
+    /// `mod_screen_open_over_menu` once a window is up: the menu kept and the transition.
+    pub fn open_mod_screen_over_menu(&mut self, mod_id: &str) -> bool {
+        let over_sub_screen = self.mod_screen_menu().is_some();
+        let kept = if over_sub_screen {
+            self.mod_screen_menu()
+        } else if self.client.screen == Screen::Inventory && !self.screen_over_playing() {
+            self.open_menu_key()
+        } else {
+            None
+        };
+        let Some(kept) = kept else {
+            return false;
+        };
+        if over_sub_screen && self.mod_screen() == Some(mod_id) {
+            return true;
+        }
+        let mut owner = mod_id;
+        if self.screen_hooks_heard() {
+            let decision = {
+                let current = self.screen_change_view(self.client.screen);
+                let new = screen_view_for_mod(&self.screen_change_view(Screen::Mod), mod_id);
+                // The covered container screen stays: only a sub-screen replaced closes.
+                self.decide_screen(&current, &new, over_sub_screen, false)
+            };
+            match decision {
+                ScreenDecision::Keep => return false,
+                ScreenDecision::Vanilla(target) => {
+                    // The vanilla screen replaces the container screen, as it replaces the one
+                    // `mod_screen_open` replaces: the screen being left hears `screen_closing`
+                    // (a sub-screen's was fired with the decision) and the menu closes with it.
+                    if !over_sub_screen {
+                        let current = self.screen_change_view(self.client.screen);
+                        self.native_screen_closing(&current);
+                    }
+                    self.close_replaced_screen_for_mod();
+                    self.open_screen_target(target);
+                    return false;
+                }
+                ScreenDecision::ModScreen(other_mod) => owner = other_mod,
+                ScreenDecision::Open => {}
+            }
+        }
+        // The sub-screen's focus is its own: nothing the covered container screen had focused
+        // (a gamepad's, a mounted widget's) stays focused under it.
+        self.pad_clear_focus();
+        self.client.native_mod_screen_menu = Some(kept);
+        self.apply_screen(Screen::Mod, Some(owner));
+        self.mod_screen() == Some(mod_id)
+    }
+    /// The menu a mod's own screen keeps open under it (`mod_screen_open_over_menu`), as its
+    /// window id and generation: only while that screen shows and the menu is still open.
+    pub fn mod_screen_menu(&self) -> Option<(i32, u64)> {
+        let kept = self
+            .client
+            .native_mod_screen_menu
+            .filter(|_| self.client.screen == Screen::Mod)?;
+        (self.open_menu_key() == Some(kept)).then_some(kept)
+    }
+    /// The menu the server opened, as its window id and the client's generation of it.
+    pub fn open_menu_key(&self) -> Option<(i32, u64)> {
+        let menu = &self.client.remote.as_ref()?.menu;
+        Some((menu.as_ref()?.0, menu.generation))
+    }
     /// Change the colours of `biome` (`minecraft:plains`) on this client: the
     /// grass, foliage (leaves, vines), dry foliage (leaf litter) and water
     /// tints, 0xRRGGBB, as its biome file and the colormaps set them. Asked

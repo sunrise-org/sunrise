@@ -46,6 +46,42 @@ pub struct OpenNativeScreen {
     pub detached: bool,
 }
 
+#[cfg(any(test, feature = "test-support"))]
+impl OpenNativeScreen {
+    /// A shown screen of mod menu `name` for the open window `window` of `generation`, keyed to
+    /// `key`, with one slot at `(8, 18)`.
+    pub fn shown_for_test(name: &str, window: i32, generation: u64, key: Pos) -> Self {
+        Self {
+            menu: OpenNativeMenu {
+                key,
+                window,
+                generation,
+                name: name.into(),
+                title: None,
+                block: None,
+                pos: None,
+                mod_type: None,
+                data: Vec::new(),
+            },
+            slot_moves: Default::default(),
+            layout_revision: 0,
+            screen: mod_api::__private::OwnedMenuScreen::new(
+                "sub_screen_test",
+                0,
+                mod_api::MenuScreen::new(mod_api::MenuScreenLayout {
+                    slots: vec![Some(mod_api::ScreenSlot {
+                        position: [8.0, 18.0],
+                        ..Default::default()
+                    })],
+                    ..Default::default()
+                }),
+            ),
+            shown: true,
+            detached: false,
+        }
+    }
+}
+
 /// The menu the screen presents: where its slots are stored, the opener,
 /// and the window's live data.
 pub struct OpenNativeMenu {

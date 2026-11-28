@@ -1,0 +1,6 @@
+sunrise-client cut_layout::game::native_hooks::base::screen_open_tests::a_mod_screen_over_a_menu_goes_through_the_public_guard_and_mod_screen_open_replaces_it lib daily child-process
+sunrise-client cut_layout::game::native_hooks::base::screen_open_tests::a_mod_screen_over_a_menu_keeps_it_and_escape_returns_to_its_screen lib daily resources
+sunrise-client cut_layout::game::native_hooks::base::screen_open_tests::a_mod_screen_over_a_mod_menus_screen_keeps_the_menu_and_its_screen lib daily resources
+sunrise-client cut_layout::game::native_hooks::base::screen_open_tests::a_screen_opening_answer_decides_what_opens_over_a_menu lib daily resources
+sunrise-client cut_layout::game::native_hooks::base::screen_open_tests::a_server_opening_another_menu_replaces_the_sub_screen lib daily resources
+sunrise-client cut_layout::game::native_hooks::base::screen_open_tests::the_menu_closing_closes_a_mod_screen_over_it lib daily resources

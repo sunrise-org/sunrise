@@ -1835,6 +1835,10 @@ pub struct ClientState {
     pub client_item_use: ClientShared<Option<native_claimed_items::ActiveClientItemUse>>,
     /// The open mod screen came from the Mods screen's Config (`IConfigScreenFactory`'s `parent`): closing it returns to Options > Mods.
     pub(in crate::game) native_mod_screen_parent: bool,
+    /// The server menu (its window id and `ClientMenu` generation) the open mod screen was
+    /// opened over with `mod_screen_open_over_menu`: the menu stays open under it, and closing
+    /// it returns to that menu's container screen (`Minecraft.setScreen(parent)`).
+    pub(in crate::game) native_mod_screen_menu: Option<(i32, u64)>,
     /// Meshed sections waiting for an upload budget (Sunrise settings).
     pub(in crate::game::client_side) pending_uploads:
         ClientOnly<Vec<sunrise_client::streaming::MeshUpload>>,
@@ -1918,6 +1922,12 @@ impl ClientState {
     #[cfg(any(test, feature = "test-support"))]
     pub fn test_debug_keys(&self) -> &sunrise_client::debug_keys::DebugKeys {
         &self.debug_keys
+    }
+
+    /// The server menu (window id, `ClientMenu` generation) the open mod screen was opened over.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn test_native_mod_screen_menu(&self) -> Option<(i32, u64)> {
+        self.native_mod_screen_menu
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -2308,6 +2318,7 @@ impl ClientState {
             occlusion: wc.occlusion,
             async_particle_culler: wc.async_particle_culler,
             native_mod_screen_parent: false,
+            native_mod_screen_menu: None,
             pending_uploads: wc.pending_uploads,
             pending_uploads_merge: wc.pending_uploads_merge,
             client_item_use: wc.client_item_use,

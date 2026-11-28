@@ -33,11 +33,17 @@ impl crate::game::ClientGame<'_> {
     pub fn client_particle_count(&self) -> usize {
         self.client.particles.0.group_count() + self.client.pickups.0.live.len()
     }
-    /// A mod's own screen closes (Escape, or `mod_screen_close`): to the Mods screen when
-    /// its Config opened it (the parent screen NeoForge's `IConfigScreenFactory` returns to).
+    /// A mod's own screen closes (Escape, or `mod_screen_close`): to the container screen of
+    /// the menu it was opened over (`mod_screen_open_over_menu`, `Minecraft.setScreen(parent)`:
+    /// the menu stays open and nothing is sent), to the Mods screen when its Config opened it
+    /// (the parent screen NeoForge's `IConfigScreenFactory` returns to), else to the game.
     pub fn close_mod_screen(&mut self) {
         if self.client.screen == Screen::Mod {
-            if self.client.native_mod_screen_parent {
+            if self.mod_screen_menu().is_some() {
+                // The sub-screen's focus does not carry over to the container screen.
+                self.pad_clear_focus();
+                self.set_screen(Screen::Inventory);
+            } else if self.client.native_mod_screen_parent {
                 self.set_screen(Screen::Options);
             } else if self.client.title.0.is_some() {
                 self.close_mod_screen_to_title();

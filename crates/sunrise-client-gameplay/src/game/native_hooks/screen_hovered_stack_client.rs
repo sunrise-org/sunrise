@@ -6,7 +6,7 @@ use sunrise_client::creative::Creative;
 impl crate::game::ClientGame<'_> {
     /// `screen_hovered_stack` at `(x, y)` in `batch`'s GUI pixels. A creative item tab's display
     /// slot shows the tab's list (`ItemPickerMenu`), scrolled to its first visible row.
-    pub(crate) fn hovered_stack_at(&self, batch: &HudBatch, x: f32, y: f32) -> Option<ItemStack> {
+    pub fn hovered_stack_at(&self, batch: &HudBatch, x: f32, y: f32) -> Option<ItemStack> {
         if !matches!(self.client.screen, Screen::Inventory | Screen::Creative) {
             return None;
         }
