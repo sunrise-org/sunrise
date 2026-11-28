@@ -67,14 +67,17 @@ fn registry_resolution_fixtures() {
                 })
             };
             let mut plan = install(&requests);
-            // Reversing and rotating covers every order for the three-request recovery cases.
-            let mut reordered = requests;
-            for _ in 0..2 {
-                reordered.reverse();
-                for _ in 0..reordered.len() {
-                    assert_eq!(install(&reordered), plan, "{name}: request order");
-                    reordered.rotate_left(1);
-                }
+            // Check all orders for batches of up to five requests; cap larger cases at 120 checks.
+            let mut order: Vec<_> = (0..requests.len()).collect();
+            for _ in 1..120 {
+                let Some(i) = order.windows(2).rposition(|pair| pair[0] < pair[1]) else {
+                    break;
+                };
+                let j = order.iter().rposition(|&index| index > order[i]).unwrap();
+                order.swap(i, j);
+                order[i + 1..].reverse();
+                let reordered: Vec<_> = order.iter().map(|&i| requests[i].clone()).collect();
+                assert_eq!(install(&reordered), plan, "{name}: request order");
             }
             for (id, words) in refusals {
                 let Some(RequestResult::Refused { reason }) = plan.requested.remove(&id) else {
