@@ -6,6 +6,12 @@
   "viscosity": 1200,
   "light_level": 7,
   "bucket_item": "fluid_full:brine_jar",
+  "camera": {
+    "overlay": "fluid_full:misc/brine_camera",
+    "fog_color": 3355647,
+    "fog_start": 0.25,
+    "fog_end": 6.0
+  },
   "world": {
     "tick_delay": 11,
     "drop_off": 2,

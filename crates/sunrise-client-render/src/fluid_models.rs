@@ -7,12 +7,19 @@
 //! gives a fluid's still sprite and item tint, and [`held_fluid`] the fluid a vanilla bucket holds.
 //! Items are drawn every frame, so their answers are resolved once per load, by the same two
 //! calls that store the looks and models ([`FluidData`]).
+//!
+//! What a camera inside a world fluid sees, its look's `camera` ([`FluidCamera`]), is kept by
+//! liquid block id for the frame's fog and overlay ([`with_camera_look`]).
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, RwLock};
 use sunrise_assets::item_model::FluidAppearance;
+pub use sunrise_mod_package::content::FluidCamera;
 use sunrise_mod_package::content::{FluidLook, FluidModel, namespaced_id};
 
 static DATA: LazyLock<RwLock<FluidData>> = LazyLock::new(|| RwLock::new(FluidData::new()));
+/// Whether some world fluid's look sets its `camera`: without one, a frame asks nothing.
+static ANY_CAMERA_LOOK: AtomicBool = AtomicBool::new(false);
 
 /// The world fluids' looks, the models mods register, and what every fluid draws as an item,
 /// resolved from both. Only [`FluidData::set_looks`] and [`FluidData::set_registered`] change
@@ -27,6 +34,9 @@ struct FluidData {
     registered: Vec<FluidModel>,
     /// [`item_appearance`]'s answers by fluid id, vanilla's included.
     items: HashMap<String, FluidAppearance>,
+    /// The world fluids' camera looks that set something, by liquid block id
+    /// ([`FluidLook::block_id`]).
+    cameras: HashMap<String, FluidCamera>,
 }
 
 impl FluidData {
@@ -36,6 +46,7 @@ impl FluidData {
             tank_looks: Vec::new(),
             registered: Vec::new(),
             items: HashMap::new(),
+            cameras: HashMap::new(),
         };
         data.reindex();
         data
@@ -45,6 +56,12 @@ impl FluidData {
             .into_iter()
             .cloned()
             .partition(|look| look.world.is_some());
+        self.cameras = self
+            .looks
+            .iter()
+            .filter(|look| look.camera.is_set())
+            .map(|look| (look.block_id(), look.camera.clone()))
+            .collect();
         self.reindex();
     }
     fn set_registered(&mut self, models: Vec<FluidModel>) {
@@ -141,9 +158,9 @@ pub struct ResolvedFluidModel {
 /// Remembers the mods' fluid looks; every resource load calls this before it reads them. The
 /// world resolves only the world fluids' ([`resolved`]); an item's fluid layer reads all of them.
 pub fn set_world_looks<'a>(looks: impl IntoIterator<Item = &'a FluidLook>) {
-    DATA.write()
-        .unwrap_or_else(|e| e.into_inner())
-        .set_looks(looks);
+    let mut data = DATA.write().unwrap_or_else(|e| e.into_inner());
+    data.set_looks(looks);
+    ANY_CAMERA_LOOK.store(!data.cameras.is_empty(), Ordering::Relaxed);
 }
 
 /// The name of the flat white sprite [`insert_flat`](crate::sprites::Sprites::insert_flat) makes
@@ -157,6 +174,39 @@ pub fn any_flat_look() -> bool {
         .iter()
         .chain(&data.tank_looks)
         .any(|look| look.sprite.is_none())
+}
+
+/// Whether some world fluid's look sets what a camera inside it sees: one load, so a frame
+/// without one asks no more.
+#[inline(always)]
+pub fn any_camera_look() -> bool {
+    ANY_CAMERA_LOOK.load(Ordering::Relaxed)
+}
+
+/// `f` of the camera look of the world fluid whose liquid block is named `block`, when its look
+/// sets one (NeoForge's `IClientFluidTypeExtensions.of(fluid)`).
+pub fn with_camera_look<R>(block: &str, f: impl FnOnce(&FluidCamera) -> R) -> Option<R> {
+    if !any_camera_look() {
+        return None;
+    }
+    data().cameras.get(block).map(f)
+}
+
+/// The resource paths of the overlay textures the world fluids' camera looks name
+/// (`assets/<namespace>/textures/<path>.png`), which the GUI atlas packs under their ids.
+pub fn camera_overlay_textures() -> Vec<String> {
+    if !any_camera_look() {
+        return Vec::new();
+    }
+    let mut paths: Vec<String> = data()
+        .cameras
+        .values()
+        .filter_map(|camera| camera.overlay.as_deref()?.split_once(':'))
+        .map(|(namespace, path)| format!("assets/{namespace}/textures/{path}.png"))
+        .collect();
+    paths.sort();
+    paths.dedup();
+    paths
 }
 
 /// Replaces the models recollected before each resource bake, including reloads.
@@ -273,6 +323,7 @@ mod tests {
             world: Some(WorldFluid::default()),
             bucket_item: None,
             measures: Default::default(),
+            camera: Default::default(),
         }
     }
     fn model(fluid: &str) -> FluidModel {
@@ -510,5 +561,35 @@ mod tests {
         );
         assert_eq!(drawn.len(), 1);
         assert_eq!(drawn[0].still, "a:block/oil");
+    }
+
+    /// #5433: a world fluid's camera look is found by its liquid block's id, the one the camera
+    /// reads; a look that sets nothing and a tank-only fluid's are not kept.
+    #[test]
+    fn camera_looks_are_kept_by_liquid_block() {
+        let camera = FluidCamera {
+            overlay: Some("a:fluid/oil/camera".into()),
+            fog_color: Some(0x10_2030),
+            fog_start: Some(0.25),
+            fog_end: Some(2.0),
+        };
+        let mut data = FluidData::new();
+        let oil = FluidLook {
+            world: Some(WorldFluid {
+                block: Some("a:oil_block".into()),
+                ..WorldFluid::default()
+            }),
+            camera: camera.clone(),
+            ..look("a:oil", None, None)
+        };
+        let tank = FluidLook {
+            world: None,
+            camera: camera.clone(),
+            ..look("a:tank", None, None)
+        };
+        data.set_looks(&[oil, tank, look("a:plain", None, None)]);
+        assert_eq!(data.cameras.len(), 1);
+        assert_eq!(data.cameras.get("a:oil_block"), Some(&camera));
+        assert_eq!(data.cameras.get("a:oil"), None);
     }
 }

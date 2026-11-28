@@ -137,6 +137,20 @@ Content {
                 viscosity: 1200,
                 light_level: 7,
             },
+            camera: FluidCamera {
+                overlay: Some(
+                    "fluid_full:misc/brine_camera",
+                ),
+                fog_color: Some(
+                    3355647,
+                ),
+                fog_start: Some(
+                    0.25,
+                ),
+                fog_end: Some(
+                    6.0,
+                ),
+            },
         },
     ],
     fluid_interactions: [],

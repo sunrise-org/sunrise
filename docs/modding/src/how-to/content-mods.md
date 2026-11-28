@@ -224,7 +224,14 @@ back into one. An item no item has, or the game's bucket of another fluid such a
 bucket of it. A fluid file may also state NeoForge's
 `FluidType` numbers, which other mods read through `FluidTypeProperties`: `temperature` and `density` (any signed
 32-bit integer, defaults 300 and 1000), `viscosity` (0 or more, default 1000) and `light_level` (0 to 15, default 0,
-whether or not the fluid has a block). A file without `world` declares no
+whether or not the fluid has a block). Its `camera` object says what a camera inside a world fluid sees, as
+NeoForge's `IClientFluidTypeExtensions` answers it: `overlay`, a texture id `namespace:path` for
+`assets/<namespace>/textures/<path>.png` (`getRenderOverlayTexture`), drawn over the first-person view while the eye is
+in the fluid as water's `textures/misc/underwater.png` is; `fog_color`, `0xRRGGBB` (`modifyFogColor`), and `fog_start`
+and `fog_end`, the fog's environmental distances in blocks, set together with the end beyond the start
+(`modifyFogRender`), both while the camera is below the fluid's surface. Each is optional: unset, the fluid keeps
+vanilla's look for a fluid that is neither water nor lava, no overlay and the open air's fog, and a fluid that sets none
+costs a frame nothing. The global `compute_fog_color` and `render_fog` hooks still see the result. A file without `world` declares no
 fluid by itself; its numbers describe the tank-only fluid a native mod declares in code with `declare_fluid`. The fluid is in no vanilla fluid tag, so entities don't
 swim in it or get pushed by it. In the world it draws its `sprite`, a block atlas texture such as `mymod:block/oil`, times
 its `tint`; with neither it looks like water, and a `tint` alone colours water's textures. A client mod's

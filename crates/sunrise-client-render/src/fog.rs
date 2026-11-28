@@ -155,6 +155,34 @@ pub fn fog_type(
         |b| &*facts.get(block(b)).name == "minecraft:powder_snow",
     )
 }
+/// The liquid block of a mod's fluid that `at` is below the surface of: the fluid in `at`'s
+/// block, under `FluidState.getHeight` there (1 below the same fluid, else its amount over 9),
+/// as NeoForge reads the fluid a camera is in for `IClientFluidTypeExtensions.modifyFogColor`
+/// and `modifyFogRender`, and the eye for `Entity.getEyeInFluidType`. Water and lava answer
+/// none: their looks are vanilla's.
+pub fn mod_fluid_at(world: &World, facts: &BlockFacts, at: [f64; 3]) -> Option<BlockStateId> {
+    let b = at.map(|c| c.floor() as i32);
+    let block = move |p: [i32; 3]| {
+        let s = facts.get(world.block(p[0], p[1], p[2]));
+        (s.fluid, &*s.name, s.fluid_level)
+    };
+    under_mod_fluid(at, block).then(|| world.block(b[0], b[1], b[2]))
+}
+/// [`mod_fluid_at`] over a block lookup: each block's fluid, name and fluid amount.
+fn under_mod_fluid<'a>(at: [f64; 3], block: impl Fn([i32; 3]) -> (Fluid, &'a str, u8)) -> bool {
+    let b = at.map(|c| c.floor() as i32);
+    let (fluid, name, amount) = block(b);
+    if fluid != Fluid::Modded {
+        return false;
+    }
+    let (above, above_name, _) = block([b[0], b[1].wrapping_add(1), b[2]]);
+    let height = if above == Fluid::Modded && above_name == name {
+        1.0
+    } else {
+        f64::from(amount) / 9.0
+    };
+    at[1] < f64::from(b[1]) + height
+}
 /// `fog_type` over a block lookup: the fluid and its camera height, and
 /// whether the block is powder snow.
 fn camera_fog_type(
@@ -925,5 +953,33 @@ mod tests {
         // Out of the water both lose it 10 a tick.
         spectator.tick(false, true);
         assert_eq!(spectator.water_vision_time, 590);
+    }
+
+    /// #5433: the camera is in a mod's fluid below its surface, the amount over 9 unless the
+    /// same fluid is above; water, another mod fluid above and the air above the surface are not.
+    #[test]
+    fn the_camera_is_in_a_mod_fluid_below_its_surface() {
+        let column = |cells: [(Fluid, &'static str, u8); 2]| {
+            move |p: [i32; 3]| match p[1] {
+                0 => cells[0],
+                1 => cells[1],
+                _ => (Fluid::None, "minecraft:air", 0),
+            }
+        };
+        let air = (Fluid::None, "minecraft:air", 0);
+        let oil = |amount| (Fluid::Modded, "a:oil", amount);
+        // A source, 8/9 of a block deep with air above.
+        assert!(under_mod_fluid([0.5, 0.88, 0.5], column([oil(8), air])));
+        assert!(!under_mod_fluid([0.5, 0.9, 0.5], column([oil(8), air])));
+        // A flowing amount of 4 is 4/9 deep.
+        assert!(under_mod_fluid([0.5, 0.4, 0.5], column([oil(4), air])));
+        assert!(!under_mod_fluid([0.5, 0.5, 0.5], column([oil(4), air])));
+        // The same fluid above fills the block; another mod's does not.
+        assert!(under_mod_fluid([0.5, 0.95, 0.5], column([oil(8), oil(8)])));
+        let tar = (Fluid::Modded, "a:tar", 8);
+        assert!(!under_mod_fluid([0.5, 0.95, 0.5], column([oil(8), tar])));
+        // Water keeps vanilla's look.
+        let water = (Fluid::Water, "minecraft:water", 8);
+        assert!(!under_mod_fluid([0.5, 0.5, 0.5], column([water, air])));
     }
 }

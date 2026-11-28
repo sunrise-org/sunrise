@@ -134,6 +134,10 @@ pub struct ScreenInputs<'a> {
     pub block_overlay: Option<String>,
     /// Eye in water: (lightmap brightness at the eye, yaw, pitch).
     pub water: Option<(f32, f32, f32)>,
+    /// The texture `water`'s overlay draws: none for water's `misc/underwater`, else the GUI
+    /// atlas name of the overlay of the mod fluid the eye is in
+    /// (`IClientFluidTypeExtensions.getRenderOverlayTexture`).
+    pub overlay_texture: Option<&'a str>,
     pub on_fire: bool,
     /// `Hud.extractCameraOverlays` draws: the full-screen blits become
     /// screen quads (the spyglass, its fills and the nausea swirl do not).
@@ -263,8 +267,10 @@ impl ScreenEffects {
             ));
         }
         out.extend_from_slice(input.custom[1]);
+        // ScreenEffectRenderer.renderFluid: water's texture, or the mod fluid's.
+        let overlay = input.overlay_texture.unwrap_or("misc/underwater");
         if let Some((brightness, yaw, pitch)) = input.water
-            && let Some(rect) = sprite("misc/underwater")
+            && let Some(rect) = sprite(overlay)
         {
             let (u, v) = (-yaw / 64.0, pitch / 64.0);
             let uv = [[u + 4.0, v + 4.0], [u, v + 4.0], [u, v], [u + 4.0, v]];
@@ -275,7 +281,7 @@ impl ScreenEffects {
                     uv,
                     rect,
                     [brightness, brightness, brightness, 0.1],
-                    texture_sampling("misc/underwater"),
+                    texture_sampling(overlay),
                 )
             });
         }
@@ -429,6 +435,7 @@ mod tests {
             partial: 0.0,
             block_overlay: None,
             water: Some((1.0, 0.0, 0.0)),
+            overlay_texture: None,
             on_fire: false,
             gui_overlays: &[crate::hud_overlays::vignette(320, 240, 1.0, 0.0)],
             custom: [&[]; 3],
@@ -484,6 +491,7 @@ mod tests {
             partial: 0.0,
             block_overlay: Some("block/stone".to_owned()),
             water: Some((1.0, 0.0, 0.0)),
+            overlay_texture: None,
             on_fire: false,
             gui_overlays: &[crate::hud_overlays::vignette(320, 240, 1.0, 0.0)],
             custom: [&[]; 3],
@@ -493,6 +501,56 @@ mod tests {
         // Only the underwater overlay tints the world; the block in the way covers it.
         let tints: Vec<_> = quads.iter().map(|q| q.world_tint).collect();
         assert_eq!(tints, [false, true, false]);
+    }
+    /// #5433: the eye in a mod fluid draws that fluid's overlay texture as water's is drawn
+    /// (`ScreenEffectRenderer.renderFluid`), with its own sampling; one the atlas lacks draws none.
+    #[test]
+    fn a_mod_fluid_overlay_draws_its_texture_as_water_does() {
+        let rect = |u0: f32| Rect {
+            u0,
+            v0: 0.0,
+            u1: u0 + 0.25,
+            v1: 1.0,
+            w: 16,
+            h: 16,
+        };
+        let sprites: HashMap<_, _> = [
+            ("misc/underwater".to_owned(), rect(0.0)),
+            ("a:fluid/oil/camera".to_owned(), rect(0.5)),
+        ]
+        .into();
+        let flags: HashMap<_, _> = [(
+            "a:fluid/oil/camera".to_owned(),
+            TextureFlags {
+                blur: true,
+                clamp: false,
+            },
+        )]
+        .into();
+        let build = |overlay_texture| {
+            ScreenEffects::default().build(&ScreenInputs {
+                sprites: &sprites,
+                flags: &flags,
+                aspect: 1.6,
+                partial: 0.0,
+                block_overlay: None,
+                water: Some((0.5, 90.0, 10.0)),
+                overlay_texture,
+                on_fire: false,
+                gui_overlays: &[],
+                custom: [&[]; 3],
+            })
+        };
+        let water = build(None);
+        let oil = build(Some("a:fluid/oil/camera"));
+        assert_eq!((water.len(), oil.len()), (1, 1));
+        assert_eq!(water[0].vertices[0].rect, [0.0, 0.0, 0.25, 1.0]);
+        assert_eq!(oil[0].vertices[0].rect, [0.5, 0.0, 0.75, 1.0]);
+        assert_eq!(oil[0].sampling, SAMPLE_BLUR);
+        assert!(oil[0].world_tint);
+        assert_eq!(oil[0].vertices[0].color, water[0].vertices[0].color);
+        assert_eq!(oil[0].vertices[2].uv, water[0].vertices[2].uv);
+        assert!(build(Some("a:missing")).is_empty());
     }
     /// A camera-space corner under a 90 degree square projection is at `(x, y)` with `w` its
     /// depth, whatever the depth, so a deeper corner of the same quad draws nearer the centre.
@@ -552,6 +610,7 @@ mod tests {
             partial: 0.0,
             block_overlay: Some("block/stone".to_owned()),
             water: None,
+            overlay_texture: None,
             on_fire: true,
             gui_overlays: &[],
             custom: [&block, &water, &fire],
