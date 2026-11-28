@@ -2270,10 +2270,11 @@ impl crate::game::CommonGame<'_> {
             }
             None => (None, None),
         };
-        let (rain, thunder) = self.world.weather.levels(1.0);
+        let levels = self.world.weather.levels(1.0);
         // Level.canHaveWeather: sky light, no ceiling and not the End.
-        let weather =
+        let can_have_weather =
             self.world.shape.sky_light && !self.world.shape.has_ceiling && self.dim != Dim::End;
+        let (raining, thundering) = weather::loot_weather(levels, can_have_weather);
         sunrise_world::loot::LootPlace {
             origin: Some(origin),
             block_entity,
@@ -2283,8 +2284,8 @@ impl crate::game::CommonGame<'_> {
                 dimension: self.dim.id().to_owned(),
                 game_time: self.world.game_time,
                 day_time: self.world.day_time,
-                raining: weather && rain > 0.2,
-                thundering: weather && thunder > 0.9,
+                raining,
+                thundering,
                 clocks: self.loot_clock_ticks(),
             }),
         }
