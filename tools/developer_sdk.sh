@@ -17,6 +17,13 @@ target=${CARGO_TARGET_DIR:-target}
 mkdir -p -- "$parent" "$target"
 CARGO_TARGET_DIR=$(cd -- "$target" && pwd)
 export CARGO_TARGET_DIR
+# An sccache wrapper's server keeps the TMPDIR it started with and outlives this script, which
+# deletes its own temporary root on exit. Start it now, with the caller's TMPDIR, so the next
+# build does not find it writing into a deleted folder (#6629). Already running: nothing changes.
+wrapper=${RUSTC_WRAPPER:-${CARGO_BUILD_RUSTC_WRAPPER:-}}
+if [[ $(basename -- "$wrapper") == sccache || $(basename -- "$wrapper") == sccache.exe ]]; then
+  "$wrapper" --start-server >/dev/null 2>&1 || true
+fi
 work=$(mktemp -d "$(cd -- "$parent" && pwd)/.developer-sdk.XXXXXX")
 snapshot="$work/checkout"
 cleanup() {
