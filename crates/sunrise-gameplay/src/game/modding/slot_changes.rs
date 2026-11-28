@@ -1273,6 +1273,7 @@ mod tests {
         let (listening, silent) = (layout(LISTENING_MENU), layout(SILENT_MENU));
         let open_at = |layout: &'static ModMenuType, pos: super::Pos| OpenMenu {
             window: 1,
+            active_chest: None,
             kind: 0,
             registry_id: layout.id.into(),
             pos: Some(pos),

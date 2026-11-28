@@ -1012,6 +1012,7 @@ mod tests {
         }));
         let block_menu = |pos: crate::block_entities::Pos| Menu {
             window: 1,
+            active_chest: None,
             kind: 0,
             registry_id: layout.id.into(),
             pos: Some(pos),
@@ -1034,6 +1035,7 @@ mod tests {
         };
         let owned_menu = || Menu {
             window: 2,
+            active_chest: None,
             kind: 0,
             registry_id: layout.id.into(),
             pos: None,

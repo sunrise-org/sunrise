@@ -482,6 +482,7 @@ impl Hub {
             });
             g.menu = Some(Menu {
                 window,
+                active_chest: None,
                 kind,
                 registry_id: menu_kind.into(),
                 pos,

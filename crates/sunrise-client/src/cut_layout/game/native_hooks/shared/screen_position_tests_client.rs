@@ -831,6 +831,7 @@ fn stock_menu_data_sync_round_trips_above_255_and_enforces_signed_short_boundary
                 guest.dimension = "minecraft:overworld".into();
                 guest.menu = Some(Menu {
                     window: 1,
+                    active_chest: None,
                     kind: 2,
                     pos: Some(pos),
                     slots: Slots::Block(pos),
