@@ -4661,6 +4661,9 @@ mod lifecycle_tests;
 mod buffer_blend_tests;
 
 #[cfg(test)]
+mod blend_key_tests;
+
+#[cfg(test)]
 mod material_variant_tests;
 
 #[cfg(test)]
