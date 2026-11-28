@@ -833,25 +833,25 @@ mod dungeon_spawner_data_tests {
             ("minecraft:creeper".to_owned(), 3),
         ])
         .unwrap();
-        let mut blazes = 0;
-        let mut creepers = 0;
-        for seed in 0..64 {
+        // Independently computed Java LCG `Random.nextInt(4)` draws:
+        // seed 4096 -> 0 (blaze), 6144 -> 1 (creeper), 0 -> 2 (creeper), 256 -> 3 (creeper).
+        for (seed, expected_bucket, expected_mob) in [
+            (4096i64, 0, "minecraft:blaze"),
+            (6144, 1, "minecraft:creeper"),
+            (0, 2, "minecraft:creeper"),
+            (256, 3, "minecraft:creeper"),
+        ] {
             let mut expected_rng = LegacyRandom::new(seed);
+            assert_eq!(expected_rng.next_int_bound(4).unwrap(), expected_bucket);
             let mut actual_rng = LegacyRandom::new(seed);
-            let expected = weighted
-                .sample(&mut expected_rng)
-                .unwrap()
-                .map(String::as_str);
             let actual = select_monster_room_mob(Some(&weighted), &mut actual_rng).unwrap();
-            assert_eq!(actual, expected, "seed {seed}");
-            assert_eq!(actual_rng.next_long(), expected_rng.next_long());
-            match actual {
-                Some("minecraft:blaze") => blazes += 1,
-                Some("minecraft:creeper") => creepers += 1,
-                other => panic!("unexpected mob {other:?}"),
-            }
+            assert_eq!(actual, Some(expected_mob), "seed {seed}");
+            assert_eq!(
+                actual_rng.next_long(),
+                expected_rng.next_long(),
+                "post-draw RNG state drifted for seed {seed}"
+            );
         }
-        assert!(blazes > 0 && creepers > blazes);
 
         // Empty / zero-weight list never panics and consumes no draw.
         let empty = OptionalWeightedList::new(vec![]).unwrap();
