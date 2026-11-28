@@ -99,5 +99,26 @@ impl super::HudRenderer {
                 *previous = state;
             }
         }
+        // OptiFine custom animations, a tick at a time, into the shared atlas.
+        if let Some(texture) = self.atlas_texture.as_ref() {
+            self.custom_animations.advance(tick, |area, pixels| {
+                uploads.texture(
+                    encoder,
+                    wgpu::TexelCopyTextureInfo {
+                        texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d {
+                            x: area.x,
+                            y: area.y,
+                            z: 0,
+                        },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    area.w,
+                    area.h,
+                    pixels,
+                );
+            });
+        }
     }
 }

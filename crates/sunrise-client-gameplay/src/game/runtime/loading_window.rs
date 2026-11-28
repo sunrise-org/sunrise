@@ -111,6 +111,7 @@ pub(in crate::game) fn build_renderer(
     renderer.pack_hdr = shader_pack.hdr;
     renderer.pack_hdr_pick = shader_pack.pick;
     renderer.hud.sprite_animations = atlas.renderer_animations();
+    renderer.hud.custom_animations = atlas.renderer_custom_animations();
     let gui_text = renderer.hud.set_text_shader(&renderer.device, {
         let text = &atlas.text_shaders;
         (text.gui.as_deref()).map(|p| (p, &text.expressions.gui[..]))
@@ -214,6 +215,7 @@ pub(in crate::game) fn loading_renderer(
     ))?;
     if let Some(atlas) = atlas {
         renderer.hud.sprite_animations = atlas.renderer_animations();
+        renderer.hud.custom_animations = atlas.renderer_custom_animations();
     }
     Ok(renderer)
 }

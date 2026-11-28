@@ -20,6 +20,8 @@ pub struct HudRenderer {
         crate::sprites::SpriteAnimation,
         (usize, usize, u32),
     )>,
+    /// The packs' OptiFine custom animations, uploaded into `atlas_texture` as they turn.
+    pub custom_animations: super::custom_animations::Running,
     /// The shared atlas texture, for run-time glyph uploads.
     pub atlas_texture: Option<wgpu::Texture>,
     pub(super) pipeline: Pipeline,
@@ -351,6 +353,7 @@ impl HudRenderer {
             dynamic_missing: None,
             atlas_texture: None,
             sprite_animations: Vec::new(),
+            custom_animations: Default::default(),
             pipeline,
             picture_pipeline,
             invert_pipeline,

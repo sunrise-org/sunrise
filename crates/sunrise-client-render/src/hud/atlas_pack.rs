@@ -441,6 +441,11 @@ impl HudAtlas {
             &mut pixels,
             size,
         )?;
+        let custom_animations = if full {
+            super::custom_animations::build(root, &placed_sprites, &mut pixels, size)
+        } else {
+            Vec::new()
+        };
         let (registered, registered_owners, registered_pages) = stitch_registered(
             registered_images,
             root,
@@ -540,6 +545,7 @@ impl HudAtlas {
             flags,
             sprite_animations,
             sprite_animation_placements,
+            custom_animations,
             glint,
             glint_armor,
             text_shaders: Default::default(),
