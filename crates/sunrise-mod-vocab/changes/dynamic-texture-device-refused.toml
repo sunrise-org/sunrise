@@ -1,0 +1,3 @@
+ids = ["type:DynamicTextureError.DeviceRefused", "method:prelude::ClientRenderClientHost::create_dynamic_texture"]
+why = "#5991: create_dynamic_texture makes the GPU texture within the call. A device refusal (out of video memory, or a limit the device reported wrongly) is the call's DynamicTextureError::DeviceRefused, and the id is not taken, so it can be created again. Before, the call answered Ok, the texture drew as the missing texture and the id stayed taken."
+migrate = "Match DynamicTextureError::DeviceRefused where create_dynamic_texture's errors are handled; DynamicTextureError is non_exhaustive, so a wildcard arm already covers it."

@@ -1,8 +1,9 @@
 //! `ClientRenderClientHost::create_dynamic_texture`, `update_dynamic_texture`,
 //! `update_dynamic_texture_region` and `release_dynamic_texture`: a client mod's dynamic textures
 //! (vanilla's `DynamicTexture` in the `TextureManager`), made for the mod whose hook or part is
-//! running (`crash::current_native_mod`). Each call is checked here and queued as a command the
-//! render thread applies, in order, before the next frame (`hud::dynamic_textures`).
+//! running (`crash::current_native_mod`). Each call is checked here. A create makes its GPU
+//! texture within the call; the others are queued as commands the render thread applies, in
+//! order, before the next frame (`hud::dynamic_textures`).
 use crate::game::ClientGame;
 use mod_api::{DynamicTextureError, Identifier};
 use sunrise_client::hud::dynamic_textures::Command;
@@ -40,9 +41,23 @@ impl ClientGame<'_> {
     ) -> Result<(), DynamicTextureError> {
         self.bind_dynamic_textures();
         let owner = Self::dynamic_texture_owner(id)?;
-        self.client
+        let client = &mut self.client;
+        let gpu = client
+            .mod_gpu
+            .as_ref()
+            .ok_or(DynamicTextureError::Unavailable)?;
+        let size = [width, height];
+        // The GPU texture is made within the call, so a device refusal is the call's answer
+        // and leaves the id free.
+        client
             .dynamic_textures
-            .create(owner, id, [width, height], mip_levels, rgba)
+            .create(owner, id, size, mip_levels, rgba, |handle| {
+                gpu.create_dynamic_texture(handle, size, mip_levels, rgba)
+                    .map_err(|error| {
+                        log::warn!("dynamic texture {id} was not made: {error}");
+                        DynamicTextureError::DeviceRefused
+                    })
+            })
     }
     /// The calling mod's texture `id` given new pixels.
     pub fn update_dynamic_texture(

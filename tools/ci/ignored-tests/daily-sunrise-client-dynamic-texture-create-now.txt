@@ -1,0 +1,2 @@
+# create_dynamic_texture allocates within its call (#5991): a device refusal is DeviceRefused and leaves the id free.
+sunrise-client cut_layout::game::native_dynamic_textures_tests::a_create_the_device_refuses_is_its_error_and_leaves_the_id_free lib daily resources # SUNRISE_TEST_RESOURCES and software Vulkan required.

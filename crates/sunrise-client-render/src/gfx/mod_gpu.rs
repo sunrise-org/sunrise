@@ -213,6 +213,19 @@ impl ModGpuResources {
         self.render_capabilities.multi_draw_indirect_count
     }
 
+    /// Make dynamic texture `handle` on this device now, level 0 from `rgba`
+    /// ([`crate::hud::dynamic_textures::Store::create_now`]).
+    pub fn create_dynamic_texture(
+        &self,
+        handle: u64,
+        size: [u32; 2],
+        mip_levels: u32,
+        rgba: &[u8],
+    ) -> Result<(), wgpu::Error> {
+        self.dynamic_textures
+            .create_now(&self.device, &self.queue, handle, size, mip_levels, rgba)
+    }
+
     /// The largest inline uniform and texel-buffer payloads a mod's set-1 draw may bind: the
     /// device's `max_uniform_buffer_binding_size` and `max_storage_buffer_binding_size`, each
     /// capped by `max_buffer_size`.

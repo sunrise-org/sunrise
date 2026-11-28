@@ -220,7 +220,9 @@ pub(in crate::game) mod tests {
         let mut dynamic = DynamicTextures::default();
         dynamic.bind(1, 128);
         let id = Identifier::parse("demo:star").unwrap();
-        dynamic.create("demo", &id, [2, 2], 1, &[0; 16]).unwrap();
+        dynamic
+            .create("demo", &id, [2, 2], 1, &[0; 16], |_| Ok(()))
+            .unwrap();
         let (handle, size) = dynamic.get(&id).unwrap();
         let source = Text::literal("é:ok: !");
         let mods = vec![ModEntry::new(

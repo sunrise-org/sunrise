@@ -102,9 +102,9 @@ pub trait ClientRenderClientHost {
     /// manifest namespaces or a content package it serves via `served_by`), `BadSize` for a side
     /// of 0 or pixels that are not `width * height * 4` bytes, `TooLarge` for a side past the
     /// device's largest 2D texture, `BadMipLevels` for `mip_levels` of 0 or past the full
-    /// chain, and `NameTaken` for an id that already names a dynamic texture. Running out of
-    /// GPU memory is not seen here: the frame that makes the texture logs it, and the id draws
-    /// vanilla's missing texture.
+    /// chain, `NameTaken` for an id that already names a dynamic texture, and `DeviceRefused`
+    /// when the graphics device refuses the texture: it is made within the call, so running out
+    /// of GPU memory is this call's answer, and the id stays free to create again.
     fn create_dynamic_texture(
         &mut self,
         id: &Identifier,

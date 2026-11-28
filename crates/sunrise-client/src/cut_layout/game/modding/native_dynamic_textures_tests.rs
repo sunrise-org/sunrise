@@ -180,11 +180,11 @@ fn a_foreign_id_is_not_owned_before_the_resource_stack_is_asked() {
 }
 
 /// A create the device refuses (a side one texel past its limit, which a table bound to a larger
-/// `max_side` lets through) leaves the id in the client table with no GPU texture: it draws
-/// vanilla's missing texture, and a later update of another size creates it again.
+/// `max_side` lets through) is the call's `DeviceRefused`, made within the call (#5991): the id
+/// stays free, so an update reads it as unknown and the same id is created again, and draws.
 #[test]
 #[ignore = "daily"]
-fn a_create_the_device_refuses_draws_the_missing_texture() {
+fn a_create_the_device_refuses_is_its_error_and_leaves_the_id_free() {
     let mods = vec![ModEntry::new("api-only", Box::new(ApiOnly))];
     with_mods(mods.into(), || {
         crate::game::server_side::native_entity_refs::tests::with_client_game(|game| {
@@ -193,22 +193,27 @@ fn a_create_the_device_refuses_draws_the_missing_texture() {
             let (store, limit) = (renderer.hud.dynamic().id(), renderer.max_texture_side());
             let id = Identifier::parse("api-only:dynamic/too-wide").unwrap();
             let wide = limit + 1;
-            // The table believes the device is larger than it is; the frame's own bind
-            // reads the real limit again, after this create is queued.
+            // With the renderer lent out (as during a frame) the table keeps the bind it was
+            // given: told the device is larger than it is, it lets the side through and the
+            // device itself refuses, within the call.
+            let renderer = game.client.renderer.0.take();
             game.client.dynamic_textures.bind(store, wide);
-            game.client
-                .dynamic_textures
-                .create("api-only", &id, [wide, 1], 1, &GREEN.repeat(wide as usize))
-                .unwrap();
-            let refused = frame(game, &[(&id, [16.0, 16.0, 32.0, 32.0], [wide as i32, 1])]);
-            let frames = render_hud_frames(&[&refused], &game.client.gui.atlas, SIZE)
-                .expect("software Vulkan draw");
-            // `generateMissingImage`: black top left, magenta top right.
-            assert_eq!(pixel(&frames[0], 20, 20), BLACK);
-            assert_eq!(pixel(&frames[0], 44, 20), [248, 0, 248, 255]);
-            // A different size creates it again, and the texture then draws.
+            let pixels = GREEN.repeat(wide as usize);
+            assert_eq!(
+                as_mod("api-only", || game
+                    .create_dynamic_texture(&id, wide, 1, 1, &pixels)),
+                Err(DynamicTextureError::DeviceRefused)
+            );
+            game.client.renderer.0 = renderer;
+            assert_eq!(
+                as_mod("api-only", || {
+                    game.update_dynamic_texture(&id, 4, 4, &GREEN.repeat(16))
+                }),
+                Err(DynamicTextureError::Unknown),
+                "a refused create leaves no id"
+            );
             as_mod("api-only", || {
-                game.update_dynamic_texture(&id, 4, 4, &GREEN.repeat(16))
+                game.create_dynamic_texture(&id, 4, 4, 1, &GREEN.repeat(16))
             })
             .unwrap();
             let made = frame(game, &[(&id, [16.0, 16.0, 32.0, 32.0], [4, 4])]);

@@ -7,9 +7,11 @@
 //!
 //! Two halves meet through [`Command`]s. [`DynamicTextures`] is the client thread's: which ids
 //! exist, who owns them and how large they are, with every refusal decided there, and no pixels
-//! kept. Each accepted call queues a command; a frame takes the queue
-//! ([`DynamicTextures::take_commands`]) in the batch, and the render thread applies the commands
-//! in order before the frame ([`Store::apply`]), with no merging. [`Store`] holds the GPU
+//! kept. A create makes its GPU texture within the call ([`Store::create_now`]), so a device
+//! refusal is the call's answer. Every other accepted call (a write, a resize, a release) queues
+//! a command; a frame takes the queue ([`DynamicTextures::take_commands`]) in the batch, and the
+//! render thread applies the commands in order before the frame ([`Store::apply`]), with no
+//! merging. [`Store`] holds the GPU
 //! textures. It is shared by the renderers that follow one another on the same device, so a
 //! resource reload keeps every texture; a new device starts with an empty one, which
 //! [`DynamicTextures::bind`] notices and answers by forgetting every id.
@@ -27,8 +29,9 @@ use sunrise_core::identifier::Identifier;
 /// `handle` names a texture for as long as its id lives, whatever size it is re-created at.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
-    /// A new texture of `mip_levels` levels, or one replacing the handle's (a different size),
-    /// with `rgba` in level 0 and the other levels empty.
+    /// A texture replacing the handle's at a different size (`update_dynamic_texture`), of
+    /// `mip_levels` levels, with `rgba` in level 0 and the other levels empty. A new id's
+    /// texture is made within its call instead ([`Store::create_now`]).
     Create {
         handle: u64,
         size: [u32; 2],
@@ -122,7 +125,9 @@ impl DynamicTextures {
     }
 
     /// Mod `owner` creates texture `id` of `size` and `mip_levels` levels, level 0 from `rgba`.
-    /// Every refusal comes before the pixels are copied, and changes nothing.
+    /// Once the call is checked, `allocate` makes the GPU texture under its new handle within the
+    /// call ([`Store::create_now`]); the id is taken only when it succeeds. Every refusal,
+    /// `allocate`'s included, changes nothing.
     pub fn create(
         &mut self,
         owner: &str,
@@ -130,6 +135,7 @@ impl DynamicTextures {
         size: [u32; 2],
         mip_levels: u32,
         rgba: &[u8],
+        allocate: impl FnOnce(u64) -> Result<(), DynamicTextureError>,
     ) -> Result<(), DynamicTextureError> {
         let (_, max) = self.bound.ok_or(DynamicTextureError::Unavailable)?;
         checked(size, rgba.len(), max)?;
@@ -140,12 +146,7 @@ impl DynamicTextures {
             return Err(DynamicTextureError::NameTaken);
         }
         let handle = next_id();
-        self.queue.push(Command::Create {
-            handle,
-            size,
-            mip_levels,
-            rgba: rgba.to_vec(),
-        });
+        allocate(handle)?;
         self.images.insert(
             id.clone(),
             Image {
@@ -330,6 +331,36 @@ impl DynamicTextures {
     }
 }
 
+/// A dynamic texture's GPU texture, or the device's refusal caught in its error scopes.
+fn make_texture(
+    device: &wgpu::Device,
+    size: [u32; 2],
+    mip_levels: u32,
+) -> Result<wgpu::Texture, wgpu::Error> {
+    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let out_of_memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Dynamic texture"),
+        size: wgpu::Extent3d {
+            width: size[0],
+            height: size[1],
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: mip_levels,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_DST
+            | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    match pollster::block_on(out_of_memory.pop()).or(pollster::block_on(validation.pop())) {
+        Some(error) => Err(error),
+        None => Ok(texture),
+    }
+}
+
 /// The render thread's textures, by handle.
 #[derive(Clone)]
 pub struct Store(Arc<StoreInner>);
@@ -399,8 +430,8 @@ impl Store {
 
     /// `DynamicTexture.dumpContents` of each texture in `textures` (`F3 + S`): read back from the
     /// GPU and written to `dir` as a PNG named after its id with `/` and `:` as `_`
-    /// (`Identifier.toDebugFileName`). A texture with no GPU texture (its creation failed, or its
-    /// commands have not reached the render thread yet) is skipped. Returns the files written.
+    /// (`Identifier.toDebugFileName`). A texture with no GPU texture (a resize the device refused
+    /// on the render thread) is skipped. Returns the files written.
     pub fn dump_contents<'a>(
         &self,
         device: &wgpu::Device,
@@ -471,6 +502,46 @@ impl Store {
         Ok(written)
     }
 
+    /// Make texture `handle` of `size` and `mip_levels` levels now, on the calling thread, with
+    /// level 0 written from `rgba` through `queue`: what `create_dynamic_texture` does within
+    /// the call. A device refusal (out of video memory, or a limit it reported wrongly) is
+    /// returned and leaves no GPU texture.
+    pub fn create_now(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        handle: u64,
+        size: [u32; 2],
+        mip_levels: u32,
+        rgba: &[u8],
+    ) -> Result<(), wgpu::Error> {
+        let texture = make_texture(device, size, mip_levels)?;
+        queue.write_texture(
+            texture.as_image_copy(),
+            rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(size[0] * 4),
+                rows_per_image: Some(size[1]),
+            },
+            wgpu::Extent3d {
+                width: size[0],
+                height: size[1],
+                depth_or_array_layers: 1,
+            },
+        );
+        let view = texture.create_view(&Default::default());
+        self.lock().insert(
+            handle,
+            Gpu {
+                texture,
+                view,
+                revision: next_id(),
+            },
+        );
+        Ok(())
+    }
+
     /// Apply `commands` in order into `encoder`, ahead of the frame's draws. `atlas` is the HUD
     /// atlas texture a `CopyToAtlas` writes. A command for a handle that no longer exists, or
     /// outside its texture, is skipped: the client thread only sends what it checked.
@@ -491,37 +562,20 @@ impl Store {
                     mip_levels,
                     rgba,
                 } => {
-                    // The sides were checked against the device's limit when the call was made. A
-                    // failure the device still reports is logged and leaves no GPU texture, while the
-                    // client table keeps the id: it draws vanilla's missing texture
-                    // (`prepare_dynamic` draws it for a handle with no view), as an id released after
-                    // its draw was submitted does (`TextureManager.release`). A later
-                    // `update_dynamic_texture` of a different size creates it again.
-                    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
-                    let out_of_memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-                    let texture = device.create_texture(&wgpu::TextureDescriptor {
-                        label: Some("Dynamic texture"),
-                        size: wgpu::Extent3d {
-                            width: size[0],
-                            height: size[1],
-                            depth_or_array_layers: 1,
-                        },
-                        mip_level_count: *mip_levels,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: wgpu::TextureFormat::Rgba8Unorm,
-                        usage: wgpu::TextureUsages::TEXTURE_BINDING
-                            | wgpu::TextureUsages::COPY_DST
-                            | wgpu::TextureUsages::COPY_SRC,
-                        view_formats: &[],
-                    });
-                    let failed = pollster::block_on(out_of_memory.pop())
-                        .or(pollster::block_on(validation.pop()));
-                    if let Some(error) = failed {
-                        log::warn!("dynamic texture {handle} was not created: {error}");
-                        textures.remove(handle);
-                        continue;
-                    }
+                    // A resize: the sides were checked against the device's limit when the call
+                    // was made. A failure the device still reports is logged and leaves no GPU
+                    // texture, while the client table keeps the id: it draws vanilla's missing
+                    // texture (`prepare_dynamic` draws it for a handle with no view), as an id
+                    // released after its draw was submitted does (`TextureManager.release`). A
+                    // later `update_dynamic_texture` of a different size makes it again.
+                    let texture = match make_texture(device, *size, *mip_levels) {
+                        Ok(texture) => texture,
+                        Err(error) => {
+                            log::warn!("dynamic texture {handle} was not made again: {error}");
+                            textures.remove(handle);
+                            continue;
+                        }
+                    };
                     uploads.texture(encoder, texture.as_image_copy(), size[0], size[1], rgba);
                     let view = texture.create_view(&Default::default());
                     textures.insert(
@@ -612,6 +666,11 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An allocation that succeeds, for the table's own checks.
+    fn ok(_: u64) -> Result<(), DynamicTextureError> {
+        Ok(())
+    }
     use DynamicTextureError::*;
 
     fn id(text: &str) -> Identifier {
@@ -632,8 +691,9 @@ mod tests {
     }
 
     /// `F3 + S` reads each live texture back from its own GPU texture and writes it under its
-    /// id's debug file name (`DynamicTexture.dumpContents`); one the render thread has not made
-    /// yet is skipped.
+    /// id's debug file name (`DynamicTexture.dumpContents`); one with no GPU texture is skipped.
+    /// A create makes its GPU texture within the call (`Store::create_now`, #5991), and one the
+    /// device refuses is the call's error with no texture and no id left behind.
     #[test]
     #[ignore = "daily"]
     fn a_dump_writes_each_live_texture_from_the_gpu() {
@@ -644,25 +704,34 @@ mod tests {
         };
         let store = Store::default();
         let mut textures = DynamicTextures::default();
-        textures.bind(store.id(), 128);
+        // A table told the device takes any side, so the device itself refuses below.
+        textures.bind(store.id(), u32::MAX);
+        let allocate = |size, rgba: &[u8]| {
+            let store = &store;
+            let (device, queue) = (&device, &queue);
+            let rgba = rgba.to_vec();
+            move |handle| {
+                store
+                    .create_now(device, queue, handle, size, 1, &rgba)
+                    .map_err(|_| DynamicTextureError::DeviceRefused)
+            }
+        };
         // Three pixels wide: each row is padded to 256 bytes on the GPU.
         let rgba: Vec<u8> = (0..3 * 2 * 4).map(|i| (i * 9) as u8).collect();
+        let icon = id("mod:dyn/icon");
         textures
-            .create("mod", &id("mod:dyn/icon"), [3, 2], 1, &rgba)
+            .create("mod", &icon, [3, 2], 1, &rgba, allocate([3, 2], &rgba))
             .unwrap();
-        let mut uploads = crate::gfx::upload::Uploads::new(&device);
-        let mut encoder = device.create_command_encoder(&Default::default());
-        store.apply(
-            &device,
-            &mut uploads,
-            &mut encoder,
-            None,
-            &commands(&mut textures),
+        let wide = [device.limits().max_texture_dimension_2d + 1, 1];
+        let pixels = vec![0; wide[0] as usize * 4];
+        let refused = id("mod:dyn/wide");
+        assert_eq!(
+            textures.create("mod", &refused, wide, 1, &pixels, allocate(wide, &pixels)),
+            Err(DynamicTextureError::DeviceRefused)
         );
-        uploads.finish(&encoder);
-        queue.submit([encoder.finish()]);
+        assert_eq!(textures.get(&refused), None, "a refused id stays free");
         textures
-            .create("mod", &id("mod:pending"), [1, 1], 1, &[0; 4])
+            .create("mod", &id("mod:pending"), [1, 1], 1, &[0; 4], ok)
             .unwrap();
 
         let dir = tempfile::tempdir().unwrap();
@@ -685,7 +754,7 @@ mod tests {
         let mut textures = DynamicTextures::default();
         let a = id("mod:a");
         assert_eq!(
-            textures.create("mod", &a, [1, 1], 1, &[0; 4]),
+            textures.create("mod", &a, [1, 1], 1, &[0; 4], ok),
             Err(Unavailable)
         );
         assert_eq!(textures.release("mod", &a), Err(Unavailable));
@@ -696,15 +765,15 @@ mod tests {
         let mut textures = textures();
         let a = id("mod:a");
         assert_eq!(
-            textures.create("mod", &a, [2, 2], 1, &[0; 15]),
+            textures.create("mod", &a, [2, 2], 1, &[0; 15], ok),
             Err(BadSize)
         );
         assert_eq!(
-            textures.create("mod", &a, [2, 2], 1, &[0; 17]),
+            textures.create("mod", &a, [2, 2], 1, &[0; 17], ok),
             Err(BadSize)
         );
-        assert_eq!(textures.create("mod", &a, [0, 4], 1, &[]), Err(BadSize));
-        assert_eq!(textures.create("mod", &a, [4, 0], 1, &[]), Err(BadSize));
+        assert_eq!(textures.create("mod", &a, [0, 4], 1, &[], ok), Err(BadSize));
+        assert_eq!(textures.create("mod", &a, [4, 0], 1, &[], ok), Err(BadSize));
         assert!(commands(&mut textures).is_empty());
         assert_eq!(textures.get(&a), None);
     }
@@ -714,28 +783,34 @@ mod tests {
         let mut textures = textures();
         let a = id("mod:a");
         assert_eq!(
-            textures.create("mod", &a, [129, 1], 1, &[0; 516]),
+            textures.create("mod", &a, [129, 1], 1, &[0; 516], ok),
             Err(TooLarge)
         );
-        assert_eq!(textures.create("mod", &a, [1, 129], 1, &[]), Err(TooLarge));
         assert_eq!(
-            textures.create("mod", &a, [u32::MAX, u32::MAX], 1, &[]),
+            textures.create("mod", &a, [1, 129], 1, &[], ok),
             Err(TooLarge)
         );
-        assert_eq!(textures.create("mod", &a, [128, 1], 1, &[0; 512]), Ok(()));
+        assert_eq!(
+            textures.create("mod", &a, [u32::MAX, u32::MAX], 1, &[], ok),
+            Err(TooLarge)
+        );
+        assert_eq!(
+            textures.create("mod", &a, [128, 1], 1, &[0; 512], ok),
+            Ok(())
+        );
     }
 
     #[test]
     fn a_name_is_taken_unknown_or_another_mods() {
         let mut textures = textures();
         let a = id("mod:a");
-        textures.create("mod", &a, [1, 1], 1, &[0; 4]).unwrap();
+        textures.create("mod", &a, [1, 1], 1, &[0; 4], ok).unwrap();
         assert_eq!(
-            textures.create("mod", &a, [1, 1], 1, &[0; 4]),
+            textures.create("mod", &a, [1, 1], 1, &[0; 4], ok),
             Err(NameTaken)
         );
         assert_eq!(
-            textures.create("other", &a, [1, 1], 1, &[0; 4]),
+            textures.create("other", &a, [1, 1], 1, &[0; 4], ok),
             Err(NameTaken)
         );
         let missing = id("mod:missing");
@@ -757,7 +832,7 @@ mod tests {
     fn a_region_outside_the_texture_is_refused_by_name() {
         let mut textures = textures();
         let a = id("mod:a");
-        textures.create("mod", &a, [4, 4], 1, &[0; 64]).unwrap();
+        textures.create("mod", &a, [4, 4], 1, &[0; 64], ok).unwrap();
         commands(&mut textures);
         let region = |textures: &mut DynamicTextures, origin, size: [u32; 2]| {
             let rgba = vec![0; (size[0] * size[1] * 4) as usize];
@@ -786,12 +861,12 @@ mod tests {
         let base = vec![0; 8 * 4 * 4];
         for bad in [0, 5, u32::MAX] {
             assert_eq!(
-                textures.create("mod", &a, [8, 4], bad, &base),
+                textures.create("mod", &a, [8, 4], bad, &base, ok),
                 Err(BadMipLevels)
             );
         }
         assert_eq!(textures.get(&a), None);
-        assert_eq!(textures.create("mod", &a, [8, 4], 4, &base), Ok(()));
+        assert_eq!(textures.create("mod", &a, [8, 4], 4, &base, ok), Ok(()));
         commands(&mut textures);
         let write = |textures: &mut DynamicTextures, level, origin, size: [u32; 2]| {
             let rgba = vec![0; (size[0] * size[1] * 4) as usize];
@@ -828,7 +903,9 @@ mod tests {
     fn a_new_size_keeps_the_mip_levels_when_its_chain_holds_them() {
         let mut textures = textures();
         let a = id("mod:a");
-        textures.create("mod", &a, [8, 8], 3, &[0; 256]).unwrap();
+        textures
+            .create("mod", &a, [8, 8], 3, &[0; 256], ok)
+            .unwrap();
         commands(&mut textures);
         assert_eq!(
             textures.update("mod", &a, [2, 2], &[0; 16]),
@@ -853,8 +930,16 @@ mod tests {
     fn calls_queue_in_order_and_a_new_size_recreates_the_same_handle() {
         let mut textures = textures();
         let a = id("mod:a");
-        textures.create("mod", &a, [2, 2], 1, &[1; 16]).unwrap();
+        // The create is made within its call (its allocation), not queued.
+        let mut allocated = None;
+        textures
+            .create("mod", &a, [2, 2], 1, &[1; 16], |handle| {
+                allocated = Some(handle);
+                Ok(())
+            })
+            .unwrap();
         let (handle, _) = textures.get(&a).unwrap();
+        assert_eq!(allocated, Some(handle));
         textures
             .update_region("mod", &a, 0, [1, 1], [1, 1], &[2; 4])
             .unwrap();
@@ -864,12 +949,6 @@ mod tests {
         assert_eq!(
             commands(&mut textures),
             [
-                Command::Create {
-                    handle,
-                    size: [2, 2],
-                    mip_levels: 1,
-                    rgba: vec![1; 16]
-                },
                 Command::Write {
                     handle,
                     mip_level: 0,
@@ -897,12 +976,36 @@ mod tests {
         assert!(commands(&mut textures).is_empty());
     }
 
+    /// A create the device refuses (#5991) is the call's `DeviceRefused`, and the id stays free:
+    /// an update reads it as unknown, and the same id can be created again.
+    #[test]
+    fn a_refused_allocation_leaves_the_id_free() {
+        let mut textures = textures();
+        let a = id("mod:a");
+        let revision = textures.geometry_revision();
+        assert_eq!(
+            textures.create("mod", &a, [2, 2], 1, &[1; 16], |_| {
+                Err(DynamicTextureError::DeviceRefused)
+            }),
+            Err(DynamicTextureError::DeviceRefused)
+        );
+        assert_eq!(textures.get(&a), None);
+        assert_eq!(textures.geometry_revision(), revision);
+        assert_eq!(
+            textures.update("mod", &a, [2, 2], &[3; 16]),
+            Err(DynamicTextureError::Unknown)
+        );
+        assert!(commands(&mut textures).is_empty());
+        assert_eq!(textures.create("mod", &a, [2, 2], 1, &[1; 16], ok), Ok(()));
+        assert!(textures.get(&a).is_some());
+    }
+
     #[test]
     fn unloading_a_mod_releases_only_its_textures() {
         let mut textures = textures();
         let (a, b) = (id("one:a"), id("two:b"));
-        textures.create("one", &a, [1, 1], 1, &[0; 4]).unwrap();
-        textures.create("two", &b, [1, 1], 1, &[0; 4]).unwrap();
+        textures.create("one", &a, [1, 1], 1, &[0; 4], ok).unwrap();
+        textures.create("two", &b, [1, 1], 1, &[0; 4], ok).unwrap();
         let (handle, _) = textures.get(&a).unwrap();
         commands(&mut textures);
         textures.release_owned_by("one");
@@ -915,7 +1018,7 @@ mod tests {
     fn a_new_device_forgets_every_texture() {
         let mut textures = textures();
         let a = id("mod:a");
-        textures.create("mod", &a, [1, 1], 1, &[0; 4]).unwrap();
+        textures.create("mod", &a, [1, 1], 1, &[0; 4], ok).unwrap();
         textures.bind(1, 128);
         assert!(textures.get(&a).is_some());
         textures.bind(2, 64);
@@ -929,10 +1032,10 @@ mod tests {
         let mut textures = textures();
         let (skin, small) = (id("mod:skin"), id("mod:small"));
         textures
-            .create("mod", &skin, [64, 64], 1, &[0; 64 * 64 * 4])
+            .create("mod", &skin, [64, 64], 1, &[0; 64 * 64 * 4], ok)
             .unwrap();
         textures
-            .create("mod", &small, [32, 64], 1, &[0; 32 * 64 * 4])
+            .create("mod", &small, [32, 64], 1, &[0; 32 * 64 * 4], ok)
             .unwrap();
         commands(&mut textures);
         assert!(!textures.copy_to_atlas(&small, [0, 0]));
