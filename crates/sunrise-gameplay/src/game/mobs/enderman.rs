@@ -250,7 +250,11 @@ impl ServerGame<'_> {
         });
         met || player
             .into_iter()
-            .chain(self.lan_block_trigger_boxes().into_iter().map(boxed))
+            .chain(
+                self.lan_placement_obstruction_boxes()
+                    .into_iter()
+                    .map(boxed),
+            )
             .chain(self.common.item_frames.iter().map(|f| boxed(f.bounds())))
             .chain(self.common.paintings.iter().map(|p| boxed(p.bounds())))
             .chain(

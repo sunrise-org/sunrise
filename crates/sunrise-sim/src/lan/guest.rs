@@ -1139,6 +1139,14 @@ impl Guest {
     pub fn body_present(&self) -> bool {
         self.health > 0.0 || self.death_time < 20
     }
+    /// Whether this player's body is among the entities that trigger blocks (pressure plates,
+    /// tripwires, detector rails): `BasePressurePlateBlock.getEntityCount` and
+    /// `TripWireBlock.checkPressed` leave out spectators (`Entity.isIgnoringBlockTriggers`),
+    /// not the dead. A dead player's body stays in the level until `LivingEntity.tickDeath`
+    /// removes it, so it keeps a trigger pressed until then.
+    pub fn triggers_blocks(&self) -> bool {
+        self.loaded && !self.spectator() && (!self.dead || self.body_present())
+    }
     /// `LivingEntity.tickDeath` for a dead player: true once its body is
     /// removed, 20 ticks after it died (`remove(KILLED)`, whose
     /// `Entity.setRemoved` stops its riding). The body sits in its vehicle
@@ -1529,6 +1537,32 @@ mod tests {
         assert!(g.client_loaded());
         g.dead = true;
         assert!(!g.client_loaded());
+    }
+
+    /// #6560: a dead player's body triggers blocks until it is removed, 20 ticks after it
+    /// died; a spectator or a guest not yet in the level never does.
+    #[test]
+    fn a_dead_players_body_triggers_blocks_until_it_is_removed() {
+        let mut g = guest_at([0.5, 64.0, 0.5]);
+        g.loaded = true;
+        assert!(g.triggers_blocks(), "live");
+        g.health = 0.0;
+        g.dead = true;
+        for tick in 1..20 {
+            assert!(g.triggers_blocks(), "dead, death tick {}", g.death_time);
+            assert!(!g.tick_death(), "tick {tick}");
+        }
+        assert!(g.triggers_blocks(), "death tick 19");
+        assert!(g.tick_death());
+        assert!(!g.triggers_blocks(), "removed body");
+
+        let mut spectator = guest_at([0.5, 64.0, 0.5]);
+        spectator.loaded = true;
+        spectator.game_mode = SPECTATOR;
+        assert!(!spectator.triggers_blocks(), "spectator");
+        spectator.game_mode = SURVIVAL;
+        spectator.loaded = false;
+        assert!(!spectator.triggers_blocks(), "not in the level");
     }
 
     #[test]

@@ -117,15 +117,28 @@ impl ServerGame<'_> {
     /// The guests' boxes for the blocks entities trigger (pressure plates,
     /// tripwires, detector rails): `Entity.checkInsideBlocks` and
     /// `Level.getEntities` see every player in the level, but not spectators
-    /// (`Entity.isIgnoringBlockTriggers`).
+    /// (`Entity.isIgnoringBlockTriggers`). A dead player's body counts until it is
+    /// removed (`Guest::triggers_blocks`).
     pub(in crate::game) fn lan_block_trigger_boxes(&self) -> Vec<([f64; 3], [f64; 3])> {
+        self.lan_guest_boxes(|g| g.triggers_blocks())
+    }
+    /// The living guests' boxes that keep an Enderman from placing its block. This is its own
+    /// query, not the trigger one: a dead body that still presses a plate is not counted here
+    /// (#6566 tracks checking this against `EnderManLeaveBlockGoal`).
+    pub(in crate::game) fn lan_placement_obstruction_boxes(&self) -> Vec<([f64; 3], [f64; 3])> {
+        self.lan_guest_boxes(|g| g.loaded && !g.dead && !g.spectator())
+    }
+    fn lan_guest_boxes(
+        &self,
+        counts: impl Fn(&sunrise_sim::lan::guest::Guest) -> bool,
+    ) -> Vec<([f64; 3], [f64; 3])> {
         let Some(host) = self.server.lan.as_ref() else {
             return Vec::new();
         };
         host.hub
             .guests
             .simulation_iter()
-            .filter(|g| host.hub.here(g) && g.loaded && !g.dead && !g.spectator())
+            .filter(|g| host.hub.here(g) && counts(g))
             .map(|g| {
                 let b = g.bounds();
                 let (lo, hi) = (b.min_position(), b.max_position());
@@ -512,5 +525,50 @@ mod tests {
         golem.extra.anger = 0;
         golem.extra.angry_at = None;
         assert_eq!(player_for(&golem, None, &guests, Some(7)), Some(8));
+    }
+}
+
+#[cfg(test)]
+mod trigger_box_tests {
+    /// #6560: a dead guest's body stays among the boxes that press plates and tripwires until
+    /// it is removed, 20 ticks after it died; a spectator never counts. The Enderman's
+    /// placement check keeps to the living guests.
+    #[test]
+    #[ignore = "daily"]
+    fn a_dead_guests_body_presses_triggers_until_it_is_removed() {
+        crate::game::native_guest_turn_tests::with_guests(|game| {
+            let update =
+                |game: &mut crate::game::ServerGame<'_>,
+                 f: &dyn Fn(&mut sunrise_sim::lan::guest::Guest)| {
+                    let hub = &mut game.server.lan.as_mut().unwrap().hub;
+                    hub.guests.update(0, |g| f(g));
+                    hub.guests
+                        .update(1, |g| g.game_mode = sunrise_sim::lan::guest::SPECTATOR);
+                };
+            let counts = |game: &crate::game::ServerGame<'_>| {
+                (
+                    game.lan_block_trigger_boxes().len(),
+                    game.lan_placement_obstruction_boxes().len(),
+                )
+            };
+            update(game, &|g| g.loaded = true);
+            assert_eq!(
+                counts(game),
+                (1, 1),
+                "a live guest; the spectator never counts"
+            );
+            update(game, &|g| {
+                g.health = 0.0;
+                g.dead = true;
+                g.death_time = 19;
+            });
+            assert_eq!(
+                counts(game),
+                (1, 0),
+                "a dead guest's body is still in the level"
+            );
+            update(game, &|g| g.death_time = 20);
+            assert_eq!(counts(game), (0, 0), "its body was removed");
+        });
     }
 }
