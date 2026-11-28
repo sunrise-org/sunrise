@@ -69,6 +69,22 @@ pub(crate) fn vanilla() -> Option<&'static Vanilla> {
     resources
 }
 
+/// Motion tables for daily tests that require prepared resources rather than skipping without them.
+#[cfg(test)]
+pub(crate) fn prepared_motion() -> MotionResources {
+    let root = crate::prepared_test_root::prepared_root(&[&[
+        "sunrise-resources.json",
+        "facts.json",
+        "block-tags.json",
+        "block-behaviours.json",
+        "attributes.json",
+        "movement-properties.nbt",
+        "landing-definitions.json",
+    ]]);
+    let assets = Assets::load(&root).unwrap();
+    MotionResources::load(&root, &assets).unwrap()
+}
+
 /// Attribute missing prepared data to every calling test, including cached misses.
 pub(crate) fn report_missing() {
     use std::{

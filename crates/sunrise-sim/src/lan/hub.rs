@@ -213,6 +213,8 @@ pub struct TickCtx<'a> {
 
 /// Destination placement and viewed-level handoff after the command-tree send.
 pub struct LevelChange {
+    /// A direct teleport keeps its prior velocity instead of sending a stop.
+    pub keep_motion: bool,
     at: [f64; 3],
     yaw: f32,
     pitch: Option<f32>,
@@ -2106,7 +2108,7 @@ impl Hub {
         relatives: i32,
         shift: [f64; 3],
     ) {
-        self.send_position_correction(i, position, relatives, shift, None);
+        self.send_position_correction(i, position, relatives, shift, 0.0, None);
     }
 
     fn send_position_correction(
@@ -2115,6 +2117,7 @@ impl Hub {
         position: Option<[f64; 3]>,
         relatives: i32,
         shift: [f64; 3],
+        yaw_shift: f32,
         travel_velocity: Option<[f64; 3]>,
     ) {
         let ticks = self.ticks;
@@ -2136,7 +2139,7 @@ impl Hub {
             let id = g.teleport_counter;
             g.awaiting_teleport = Some((id, g.position));
             g.pending_travel_velocity = travel_velocity;
-            let turn = relatives & (play::relative::Y_ROT | play::relative::X_ROT) != 0;
+            use play::relative::{X_ROT, Y_ROT};
             // A relative axis (X, Y, Z: bits 0 to 2) goes as its shift: none for a rotation or
             // motion alone (`follow_passage`), the displacement for a move.
             let at =
@@ -2145,8 +2148,12 @@ impl Hub {
                 teleport: id,
                 position: at,
                 delta: travel_velocity.unwrap_or([0.0; 3]),
-                yaw: if turn { 0.0 } else { g.yaw },
-                pitch: if turn { 0.0 } else { g.pitch },
+                yaw: if relatives & Y_ROT != 0 {
+                    yaw_shift
+                } else {
+                    g.yaw
+                },
+                pitch: if relatives & X_ROT != 0 { 0.0 } else { g.pitch },
                 relatives,
             }));
         });
@@ -5882,6 +5889,57 @@ pub(super) mod tests {
             }
         }
         sent
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn nether_portal_landing_rotates_the_same_body_and_sends_its_delta() {
+        use play::relative::{DELTA_X, DELTA_Y, DELTA_Z, ROTATE_DELTA, X_ROT, Y_ROT};
+        use sunrise_core::geometry::Vec3;
+        let relatives = DELTA_X | DELTA_Y | DELTA_Z | ROTATE_DELTA | X_ROT | Y_ROT;
+        let motion = crate::test_fixtures::prepared_motion();
+        let at = [10.5, 70.0, 10.5];
+        for (turn, expected_z) in [(0.0, 0.0), (90.0, 2.0)] {
+            let (mut hub, rx) = hub_with_a_guest();
+            let mut body = Box::new(crate::motion::PlayerMotion::new(&motion, Vec3::ZERO));
+            body.velocity = Vec3::new(1.0, 0.25, 0.0);
+            let identity = std::ptr::from_ref(body.as_ref());
+            hub.guests.update(0, |g| {
+                g.motion = Some(body);
+                g.yaw = 15.0;
+                g.pitch = 24.0;
+                g.known_movement = [2.0, 0.5, 0.0];
+                g.landing = true;
+            });
+            hub.land(0, at, turn, relatives);
+            let body = hub.guests[0].motion.as_deref().unwrap();
+            assert_eq!(std::ptr::from_ref(body), identity);
+            assert_eq!(body.position.components(), at);
+            assert_eq!(body.yaw, 15.0 + turn);
+            assert_eq!(body.velocity.y, 0.5);
+            assert_eq!(body.velocity.z, expected_z);
+            if turn == 0.0 {
+                assert_eq!(body.velocity.x, 2.0);
+            }
+            let correction = rx
+                .try_iter()
+                .find_map(|out| {
+                    let crate::lan::Out::Packet(bytes) = out else {
+                        return None;
+                    };
+                    let mut reader = sunrise_protocol::buf::Reader::new(&bytes);
+                    let id = reader.varint().unwrap();
+                    match C::decode(id, reader.rest()) {
+                        Ok(C::PlayerPosition(packet)) => Some(packet),
+                        _ => None,
+                    }
+                })
+                .expect("portal position correction");
+            assert_eq!(correction.position, at);
+            assert_eq!((correction.yaw, correction.pitch), (turn, 0.0));
+            assert_eq!(correction.relatives, relatives);
+            assert_eq!(correction.delta, [0.0; 3]);
+        }
     }
 
     /// A command's teleport carries its relative axes as the position

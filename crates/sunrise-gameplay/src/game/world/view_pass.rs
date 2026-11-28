@@ -253,6 +253,7 @@ pub mod tests {
                 dim,
                 at,
                 rotation: None,
+                motion: crate::teleport_transition::TeleportMotion::Stop,
                 vehicle: None,
             });
         game.run_level_teleports();

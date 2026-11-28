@@ -626,6 +626,7 @@ impl ServerGame<'_> {
                         dim: destination,
                         at,
                         rotation: Some(rotation),
+                        motion,
                         vehicle: restored_objects.by_source.get(&mount).copied(),
                     });
             }

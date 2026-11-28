@@ -234,12 +234,19 @@ impl crate::game::ServerGame<'_> {
         let mut original = self.retain_original_player(conn, previous);
         // NeoForge's clone keeps only the `PlayerPersisted` part of a mod's saved compound.
         self.keep_only_player_persisted(conn);
-        if let Some(host) = self.server.lan.as_mut() {
-            host.hub.update_guest(conn, |g| {
+        if self
+            .install_guest_body(conn, |g| {
                 g.dimension = destination.id().to_owned();
                 restore_replacement(g);
-            });
+            })
+            .is_none()
+        {
+            return false;
         }
+        if was_death && let Some(portal) = self.guest_portal(conn) {
+            *portal = Default::default();
+        }
+        self.refresh_parked_guest_protection(conn);
         self.with_cloning_player(conn, CloneScope::LendBody, |game| {
             if let Some(original) = &mut original {
                 game.transactions

@@ -178,6 +178,7 @@ impl crate::game::ServerGame<'_> {
                 dim,
                 at,
                 rotation: Some([yaw, pitch]),
+                motion: crate::teleport_transition::TeleportMotion::Stop,
                 vehicle: None,
             });
             return;

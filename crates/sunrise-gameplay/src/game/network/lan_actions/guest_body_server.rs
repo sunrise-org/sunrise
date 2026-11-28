@@ -4,6 +4,51 @@ pub(in crate::game::server_side) use sunrise_gameplay_common::game::lan_actions:
 use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _;
 use sunrise_sim::{lan::hub::CommittedMove, landing::PlayerLandingPause};
 
+impl crate::game::ServerGame<'_> {
+    /// Install a newly constructed guest body and start its row-owned state from defaults.
+    pub(in crate::game) fn install_guest_body(
+        &mut self,
+        conn: u32,
+        install: impl FnOnce(&mut sunrise_sim::lan::guest::Guest),
+    ) -> Option<()> {
+        let host = self.server.lan.as_mut()?;
+        host.hub.update_guest(conn, install)?;
+        let play = host.play.entry(conn).or_default();
+        play.last_equipment = None;
+        play.potions = Default::default();
+        play.sculk = Default::default();
+        play.score_recorded = Default::default();
+        self.server.guest_combat.0.remove(&conn);
+        Some(())
+    }
+
+    /// Saved equipment protects the player before they run their first turn.
+    pub(in crate::game) fn refresh_parked_guest_protection(&mut self, conn: u32) {
+        use sunrise_gameplay_common::game::held_items::HeldItemsGameExt1 as _;
+        let Some(guest) = self
+            .server
+            .lan
+            .as_ref()
+            .and_then(|host| host.hub.guest(conn))
+        else {
+            return;
+        };
+        let generation = self.common.damage_tag_generation;
+        let protection = self.armor_damage_protection(&guest.armor);
+        if let Some(host) = self.server.lan.as_mut() {
+            let armor = host.hub.update_guest(conn, |guest| {
+                let body = guest.motion.as_mut()?;
+                body.status.protection = protection;
+                Some(guest.armor.to_vec())
+            });
+            if let Some(Some(armor)) = armor {
+                host.play.entry(conn).or_default().potions.protection_for =
+                    Some((generation, armor));
+            }
+        }
+    }
+}
+
 /// The server copy of the acting guest's body, borrowing its player and the level from `game`.
 /// A macro so that the borrow can end where the game itself is needed (a hook's owning host)
 /// and begin again after it.

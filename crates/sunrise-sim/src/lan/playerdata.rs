@@ -1731,8 +1731,7 @@ mod tests {
         let next = |g: &Guest| {
             let mut m =
                 crate::motion::PlayerMotion::new(&resources, sunrise_core::geometry::Vec3::ZERO);
-            m.apply_saved_attributes(g.carried_attributes.as_ref())
-                .unwrap();
+            m.apply_saved_attributes(g.carried_attributes.as_ref());
             m
         };
         for (restore_all, step) in [(false, 0.6), (true, 1.0)] {
@@ -1773,8 +1772,7 @@ mod tests {
         read.player_extra = Some(tag);
         let mut back =
             crate::motion::PlayerMotion::new(&resources, sunrise_core::geometry::Vec3::ZERO);
-        back.apply_saved_attributes(read.player_extra.as_ref().and_then(|t| t.get("attributes")))
-            .unwrap();
+        back.apply_saved_attributes(read.player_extra.as_ref().and_then(|t| t.get("attributes")));
         assert_eq!(back.attribute("minecraft:scale").unwrap(), 0.1);
     }
 

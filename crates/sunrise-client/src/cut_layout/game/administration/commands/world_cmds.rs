@@ -374,7 +374,7 @@ pub(crate) mod attribute_modifier_command_tests {
             };
             assert!(holds, "saved attributes: {saved:?}");
             let mut back = PlayerMotion::new(game.motion, Vec3::ZERO);
-            back.apply_saved_attributes(Some(&saved)).unwrap();
+            back.apply_saved_attributes(Some(&saved));
             assert_eq!(
                 back.attribute("minecraft:step_height").unwrap(),
                 1.0,

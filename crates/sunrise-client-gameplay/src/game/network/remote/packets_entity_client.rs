@@ -598,7 +598,7 @@ impl crate::game::ClientGame<'_> {
                 }
                 (17, Value::Float(amount)) => {
                     if let Some(pl) = self.common.player.as_mut() {
-                        let _ = pl.internal_set_absorption(*amount);
+                        pl.internal_set_absorption(*amount);
                     }
                 }
                 // LivingEntity.DATA_LIVING_ENTITY_FLAGS: the server
