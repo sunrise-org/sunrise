@@ -47,6 +47,7 @@ fn declared_mod() -> ContentMod {
                 ..Block::default()
             }),
             &[],
+            &[],
         )
         .unwrap();
     ContentMod {
@@ -464,6 +465,7 @@ fn a_code_declared_half_slab_resolves_to_block_unit_bounds() {
                 })),
                 ..Block::default()
             }],
+            &[],
             &[],
         )
         .unwrap();

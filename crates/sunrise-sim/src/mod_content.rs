@@ -39,9 +39,9 @@ use sunrise_core::{
     nbt::{Compound, JavaString, Limits, Tag},
 };
 use sunrise_mod_package::content::{
-    Block, BlockEntityType, BlockShapes, Content, ContextCollision, CreativeTab, EntityType,
-    FluidLook, Item, LocalDeclaration, MenuType, MobEffect, Rarity, SpawnRule, StateProperty,
-    StateValues, check_face_rule_properties,
+    Block, BlockEntityType, BlockShapes, Content, ContextCollision, CreativeTab, CreativeTabEntry,
+    EntityType, FluidLook, Item, LocalDeclaration, MenuType, MobEffect, Rarity, SpawnRule,
+    StateProperty, StateValues, check_face_rule_properties,
 };
 use sunrise_mod_package::manifest::{
     JarInputsError, JarRef, collect_jar_requirements, missing_jars,

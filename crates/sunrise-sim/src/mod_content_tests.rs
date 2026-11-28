@@ -541,6 +541,7 @@ fn block_aliases_keep_the_original_item_in_placement_context() {
                 block: Some("ruby:frame".into()),
                 ..Default::default()
             }),
+            &[],
         )
         .unwrap();
     build_fixture(
@@ -657,6 +658,7 @@ fn block_compiles_ordinary_bindings_without_changing_components() {
                 item("testmod:vanilla", Some("minecraft:test")),
                 item("testmod:plain", None),
             ],
+            &[],
         )
         .unwrap();
     let plan = Plan::new(&base, &mods).unwrap();
@@ -772,8 +774,21 @@ fn creative_tabs_keep_vanilla_items_missing_from_search() {
     let tab = sunrise_mod_package::content::CreativeTab {
         id: "test:restricted".into(),
         title: "Restricted".into(),
-        icon: "minecraft:barrier".into(),
-        items: [
+        icon: "{count:1,id:\"minecraft:barrier\"}".into(),
+        entries: [
+            "minecraft:barrier",
+            "minecraft:command_block",
+            "minecraft:written_book",
+            "minecraft:knowledge_book",
+        ]
+        .iter()
+        .map(|id| sunrise_mod_package::content::CreativeTabEntry::item(id))
+        .collect(),
+    };
+    let plan = Plan {
+        blocks: Vec::new(),
+        items: Vec::new(),
+        vanilla_items: [
             "minecraft:barrier",
             "minecraft:command_block",
             "minecraft:written_book",
@@ -781,11 +796,6 @@ fn creative_tabs_keep_vanilla_items_missing_from_search() {
         ]
         .map(str::to_owned)
         .into(),
-    };
-    let plan = Plan {
-        blocks: Vec::new(),
-        items: Vec::new(),
-        vanilla_items: tab.items.iter().cloned().collect(),
         effects: Vec::new(),
         fluids: Vec::new(),
         entity_types: Vec::new(),
@@ -830,6 +840,93 @@ fn creative_tabs_keep_vanilla_items_missing_from_search() {
             "minecraft:knowledge_book"
         ],
     );
+}
+
+#[test]
+fn creative_tabs_emit_operator_rows_and_search_metadata() {
+    use sunrise_mod_package::content::CreativeTabEntry;
+    let entry = |stack: &str| CreativeTabEntry {
+        stack: stack.into(),
+        operator_only: false,
+        searchable: true,
+        search_lines: Vec::new(),
+        search_tags: Vec::new(),
+    };
+    let mut with_lines = entry("{count:1,id:\"minecraft:barrier\"}");
+    with_lines.search_lines = vec!["block everything".into()];
+    with_lines.search_tags = vec!["minecraft:op".into()];
+    let mut operator = entry("{count:1,id:\"minecraft:command_block\"}");
+    operator.operator_only = true;
+    let mut tab_only = entry("{count:1,id:\"minecraft:written_book\"}");
+    tab_only.searchable = false;
+    let tab = sunrise_mod_package::content::CreativeTab {
+        id: "test:mixed".into(),
+        title: "Mixed".into(),
+        icon: "{count:1,id:\"minecraft:barrier\"}".into(),
+        entries: vec![with_lines, operator, tab_only],
+    };
+    let plan = Plan {
+        blocks: Vec::new(),
+        items: Vec::new(),
+        vanilla_items: [
+            "minecraft:barrier",
+            "minecraft:command_block",
+            "minecraft:written_book",
+        ]
+        .map(str::to_owned)
+        .into(),
+        effects: Vec::new(),
+        fluids: Vec::new(),
+        entity_types: Vec::new(),
+        block_entity_types: Vec::new(),
+        block_entity_factories: BTreeMap::new(),
+        menu_types: Vec::new(),
+        states: 0,
+        defaults: BTreeMap::new(),
+        sounds: BTreeMap::new(),
+        tabs: vec![&tab],
+        names: BTreeMap::new(),
+    };
+    let mut doc: J = serde_json::from_str(
+        r#"{"schema":4,"item_features":{},"potion_features":{},"tabs":[{"id":"minecraft:search","title":"Search Items","type":"SEARCH","build":[],"search_metadata":[]}]}"#,
+    )
+    .unwrap();
+    plan.creative_tabs(&mut doc).unwrap();
+    let doc = serde_json::to_value(doc).unwrap();
+    let emitted = &doc["tabs"][1];
+    assert_eq!(emitted["icon"], "{count:1,id:\"minecraft:barrier\"}");
+    // `build` holds the non-operator entries in order; the tab-only entry is
+    // PARENT_TAB_ONLY.
+    let build = emitted["build"].as_array().unwrap();
+    assert_eq!(build.len(), 2);
+    assert_eq!(build[0]["snbt"], "{count:1,id:\"minecraft:barrier\"}");
+    assert_eq!(build[0]["visibility"], "PARENT_AND_SEARCH_TABS");
+    assert_eq!(build[1]["snbt"], "{count:1,id:\"minecraft:written_book\"}");
+    assert_eq!(build[1]["visibility"], "PARENT_TAB_ONLY");
+    // `operator_build` is the full ordered list, operator entry included.
+    let operator_build = emitted["operator_build"].as_array().unwrap();
+    assert_eq!(
+        operator_build
+            .iter()
+            .map(|row| row["snbt"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "{count:1,id:\"minecraft:barrier\"}",
+            "{count:1,id:\"minecraft:command_block\"}",
+            "{count:1,id:\"minecraft:written_book\"}",
+        ]
+    );
+    // The one searchable entry with lines and tags of its own joins the search
+    // tab's metadata as a grouped row.
+    let metadata = doc["tabs"][0]["search_metadata"].as_array().unwrap();
+    assert_eq!(metadata.len(), 1);
+    assert_eq!(metadata[0]["stack"], "{count:1,id:\"minecraft:barrier\"}");
+    assert_eq!(
+        metadata[0]["lines"],
+        serde_json::json!(["block everything"])
+    );
+    assert_eq!(metadata[0]["tags"], serde_json::json!(["minecraft:op"]));
+    assert!(metadata[0].get("ungrouped").is_none());
 }
 
 /// A block item's patch goes over its template block's item, and a type no
@@ -5597,6 +5694,7 @@ fn item_references_resolve_against_other_packages_registered_content() {
                 crafting_remainder: Some("provider:handle".into()),
                 ..Item::default()
             }],
+            &[],
         )
         .unwrap();
     let mut provider = Content::declared("provider");
@@ -5613,6 +5711,7 @@ fn item_references_resolve_against_other_packages_registered_content() {
                 template: "minecraft:bowl".into(),
                 ..Item::default()
             }],
+            &[],
         )
         .unwrap();
     let mut mods = [

@@ -1697,8 +1697,9 @@ impl<'a> Plan<'a> {
 
     /// The creative inventory (`creative-inventory.json`): each mod tab after
     /// vanilla's, ten to a page (the top row's first
-    /// five columns, then the bottom row's), with only the items the game has;
-    /// the mods' new items join the search tab under their English names.
+    /// five columns, then the bottom row's), with only the entries whose items
+    /// the game has; the mods' new items join the search tab under their English
+    /// names, and a tab entry's own search lines and tags join it after them.
     fn creative_tabs(&self, doc: &mut J) -> Result<()> {
         let Some(J::Arr(tabs)) = doc.at("tabs") else {
             return Err("no tabs".into());
@@ -1710,6 +1711,32 @@ impl<'a> Plan<'a> {
             .iter()
             .position(|t| matches!(t.get("type"), Some(J::Str(k)) if k == "SEARCH"));
         let known = |id: &str| new.contains(&id) || self.vanilla_items.contains(id);
+        // The item an entry's stack holds; an entry whose stack does not parse
+        // or whose item the game does not have is left out.
+        let entry_item = |entry: &CreativeTabEntry| {
+            sunrise_items::item_data::parse_stack(&entry.stack)
+                .ok()
+                .flatten()
+                .map(|stack| stack.item.to_string())
+        };
+        let row_of = |entry: &CreativeTabEntry| {
+            J::Obj(vec![
+                ("kind".into(), J::Str("stack".into())),
+                (
+                    "visibility".into(),
+                    J::Str(
+                        if entry.searchable {
+                            "PARENT_AND_SEARCH_TABS"
+                        } else {
+                            "PARENT_TAB_ONLY"
+                        }
+                        .into(),
+                    ),
+                ),
+                ("snbt".into(), J::Str(entry.stack.clone())),
+            ])
+        };
+        let mut tab_metadata: Vec<J> = Vec::new();
         for (i, tab) in self.tabs.iter().enumerate() {
             let slot = i % 10;
             let mut row = J::Obj(Vec::new());
@@ -1722,23 +1749,51 @@ impl<'a> Plan<'a> {
             row.set("column", J::Num((slot % 5).into()));
             row.set("page", J::Num((1 + i / 10).into()));
             row.set("title", J::Str(tab.title.clone()));
-            row.set("icon", stack(&tab.icon));
+            row.set("icon", J::Str(tab.icon.clone()));
+            let entries: Vec<&CreativeTabEntry> = tab
+                .entries
+                .iter()
+                .filter(|entry| entry_item(entry).is_some_and(|item| known(&item)))
+                .collect();
             row.set(
                 "build",
                 J::Arr(
-                    tab.items
+                    entries
                         .iter()
-                        .filter(|id| known(id))
-                        .map(|id| {
-                            J::Obj(vec![
-                                ("kind".into(), J::Str("stack".into())),
-                                ("visibility".into(), J::Str("PARENT_AND_SEARCH_TABS".into())),
-                                ("snbt".into(), stack(id)),
-                            ])
-                        })
+                        .filter(|entry| !entry.operator_only)
+                        .map(|entry| row_of(entry))
                         .collect(),
                 ),
             );
+            // `operator_build` replaces `build` wholesale for operator viewers,
+            // so it is the tab's full row list, in entry order; a tab with no
+            // operator entry has none.
+            if entries.iter().any(|entry| entry.operator_only) {
+                row.set(
+                    "operator_build",
+                    J::Arr(entries.iter().map(|entry| row_of(entry)).collect()),
+                );
+            }
+            for entry in &entries {
+                // Only an entry carrying lines or tags of its own gets a row:
+                // an empty row would replace the name-only row below for the
+                // same stack in the client's search map.
+                if entry.searchable
+                    && (!entry.search_lines.is_empty() || !entry.search_tags.is_empty())
+                {
+                    tab_metadata.push(J::Obj(vec![
+                        ("stack".into(), J::Str(entry.stack.clone())),
+                        (
+                            "lines".into(),
+                            J::Arr(entry.search_lines.iter().cloned().map(J::Str).collect()),
+                        ),
+                        (
+                            "tags".into(),
+                            J::Arr(entry.search_tags.iter().cloned().map(J::Str).collect()),
+                        ),
+                    ]));
+                }
+            }
             tabs.push(row);
         }
         if let Some(search) = search {
@@ -1758,6 +1813,9 @@ impl<'a> Plan<'a> {
                         ("ungrouped".into(), J::Bool(true)),
                     ])
                 }));
+                // After the name-only rows: the client's search map keeps the
+                // last row per stack, so an entry's own lines and tags win.
+                metadata.extend(tab_metadata);
             }
         }
         Ok(())

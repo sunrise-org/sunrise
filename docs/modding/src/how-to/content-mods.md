@@ -869,6 +869,28 @@ lang file's `itemGroup.<mod id>.<file name>` (`creative_tab/gems.json` →
 `itemGroup.ruby.gems`) translates any title. A mod's items join the search tab
 under their names.
 
+An entry can also be an object, when a bare item ID is not enough. Its `stack`
+is a full SNBT stack, so the entry can carry components; `operator_only` shows
+the entry to operator viewers only; `searchable: false` keeps it out of the
+search tab; and `search_lines` and `search_tags` add words and item tags the
+search tab matches the entry by, besides its name. The fields besides `stack`
+can be left out, and behave as a bare item ID does:
+
+```json
+{ "title": "Ruby", "icon": "ruby:ruby", "items": [
+  "ruby:ruby",
+  { "stack": "{count:1,id:\"ruby:ruby_block\"}", "operator_only": true },
+  { "stack": "{count:1,id:\"minecraft:diamond\"}", "search_lines": ["shiny"] }
+] }
+```
+
+A native mod declares a tab in code instead, with the `creative_tabs`
+registration hook, beside its `blocks` and `items` declarations: pass each
+`CreativeTab` to `event.register` and handle its typed `DeclarationError`. The
+icon and entries are the same full stacks, with the same operator-only,
+searchable and search line and tag fields, and a declared tab joins the same
+catalog as the package's tab files.
+
 A file only makes new tabs. To edit a registered tab's contents, listen to
 `build_creative_mode_tab_contents` (NeoForge's `BuildCreativeModeTabContentsEvent`). It fires for every tab on the
 logical side building its catalog. Match `event.tab` (for example, `minecraft:ingredients`)
