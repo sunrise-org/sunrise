@@ -334,9 +334,9 @@ fn a_deep_access_chain_is_unknown() {
 #[test]
 fn a_long_path_walks_without_recursion() {
     let path = vec![0u32; 1_000_000];
-    assert_eq!(Val::Unknown.at(&path), Val::Unknown);
     let vsh = "#version 120\nvoid main() { gl_Position = ftransform(); }\n";
     let module = program(vsh, FRAGMENT).vertex;
+    assert_eq!(Context::new(&module).at(&Val::Unknown, &path), Val::Unknown);
     let (global, _) = module.global_variables.iter().next().unwrap();
     let start = Val::Ptr(Root::Global(global), Vec::new());
     let pointer = (0..1_000_000).fold(start, |p, _| match p {
@@ -344,4 +344,62 @@ fn a_long_path_walks_without_recursion() {
         other => other,
     });
     assert!(matches!(pointer, Val::Somewhere(_)));
+}
+
+/// Whether every quad position through one context is known, the most value slots one vertex
+/// made, and the module's size.
+fn slots_made(vertex: &naga::Module) -> (bool, u64, u64) {
+    let context = Context::new(vertex);
+    let entry = &vertex.entry_points[0].function;
+    let (mut known, mut most) = (true, 0);
+    for i in 0..QUAD_VERTICES {
+        let before = context.slots.get();
+        known &= context.position(entry, i).is_some();
+        most = most.max(context.slots.get() - before);
+    }
+    (known, most, context.size)
+}
+
+/// A struct four levels deep of 128 members each is 128^4 floats: its zero value, as naga
+/// gives a function's fallback return, is one node, not that many.
+#[test]
+fn a_huge_zero_struct_takes_no_room() {
+    let members = |ty: &str| (0..64).map(|i| format!("{ty} m{i};")).collect::<String>();
+    let vsh = format!(
+        "#version 120\nstruct A {{ {} }};\nstruct B {{ {} }};\nstruct C {{ {} }};\nstruct D {{ {} }};\n\
+         uniform float frameTimeCounter;\n\
+         D make() {{ if (frameTimeCounter > 1.0) {{ D d; return d; }} }}\n\
+         void main() {{ make(); gl_Position = ftransform(); }}\n",
+        members("float"),
+        members("A"),
+        members("B"),
+        members("C")
+    );
+    let vertex = program(&vsh, FRAGMENT).vertex;
+    let start = std::time::Instant::now();
+    let (known, slots, size) = slots_made(&vertex);
+    let took = start.elapsed();
+    assert!(known);
+    assert!(slots <= size, "{slots} slots for a module of {size}");
+    assert!(took < std::time::Duration::from_secs(1), "{took:?}");
+}
+
+/// One field written in each element of an array of wide structs: each store makes one slot,
+/// not one per member.
+#[test]
+fn field_stores_into_wide_structs_take_room_for_what_they_write() {
+    let n = 2000;
+    let fields: String = (0..n).map(|i| format!("float f{i};")).collect();
+    let stores: String = (0..n).map(|i| format!("a[{i}].f{i} = 1.0;\n")).collect();
+    let vsh = format!(
+        "#version 120\nstruct S {{ {fields} }};\nS a[{n}];\n\
+         void main() {{\n{stores}gl_Position = ftransform();\n}}\n"
+    );
+    let vertex = program(&vsh, FRAGMENT).vertex;
+    let start = std::time::Instant::now();
+    let (known, slots, size) = slots_made(&vertex);
+    let took = start.elapsed();
+    assert!(known);
+    assert!(slots <= size, "{slots} slots for a module of {size}");
+    assert!(took < std::time::Duration::from_secs(1), "{took:?}");
 }

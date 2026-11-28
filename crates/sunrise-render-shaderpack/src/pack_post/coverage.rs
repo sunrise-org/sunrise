@@ -319,7 +319,7 @@ enum Val {
     I(i32),
     U(u32),
     B(bool),
-    /// A vector's components or a struct's members.
+    /// A vector's components.
     List(Rc<Vec<Val>>),
     /// A matrix's columns, each a `List`.
     Mat(Rc<Vec<Val>>),
@@ -329,12 +329,26 @@ enum Val {
         set: Rc<BTreeMap<u32, Val>>,
         rest: Rc<Val>,
     },
+    /// A struct of type `ty`: the members set, the others zero (`zero`) or unknown. A member
+    /// is made only when it is set, so a struct takes room for what was written, not for its
+    /// type.
+    Fields {
+        ty: Handle<Type>,
+        set: Rc<BTreeMap<u32, Val>>,
+        zero: bool,
+    },
     Ptr(Root, Vec<u32>),
     /// A pointer into a variable at an index not known.
     Somewhere(Root),
 }
 
 const UNKNOWN: Val = Val::Unknown;
+
+/// The type a store walks: one of the module's, or a vector or matrix's part.
+enum Shape {
+    Type(Handle<Type>),
+    Inner(TypeInner),
+}
 
 fn list(items: Vec<Val>) -> Val {
     Val::List(Rc::new(items))
@@ -345,30 +359,6 @@ fn mat(columns: Vec<Val>) -> Val {
 }
 
 impl Val {
-    fn element(&self, i: u32) -> Val {
-        self.element_ref(i).clone()
-    }
-
-    fn element_ref(&self, i: u32) -> &Val {
-        match self {
-            Val::List(items) | Val::Mat(items) => items.get(i as usize).unwrap_or(&UNKNOWN),
-            Val::Array { len, set, rest } if i < *len => set.get(&i).unwrap_or(rest),
-            _ => &UNKNOWN,
-        }
-    }
-
-    /// The value at `path`, walked without recursion and ended at the first unknown part.
-    fn at(&self, path: &[u32]) -> Val {
-        let mut v = self;
-        for &i in path {
-            if *v == Val::Unknown {
-                break;
-            }
-            v = v.element_ref(i);
-        }
-        v.clone()
-    }
-
     fn index(&self) -> Option<u32> {
         match *self {
             Val::I(i) => u32::try_from(i).ok(),
@@ -402,8 +392,11 @@ struct Context<'m> {
     /// The module's size: its expressions, statements, globals and types. Every budget is
     /// this, so the work stays linear in what the pack wrote.
     size: u64,
-    /// What is left of this vertex's work: statements run, expressions evaluated, copies.
+    /// What is left of this vertex's work: statements run, expressions evaluated, copies and
+    /// value slots made.
     budget: Cell<u64>,
+    /// Value slots made so far (`alloc`).
+    slots: Cell<u64>,
 }
 
 /// Every expression, statement, global and type of `module`.
@@ -479,7 +472,10 @@ impl<'m> Context<'m> {
             stores: Vec::with_capacity(module.functions.len()),
             size: module_size(module),
             budget: Cell::new(0),
+            slots: Cell::new(0),
         };
+        // The constants take from a budget of the module's size too.
+        context.budget.set(context.size);
         for (h, e) in module.global_expressions.iter() {
             let globals = &context.globals;
             let get = |x: Handle<Expression>| globals.get(x.index()).unwrap_or(&UNKNOWN);
@@ -554,12 +550,64 @@ impl<'m> Context<'m> {
         self.depths.get(ty.index()).copied().unwrap_or(u32::MAX)
     }
 
-    /// The zero value of `ty`; unknown past [`MAX_DEPTH`].
+    /// Element `i` of `v`: a member a struct doesn't hold is made here, zero or unknown.
+    fn element(&self, v: &Val, i: u32) -> Val {
+        match v {
+            Val::List(items) | Val::Mat(items) => {
+                items.get(i as usize).cloned().unwrap_or(Val::Unknown)
+            }
+            Val::Array { len, set, rest } if i < *len => {
+                set.get(&i).cloned().unwrap_or_else(|| (**rest).clone())
+            }
+            Val::Fields { ty, set, zero } => match set.get(&i) {
+                Some(member) => member.clone(),
+                None => match (&self.module.types[*ty].inner, zero) {
+                    (TypeInner::Struct { members, .. }, true) => members
+                        .get(i as usize)
+                        .map_or(Val::Unknown, |m| self.zero(m.ty)),
+                    _ => Val::Unknown,
+                },
+            },
+            _ => Val::Unknown,
+        }
+    }
+
+    /// The value at `path` in `v`, walked without recursion and ended at the first unknown
+    /// part.
+    fn at(&self, v: &Val, path: &[u32]) -> Val {
+        let mut v = v.clone();
+        for &i in path {
+            if v == Val::Unknown {
+                break;
+            }
+            v = self.element(&v, i);
+        }
+        v
+    }
+
+    /// Takes `n` value slots from the budget before they are made, and counts them: the slots
+    /// of arrays and structs, whose number the pack's types decide. A vector or a matrix is at
+    /// most 16 slots, made by an expression the budget already counts.
+    fn alloc(&self, n: usize) -> Option<()> {
+        self.charge(n)?;
+        self.slots.set(self.slots.get().saturating_add(n as u64));
+        Some(())
+    }
+
+    /// The zero value of `ty`; unknown past [`MAX_DEPTH`] or the budget. A struct's or an
+    /// array's is one node, whatever its size.
     fn zero(&self, ty: Handle<Type>) -> Val {
         if self.depth(ty) > MAX_DEPTH {
             return Val::Unknown;
         }
-        self.zero_of(&self.module.types[ty].inner)
+        match &self.module.types[ty].inner {
+            TypeInner::Struct { .. } => Val::Fields {
+                ty,
+                set: Rc::default(),
+                zero: true,
+            },
+            inner => self.zero_of(inner),
+        }
     }
 
     fn zero_of(&self, inner: &TypeInner) -> Val {
@@ -597,46 +645,57 @@ impl<'m> Context<'m> {
                 set: Rc::default(),
                 rest: Rc::new(self.zero(*base)),
             },
-            TypeInner::Struct { members, .. } => {
-                list(members.iter().map(|m| self.zero(m.ty)).collect())
-            }
             _ => Val::Unknown,
         }
     }
 
-    /// `v` with its unknown containers along `path` made of unknown parts, in `inner`'s
-    /// shape, and `x` stored at `path`; `false` when `path` doesn't fit the shape.
-    fn store(&self, v: &mut Val, inner: &TypeInner, path: &[u32], x: Val) -> bool {
+    /// `v` with its unknown containers along `path` made of unknown parts in `shape`, and `x`
+    /// stored at `path`; `false` when `path` doesn't fit the shape or the budget runs out.
+    /// Every slot made is charged first.
+    fn store(&self, v: &mut Val, shape: Shape, path: &[u32], x: Val) -> bool {
         let Some((&i, rest)) = path.split_first() else {
             *v = x;
             return true;
         };
-        let child: TypeInner = match inner {
-            TypeInner::Vector { scalar, .. } => TypeInner::Scalar(*scalar),
-            TypeInner::Matrix { rows, scalar, .. } => TypeInner::Vector {
+        let inner = match &shape {
+            Shape::Type(ty) => &self.module.types[*ty].inner,
+            Shape::Inner(inner) => inner,
+        };
+        let child = match inner {
+            TypeInner::Vector { scalar, .. } => Shape::Inner(TypeInner::Scalar(*scalar)),
+            TypeInner::Matrix { rows, scalar, .. } => Shape::Inner(TypeInner::Vector {
                 size: *rows,
                 scalar: *scalar,
-            },
-            TypeInner::Array { base, .. } => self.module.types[*base].inner.clone(),
+            }),
+            TypeInner::Array { base, .. } => Shape::Type(*base),
             TypeInner::Struct { members, .. } => match members.get(i as usize) {
-                Some(m) => self.module.types[m.ty].inner.clone(),
+                Some(m) => Shape::Type(m.ty),
                 None => return false,
             },
             _ => return false,
         };
         if *v == Val::Unknown {
-            *v = match inner {
-                TypeInner::Vector { size, .. } => list(vec![Val::Unknown; *size as usize]),
-                TypeInner::Matrix { columns, .. } => mat(vec![Val::Unknown; *columns as usize]),
-                TypeInner::Array {
-                    size: ArraySize::Constant(n),
-                    ..
-                } => Val::Array {
+            *v = match (inner, &shape) {
+                (TypeInner::Vector { size, .. }, _) => list(vec![Val::Unknown; *size as usize]),
+                (TypeInner::Matrix { columns, .. }, _) => {
+                    mat(vec![Val::Unknown; *columns as usize])
+                }
+                (
+                    TypeInner::Array {
+                        size: ArraySize::Constant(n),
+                        ..
+                    },
+                    _,
+                ) => Val::Array {
                     len: n.get(),
                     set: Rc::default(),
                     rest: Rc::new(Val::Unknown),
                 },
-                TypeInner::Struct { members, .. } => list(vec![Val::Unknown; members.len()]),
+                (TypeInner::Struct { .. }, Shape::Type(ty)) => Val::Fields {
+                    ty: *ty,
+                    set: Rc::default(),
+                    zero: false,
+                },
                 _ => return false,
             };
         }
@@ -646,14 +705,41 @@ impl<'m> Context<'m> {
                     return false;
                 }
                 let item = &mut Rc::make_mut(items)[i as usize];
-                self.store(item, &child, rest, x)
+                self.store(item, child, rest, x)
             }
             Val::Array { len, set, rest: r } if i < *len => {
-                if !self.copy(Rc::strong_count(set), set.len()) {
+                if !self.copy(Rc::strong_count(set), set.len())
+                    || !set.contains_key(&i) && self.alloc(1).is_none()
+                {
                     return false;
                 }
                 let item = Rc::make_mut(set).entry(i).or_insert_with(|| (**r).clone());
-                self.store(item, &child, rest, x)
+                self.store(item, child, rest, x)
+            }
+            Val::Fields { ty, set, zero } => {
+                if !self.copy(Rc::strong_count(set), set.len())
+                    || !set.contains_key(&i) && self.alloc(1).is_none()
+                {
+                    return false;
+                }
+                let member = if set.contains_key(&i) {
+                    None
+                } else if *zero {
+                    let fields = Val::Fields {
+                        ty: *ty,
+                        set: Rc::default(),
+                        zero: true,
+                    };
+                    Some(self.element(&fields, i))
+                } else {
+                    Some(Val::Unknown)
+                };
+                let set = Rc::make_mut(set);
+                let item = match member {
+                    Some(m) => set.entry(i).or_insert(m),
+                    None => set.get_mut(&i).expect("held"),
+                };
+                self.store(item, child, rest, x)
             }
             _ => false,
         }
@@ -713,6 +799,14 @@ impl<'m> Context<'m> {
                 if self.depth(*ty) > MAX_DEPTH {
                     return Val::Unknown;
                 }
+                // An array's or a struct's slots, as many as the pack wrote parts.
+                let aggregate = matches!(
+                    self.module.types[*ty].inner,
+                    TypeInner::Array { .. } | TypeInner::Struct { .. }
+                );
+                if aggregate && self.alloc(components.len()).is_none() {
+                    return Val::Unknown;
+                }
                 let parts = components.iter().map(|&c| get(c));
                 match &self.module.types[*ty].inner {
                     // A vector composes from scalars and vectors.
@@ -755,7 +849,17 @@ impl<'m> Context<'m> {
                         ),
                         rest: Rc::new(Val::Unknown),
                     },
-                    TypeInner::Struct { .. } => list(parts.cloned().collect()),
+                    TypeInner::Struct { .. } => Val::Fields {
+                        ty: *ty,
+                        set: Rc::new(
+                            parts
+                                .cloned()
+                                .enumerate()
+                                .map(|(i, v)| (i as u32, v))
+                                .collect(),
+                        ),
+                        zero: false,
+                    },
                     _ => Val::Unknown,
                 }
             }
@@ -776,8 +880,11 @@ impl<'m> Context<'m> {
                 ),
                 _ => Val::Unknown,
             },
-            Expression::AccessIndex { base, index } => element(get(*base), Some(*index)),
-            Expression::Access { base, index } => element(get(*base), get(*index).index()),
+            Expression::AccessIndex { base, index } => self.element(get(*base), *index),
+            Expression::Access { base, index } => match get(*index).index() {
+                Some(i) => self.element(get(*base), i),
+                None => Val::Unknown,
+            },
             Expression::Unary { op, expr } => map(get(*expr), &|v| unary(*op, v)),
             Expression::Binary { op, left, right } => binary(*op, get(*left), get(*right)),
             Expression::Select {
@@ -925,7 +1032,7 @@ impl<'m> Context<'m> {
                             let initial = self.read(&state, root);
                             let whole = state.entry(root).or_insert(initial);
                             let ok = self.depth(ty) <= MAX_DEPTH
-                                && self.store(whole, &module.types[ty].inner, &path, v);
+                                && self.store(whole, Shape::Type(ty), &path, v);
                             if !ok {
                                 *whole = Val::Unknown;
                             }
@@ -987,7 +1094,7 @@ impl<'m> Context<'m> {
                     let at = members.iter().position(|m| {
                         matches!(m.binding, Some(Binding::BuiltIn(BuiltIn::Position { .. })))
                     })?;
-                    result.element(u32::try_from(at).ok()?)
+                    self.element(&result, u32::try_from(at).ok()?)
                 }
                 _ => return None,
             },
@@ -1088,7 +1195,7 @@ impl<'m> Context<'m> {
                     };
                     match global_space {
                         AddressSpace::Private | AddressSpace::Function => {
-                            self.read(state, *root).at(path)
+                            self.at(&self.read(state, *root), path)
                         }
                         _ => Val::Unknown,
                     }
@@ -1291,13 +1398,6 @@ fn pointer(root: Root, path: &[u32], index: u32) -> Val {
         return Val::Somewhere(root);
     }
     Val::Ptr(root, [path, &[index]].concat())
-}
-
-fn element(base: &Val, index: Option<u32>) -> Val {
-    match index {
-        Some(i) => base.element(i),
-        None => Val::Unknown,
-    }
 }
 
 /// `f` on a scalar, or on each component of a vector or matrix.
