@@ -28,11 +28,12 @@ pub trait EntityDataBackendMut {
     /// Merges `nbt` into the entity's data and loads the entity from it, as `/data merge
     /// entity` does (`EntityDataAccessor.setData`): true when it changed. False for a player
     /// (vanilla refuses them too), a kind Sunrise cannot reload yet (end crystals, the dragon
-    /// and its parts, cushions, ominous item spawners, area effect clouds, fishing hooks, leash
-    /// knots and general entity rows), data nested too deep, or data that changes nothing. An
+    /// and its parts, cushions, ominous item spawners, fishing hooks, leash knots and general
+    /// entity rows), data nested too deep, or data that changes nothing. An
     /// arrow, spectral arrow or trident reloads as `AbstractArrow.readAdditionalSaveData` reads
     /// it (`life`, `inGround`, `pickup`, ...); other projectiles take only their position,
-    /// motion, rotation and flags. API 386.
+    /// motion, rotation and flags. A resident area effect cloud reloads its saved fields in
+    /// place, keeping its id, UUID, victims and tick. API 386.
     fn entity_merge_nbt(&mut self, entity: EntityRef, nbt: Compound) -> bool;
     /// Side: server.
     /// Adds tag `tag` (`Entity.addTag`): false when it has it already, holds
