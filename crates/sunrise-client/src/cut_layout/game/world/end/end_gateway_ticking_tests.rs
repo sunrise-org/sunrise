@@ -53,7 +53,8 @@ fn item(id: u32, at: Vec3) -> ItemEntity {
 #[ignore = "daily"]
 fn items_past_the_simulation_distance_enter_no_end_gateway() {
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     game.dim = Dim::End;
     game.server.settings.simulation_distance = 4;
     game.server.settings.render_distance = 12;
@@ -107,7 +108,8 @@ fn items_past_the_simulation_distance_enter_no_end_gateway() {
 fn a_ticking_gateway_counts_its_age_in_its_block_entity() {
     use sunrise_level::containers::BlockEntity;
     let mut game_resources = None;
-    let mut game = server_game(&mut game_resources);
+    let mut fixture = server_game(&mut game_resources);
+    let game = fixture.game_mut();
     game.build_registries();
     game.set_allow_commands(true);
     game.dim = Dim::End;
@@ -134,15 +136,15 @@ fn a_ticking_gateway_counts_its_age_in_its_block_entity() {
         Some(BlockEntity::EndGateway(g)) => Some(g.age),
         _ => None,
     };
-    assert_eq!(age(&game), Some(0));
+    assert_eq!(age(&*game), Some(0));
     for _ in 0..5 {
         game.tick_block_entities().unwrap();
     }
-    assert_eq!(age(&game), Some(5));
+    assert_eq!(age(&*game), Some(5));
     for _ in 0..20 {
         game.tick_block_entities().unwrap();
     }
-    assert_eq!(age(&game), Some(25));
+    assert_eq!(age(&*game), Some(25));
 }
 
 use sunrise_gameplay_common::game::chat_common::ChatCommonGameExt1 as _;

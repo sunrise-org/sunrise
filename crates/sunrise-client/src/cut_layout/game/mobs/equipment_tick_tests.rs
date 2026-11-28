@@ -10,8 +10,9 @@ const UUID_HIGH: i32 = 3221;
 /// at (5, 64, 5) and (7, 64, 7).
 fn lodestone_world(
     resources: &mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> sunrise_gameplay::game::ServerGame<'_> {
-    let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'_> {
+    let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+    let game = fixture.game_mut();
     game.build_registries();
     game.set_allow_commands(true);
     game.level.health = 20.0;
@@ -23,7 +24,7 @@ fn lodestone_world(
     assert!(game.run_command("fill 0 63 0 15 63 15 stone"));
     assert!(game.run_command("setblock 5 64 5 lodestone"));
     assert!(game.run_command("setblock 7 64 7 lodestone"));
-    game
+    fixture
 }
 
 fn tracker(dimension: &str, pos: [i32; 3]) -> String {
@@ -61,7 +62,8 @@ fn tracked(stack: &ItemStack) -> bool {
 #[ignore = "daily"]
 fn a_mobs_compass_loses_a_broken_lodestone_and_keeps_the_others() {
     let mut resources = None;
-    let mut game = lodestone_world(&mut resources);
+    let mut fixture = lodestone_world(&mut resources);
+    let game = fixture.game_mut();
     // A monster can't be summoned on peaceful.
     assert!(game.run_command("difficulty easy"));
     let overworld = "minecraft:overworld";
@@ -133,7 +135,8 @@ fn a_mobs_compass_loses_a_broken_lodestone_and_keeps_the_others() {
 #[ignore = "daily"]
 fn a_players_non_compass_keeps_its_lodestone_tracker() {
     let mut resources = None;
-    let mut game = lodestone_world(&mut resources);
+    let mut fixture = lodestone_world(&mut resources);
+    let game = fixture.game_mut();
     let target_5 = tracker("minecraft:overworld", [5, 64, 5]);
     assert!(game.run_command(&format!(
         "item replace entity @s weapon.mainhand with stick[{target_5}] 1"

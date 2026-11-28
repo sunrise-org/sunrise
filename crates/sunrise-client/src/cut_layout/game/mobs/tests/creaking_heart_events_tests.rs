@@ -13,8 +13,9 @@ use sunrise_sim::motion::PlayerMotion;
 
 fn game<'a>(
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> sunrise_gameplay::game::ServerGame<'a> {
-    let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'a> {
+    let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+    let game = fixture.game_mut();
     game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 200.0, 4.5)).unwrap());
     game.build_registries();
     game.set_allow_commands(true);
@@ -39,7 +40,7 @@ fn game<'a>(
     ] {
         assert!(game.run_command(command), "{command}");
     }
-    game
+    fixture
 }
 
 /// The game events posted while `f` runs, as `(event, position, source)`.
@@ -78,11 +79,12 @@ fn heart_with_a_creaking(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> (
 #[ignore = "daily"]
 fn a_heart_spawn_posts_entity_place_and_the_poof() {
     let mut resources = None;
-    let mut game = game(&mut resources);
+    let mut fixture = game(&mut resources);
+    let game = fixture.game_mut();
     game.start_audio_capture();
     sunrise_gameplay_common::game::side_ops::events::TEST_POSTED_EVENTS
         .with(|e| *e.borrow_mut() = Some(Vec::new()));
-    let (id, at) = heart_with_a_creaking(&mut game);
+    let (id, at) = heart_with_a_creaking(game);
     let events = sunrise_gameplay_common::game::side_ops::events::TEST_POSTED_EVENTS
         .with(|e| e.borrow_mut().take().unwrap_or_default());
     let places: Vec<_> = events
@@ -122,8 +124,9 @@ fn a_heart_spawn_posts_entity_place_and_the_poof() {
 #[ignore = "daily"]
 fn each_resin_clump_posts_block_place() {
     let mut resources = None;
-    let mut game = game(&mut resources);
-    let (id, _) = heart_with_a_creaking(&mut game);
+    let mut fixture = game(&mut resources);
+    let game = fixture.game_mut();
+    let (id, _) = heart_with_a_creaking(game);
     let heart = game.world.block(0, 202, 0);
     assert_eq!(
         game.pack
@@ -134,7 +137,7 @@ fn each_resin_clump_posts_block_place() {
         Some("awake".into()),
         "night left the heart awake"
     );
-    let events = posted(&mut game, |g| g.creaking_hurt([0, 202, 0], id, true));
+    let events = posted(game, |g| g.creaking_hurt([0, 202, 0], id, true));
     let clumps: Vec<_> = events
         .iter()
         .filter(|(event, ..)| *event == "minecraft:block_place")
@@ -163,7 +166,8 @@ fn each_resin_clump_posts_block_place() {
 #[ignore = "daily"]
 fn shearing_a_copper_golem_posts_shear_at_the_golem() {
     let mut resources = None;
-    let mut game = game(&mut resources);
+    let mut fixture = game(&mut resources);
+    let game = fixture.game_mut();
     assert!(game.run_command(
         "summon minecraft:copper_golem 4.5 200 4.5 \
          {NoAI:1b,PersistenceRequired:1b,next_weather_age:-2L}"
@@ -182,7 +186,7 @@ fn shearing_a_copper_golem_posts_shear_at_the_golem() {
     };
     game.common.inventory[game.common.selected] =
         Some(sunrise_client::items::ItemStack::new("minecraft:shears", 1));
-    let events = posted(&mut game, |g| {
+    let events = posted(game, |g| {
         assert!(g.interact_copper_golem(index, "minecraft:shears"));
     });
     let shears: Vec<_> = events

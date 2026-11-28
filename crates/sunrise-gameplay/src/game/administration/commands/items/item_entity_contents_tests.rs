@@ -9,7 +9,8 @@ use sunrise_items::items::ItemStack;
 fn a_dropped_item_entity_holds_its_stack_in_contents() {
     use crate::game::game_tests::tests::server_game;
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     game.build_registries();
     game.set_allow_commands(true);
     assert!(game.run_command("scoreboard objectives add held dummy"));
@@ -29,22 +30,22 @@ fn a_dropped_item_entity_holds_its_stack_in_contents() {
     assert!(game.run_command(
         "execute as @e[type=item] if items entity @s contents * run scoreboard players add #seen held 1"
     ));
-    assert_eq!(held(&game), 1, "a dropped item's contents is its stack");
+    assert_eq!(held(&*game), 1, "a dropped item's contents is its stack");
     assert!(game.run_command(
         "execute as @e[type=item] unless items entity @s contents minecraft:diamond run scoreboard players add #seen held 1"
     ));
-    assert_eq!(held(&game), 2, "the stack is the elytra, not a diamond");
+    assert_eq!(held(&*game), 2, "the stack is the elytra, not a diamond");
     assert!(game.run_command(
         "execute as @e[type=item] if items entity @s contents minecraft:elytra run scoreboard players add #seen held 1"
     ));
-    assert_eq!(held(&game), 3);
+    assert_eq!(held(&*game), 3);
     // A count predicate reads the stack's count (one elytra, not two).
     assert!(
         game.run_command(
             "execute as @e[type=item] unless items entity @s contents minecraft:elytra[count=2] run scoreboard players add #seen held 1"
         )
     );
-    assert_eq!(held(&game), 4);
+    assert_eq!(held(&*game), 4);
 }
 
 use sunrise_gameplay_common::game::chat_common::ChatCommonGameExt1 as _;

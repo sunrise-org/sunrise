@@ -52,7 +52,8 @@ pub(crate) mod tests {
         use sunrise_gameplay_common::game::minecarts::{CartKind, Minecart};
         let pushed = [0, 12].map(|crowd: u32| {
             let mut resources = None;
-            let mut game = super::super::game_tests::tests::server_game(&mut resources);
+            let mut fixture = super::super::game_tests::tests::server_game(&mut resources);
+            let game = fixture.game_mut();
             let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
             for (i, (x, z)) in [(0.5, 0.5), (20.5, 0.5), (0.5, 20.5), (20.5, 20.5)]
                 .into_iter()
@@ -86,7 +87,8 @@ pub(crate) mod tests {
     #[ignore = "daily"]
     fn a_vehicles_box_query_matches_a_walk_over_every_mob() {
         let mut resources = None;
-        let mut game = super::super::game_tests::tests::server_game(&mut resources);
+        let mut fixture = super::super::game_tests::tests::server_game(&mut resources);
+        let game = fixture.game_mut();
         let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
         // A small LCG keeps the scene the same on every run.
         let mut seed = 0x2545_f491_4f6c_dd1du64;
@@ -150,7 +152,8 @@ pub(crate) mod tests {
     #[ignore = "daily"]
     fn a_vehicle_knows_its_mob_riders_as_soon_as_they_board() {
         let mut resources = None;
-        let mut game = super::super::game_tests::tests::server_game(&mut resources);
+        let mut fixture = super::super::game_tests::tests::server_game(&mut resources);
+        let game = fixture.game_mut();
         let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
         for id in 1..=4 {
             game.mobs.push(Mob::new(id, pig.clone(), Vec3::ZERO, 0.0));
@@ -161,15 +164,18 @@ pub(crate) mod tests {
         game.mobs[0].extra.mount = Some(100);
         game.vehicles_ticking(true);
         let none = (false, vec![]);
-        assert_eq!(riders(&game), [(true, vec![0]), none.clone(), none.clone()]);
+        assert_eq!(
+            riders(&*game),
+            [(true, vec![0]), none.clone(), none.clone()]
+        );
         game.mobs[0].removed = true;
         game.mobs[1].extra.mount = Some(101);
         game.mobs[3].extra.mount = Some(102);
         game.mobs[3].health = 0.0;
         let after = [none, (true, vec![1]), (true, vec![])];
-        assert_eq!(riders(&game), after);
+        assert_eq!(riders(&*game), after);
         game.vehicles_ticking(false);
-        assert_eq!(riders(&game), after);
+        assert_eq!(riders(&*game), after);
     }
 }
 

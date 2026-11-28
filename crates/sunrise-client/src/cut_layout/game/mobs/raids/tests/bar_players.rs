@@ -14,7 +14,8 @@ fn raid_bars(game: &sunrise_gameplay::game::ServerGame<'_>) -> usize {
 #[ignore = "daily"]
 fn the_raid_bar_keeps_a_viewer_until_the_next_twenty_tick_beat() {
     let mut resources = None;
-    let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+    let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+    let game = fixture.game_mut();
     game.server.world_root =
         std::path::PathBuf::from(std::env::var_os("SUNRISE_HOME").unwrap()).join("raid-bar-world");
     for x in -5..5 {
@@ -55,19 +56,23 @@ fn the_raid_bar_keeps_a_viewer_until_the_next_twenty_tick_beat() {
     // The first tick is a beat (the countdown is 300 ticks): the player joins.
     game.tick_raids();
     game.publish_boss_bars();
-    assert_eq!(raid_bars(&game), 1, "the player stands in the raid");
+    assert_eq!(raid_bars(&*game), 1, "the player stands in the raid");
     // Walking out of `getRaidAt` (96 blocks) must not drop the bar before the
     // next beat: ticks 2 to 19 are not beats.
     game.player.as_mut().unwrap().position = Vec3::new(200.5, 200.0, 8.5);
     for tick in 2..20 {
         game.tick_raids();
         game.publish_boss_bars();
-        assert_eq!(raid_bars(&game), 1, "the bar is still shown at tick {tick}");
+        assert_eq!(
+            raid_bars(&*game),
+            1,
+            "the bar is still shown at tick {tick}"
+        );
     }
     // Tick 20 is (`ticksActive % 20 == 0`): the bar goes.
     game.tick_raids();
     game.publish_boss_bars();
-    assert_eq!(raid_bars(&game), 0);
+    assert_eq!(raid_bars(&*game), 0);
     // Walking back in waits for a beat too: tick 21 is the countdown's
     // (cooldown 280), ticks 22 to 39 are not.
     game.tick_raids();
@@ -76,12 +81,12 @@ fn the_raid_bar_keeps_a_viewer_until_the_next_twenty_tick_beat() {
     for tick in 22..40 {
         game.tick_raids();
         game.publish_boss_bars();
-        assert_eq!(raid_bars(&game), 0, "the bar waits at tick {tick}");
+        assert_eq!(raid_bars(&*game), 0, "the bar waits at tick {tick}");
     }
     // Tick 40 is (`ticksActive % 20 == 0`): the player is back in the raid.
     game.tick_raids();
     game.publish_boss_bars();
-    assert_eq!(raid_bars(&game), 1, "the player stands in the raid again");
+    assert_eq!(raid_bars(&*game), 1, "the player stands in the raid again");
     // Dying leaves the set on a beat as well (`validPlayer`'s `isAlive`): tick
     // 41 is the countdown's (cooldown 260), ticks 42 to 59 are not.
     game.tick_raids();
@@ -94,10 +99,14 @@ fn the_raid_bar_keeps_a_viewer_until_the_next_twenty_tick_beat() {
     for tick in 42..60 {
         game.tick_raids();
         game.publish_boss_bars();
-        assert_eq!(raid_bars(&game), 1, "the bar outlives death at tick {tick}");
+        assert_eq!(
+            raid_bars(&*game),
+            1,
+            "the bar outlives death at tick {tick}"
+        );
     }
     // Tick 60 is (`ticksActive % 20 == 0`): the dead player leaves the bar.
     game.tick_raids();
     game.publish_boss_bars();
-    assert_eq!(raid_bars(&game), 0);
+    assert_eq!(raid_bars(&*game), 0);
 }

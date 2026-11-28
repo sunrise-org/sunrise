@@ -59,7 +59,8 @@ fn the_death_screen_receives_the_signed_player_score() {
 #[ignore = "daily"]
 fn a_point_lost_at_level_zero_zeroes_the_total() {
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     game.experience = Experience {
         level: 0,
         progress: 0.0,
@@ -76,7 +77,8 @@ fn a_point_lost_at_level_zero_zeroes_the_total() {
 #[ignore = "daily"]
 fn a_point_lost_above_level_zero_only_takes_that_point() {
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     game.experience = Experience {
         level: 5,
         progress: 0.0,

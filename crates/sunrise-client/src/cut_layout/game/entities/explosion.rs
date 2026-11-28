@@ -20,7 +20,8 @@ pub(crate) mod tests {
     #[ignore = "daily"]
     fn rays_reusing_their_last_block_explode_what_each_step_did() {
         let mut resources = None;
-        let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let game = fixture.game_mut();
         let registry = &game.pack.assets.registry;
         let states: Vec<BlockStateId> = [
             "minecraft:stone",
@@ -48,7 +49,7 @@ pub(crate) mod tests {
         let center = [8.3, 64.6, 7.9];
         for (radius, resists) in [(4.0, None), (6.0, None), (4.0, Some(([8, 64, 8], 1200.0)))] {
             game.world.random.set_seed(7);
-            let expected = exploded_positions_stepwise(&mut game, center, radius, resists);
+            let expected = exploded_positions_stepwise(game, center, radius, resists);
             game.world.random.set_seed(7);
             let start = ExplosionStart::from(mod_api::__private::built::ExplosionStart {
                 dimension: mod_api::DimensionKey::OVERWORLD,
@@ -101,7 +102,8 @@ mod shulker_lock_drop_tests {
     #[ignore = "daily"]
     fn destruction_captures_the_external_shulker_lock_before_removal() {
         let mut resources = None;
-        let mut game = server_game(&mut resources);
+        let mut fixture = server_game(&mut resources);
+        let game = fixture.game_mut();
         game.build_registries();
         game.set_allow_commands(true);
         game.block_ticks

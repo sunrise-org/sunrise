@@ -39,7 +39,8 @@ fn chats(receiver: &mpsc::Receiver<sunrise_sim::lan::Out>) -> Vec<sunrise_core::
 #[ignore = "daily"]
 fn added_issuer_actor_missing_guest_and_restoration_controls() {
     let mut resources = None;
-    let mut game = tests::server_game(&mut resources);
+    let mut fixture = tests::server_game(&mut resources);
+    let game = fixture.game_mut();
     game.build_registries();
     game.set_allow_commands(true);
     game.level.health = 20.0;

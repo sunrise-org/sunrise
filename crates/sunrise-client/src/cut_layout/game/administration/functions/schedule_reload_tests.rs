@@ -10,7 +10,10 @@ use sunrise_gameplay::game::commands::execute::ExecState;
 fn schedule_game<'a>(
     label: &str,
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> (sunrise_gameplay::game::ServerGame<'a>, std::path::PathBuf) {
+) -> (
+    sunrise_gameplay::game::game_tests::tests::TestServerGame<'a>,
+    std::path::PathBuf,
+) {
     let dir = std::env::temp_dir().join(format!(
         "sunrise-schedule-{label}-{}-{}",
         std::process::id(),
@@ -37,7 +40,8 @@ fn schedule_game<'a>(
         "scoreboard players add fired hs 1\n",
     )
     .unwrap();
-    let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+    let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+    let game = fixture.game_mut();
     game.server.world_root = dir.clone();
     game.build_registries();
     game.set_allow_commands(true);
@@ -50,7 +54,7 @@ fn schedule_game<'a>(
         game.server.fns.0.store.errors
     );
     game.run_command("scoreboard objectives add hs dummy");
-    (game, dir)
+    (fixture, dir)
 }
 
 fn run(game: &mut sunrise_gameplay::game::ServerGame<'_>, line: &str) {
@@ -67,27 +71,28 @@ fn fired(game: &sunrise_gameplay::game::ServerGame<'_>) -> i32 {
 #[ignore = "daily"]
 fn a_fired_or_cleared_event_stays_gone_across_a_reload() {
     let mut resources = None;
-    let (mut game, dir) = schedule_game("gone", &mut resources);
+    let (mut fixture, dir) = schedule_game("gone", &mut resources);
+    let game = fixture.game_mut();
     // A fired event: saved while pending, then run, then reloaded.
-    run(&mut game, "schedule function hs:hello 5t");
+    run(game, "schedule function hs:hello 5t");
     game.save_schedule();
     let due = game.world.game_time + 5;
     game.world.game_time = due;
     game.run_scheduled_functions();
-    assert_eq!(fired(&game), 1);
+    assert_eq!(fired(&*game), 1);
     assert!(game.server.fns.0.schedule.is_empty());
-    run(&mut game, "reload");
+    run(game, "reload");
     game.run_scheduled_functions();
-    assert_eq!(fired(&game), 1, "a fired event must not come back");
+    assert_eq!(fired(&*game), 1, "a fired event must not come back");
     // A cleared event: saved while pending, then `/schedule clear`-ed.
-    run(&mut game, "schedule function hs:hello 100t");
+    run(game, "schedule function hs:hello 100t");
     game.save_schedule();
-    run(&mut game, "schedule clear hs:hello");
+    run(game, "schedule clear hs:hello");
     assert!(game.server.fns.0.schedule.is_empty());
-    run(&mut game, "reload");
+    run(game, "reload");
     game.world.game_time = due + 100;
     game.run_scheduled_functions();
-    assert_eq!(fired(&game), 1, "a cleared event must not come back");
+    assert_eq!(fired(&*game), 1, "a cleared event must not come back");
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -95,19 +100,20 @@ fn a_fired_or_cleared_event_stays_gone_across_a_reload() {
 #[ignore = "daily"]
 fn a_pending_event_survives_a_save_and_a_reload() {
     let mut resources = None;
-    let (mut game, dir) = schedule_game("pending", &mut resources);
-    run(&mut game, "schedule function hs:hello 40t");
+    let (mut fixture, dir) = schedule_game("pending", &mut resources);
+    let game = fixture.game_mut();
+    run(game, "schedule function hs:hello 40t");
     game.save_schedule();
     let due = game.world.game_time + 40;
     // A reload keeps the live queue: the event still fires at its time.
-    run(&mut game, "reload");
+    run(game, "reload");
     assert_eq!(game.server.fns.0.schedule.len(), 1);
     game.world.game_time = due;
     game.run_scheduled_functions();
-    assert_eq!(fired(&game), 1);
+    assert_eq!(fired(&*game), 1);
     assert!(game.server.fns.0.schedule.is_empty());
     // A pending event of a saved world is read back when a session opens it.
-    run(&mut game, "schedule function hs:hello 60t");
+    run(game, "schedule function hs:hello 60t");
     game.save_schedule();
     let due = game.world.game_time + 60;
     game.server.fns.0 = Default::default();
@@ -123,7 +129,7 @@ fn a_pending_event_survives_a_save_and_a_reload() {
     assert_eq!(loaded, vec![("hs:hello".to_owned(), due)]);
     game.world.game_time = due;
     game.run_scheduled_functions();
-    assert_eq!(fired(&game), 2);
+    assert_eq!(fired(&*game), 2);
     std::fs::remove_dir_all(dir).unwrap();
 }
 

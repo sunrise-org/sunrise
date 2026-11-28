@@ -145,8 +145,12 @@ fn a_mount_past_seven_blocks_closes_its_menu() {
 fn guest_beside_a_donkey<'a>(
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
     gap: f64,
-) -> (sunrise_gameplay::game::ServerGame<'a>, Guest) {
-    let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+) -> (
+    sunrise_gameplay::game::game_tests::tests::TestServerGame<'a>,
+    Guest,
+) {
+    let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+    let game = fixture.game_mut();
     let kind = game
         .res
         .mob_types()
@@ -178,8 +182,8 @@ fn guest_beside_a_donkey<'a>(
     guest.dimension = "minecraft:overworld".into();
     guest.placed = true;
     guest.loaded = true;
-    guest.position = [box_face(&game) + gap, 64.0, 8.5];
-    (game, guest)
+    guest.position = [box_face(&*game) + gap, 64.0, 8.5];
+    (fixture, guest)
 }
 
 /// The east face of the donkey's box at `(8.5, 64, 8.5)`.
@@ -194,24 +198,25 @@ fn box_face(game: &sunrise_gameplay::game::ServerGame<'_>) -> f64 {
 #[ignore = "daily"]
 fn a_guests_mount_menu_holds_to_its_own_entity_interaction_range_plus_four() {
     let mut resources = None;
-    let (game, mut guest) = guest_beside_a_donkey(&mut resources, 6.5);
+    let (fixture, mut guest) = guest_beside_a_donkey(&mut resources, 6.5);
+    let game = fixture.game();
     assert!(
         game.lan_mount_valid(&guest, DONKEY),
         "the menu closed 6.5 blocks from the donkey's box"
     );
-    guest.position[0] = box_face(&game) + 7.5;
+    guest.position[0] = box_face(game) + 7.5;
     assert!(
         !game.lan_mount_valid(&guest, DONKEY),
         "the menu stayed open 7.5 blocks from the donkey's box"
     );
     // Creative's entity interaction range is 5, so the menu holds to 9.
     guest.game_mode = 1;
-    guest.position[0] = box_face(&game) + 8.0;
+    guest.position[0] = box_face(game) + 8.0;
     assert!(
         game.lan_mount_valid(&guest, DONKEY),
         "a creative guest's menu closed 8 blocks from the donkey's box"
     );
-    guest.position[0] = box_face(&game) + 9.5;
+    guest.position[0] = box_face(game) + 9.5;
     assert!(
         !game.lan_mount_valid(&guest, DONKEY),
         "a creative guest's menu stayed open 9.5 blocks from the donkey's box"

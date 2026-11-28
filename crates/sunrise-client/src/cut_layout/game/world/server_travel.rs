@@ -752,7 +752,8 @@ pub(crate) mod credits_respawn_tests {
     #[ignore = "daily"]
     fn the_credits_respawn_waits_for_the_client_to_load() {
         let mut resources = None;
-        let (_scratch, mut game, rx) = server_with_a_nether_anchor(&mut resources);
+        let (_scratch, mut fixture, rx) = server_with_a_nether_anchor(&mut resources);
+        let game = fixture.game_mut();
         let host = game.server.lan.as_mut().unwrap();
         host.hub.guests.update(0, |g| {
             g.spawn = Some([0.5, 100.0, 0.5]);
@@ -819,11 +820,12 @@ pub(crate) mod credits_respawn_tests {
         resources: &'a mut Option<Arc<sunrise_gameplay_common::game::Resources>>,
     ) -> (
         tempfile::TempDir,
-        sunrise_gameplay::game::ServerGame<'a>,
+        sunrise_gameplay::game::game_tests::tests::TestServerGame<'a>,
         mpsc::Receiver<Out>,
     ) {
         let scratch = tempfile::tempdir().unwrap();
-        let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+        let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+        let game = fixture.game_mut();
         game.server.world_root = scratch.path().to_owned();
         // The world spawn a player without a point of its own comes back to.
         game.level.world_spawn = Some([0, 100, 0]);
@@ -858,7 +860,7 @@ pub(crate) mod credits_respawn_tests {
         let (mut guest, rx) = placed_guest(2, Dim::Overworld, [0.5, 100.0, 0.5]);
         guest.respawn_elsewhere = Some((Dim::Nether.id().into(), ANCHOR, 0.0, 0.0, false));
         game.server.lan.as_mut().unwrap().hub.guests.push(guest);
-        (scratch, game, rx)
+        (scratch, fixture, rx)
     }
     /// A player whose own point is a charged Nether anchor and who has seen the
     /// credits comes back at that anchor, in the Nether, and the anchor keeps
@@ -869,7 +871,8 @@ pub(crate) mod credits_respawn_tests {
     #[ignore = "daily"]
     fn the_credits_respawn_returns_to_a_nether_anchor_and_keeps_its_charge() {
         let mut resources = None;
-        let (_scratch, mut game, _rx) = server_with_a_nether_anchor(&mut resources);
+        let (_scratch, mut fixture, _rx) = server_with_a_nether_anchor(&mut resources);
+        let game = fixture.game_mut();
         game.remove_old_player_for_clone(2, false);
         game.server
             .lan
@@ -886,8 +889,8 @@ pub(crate) mod credits_respawn_tests {
 
         // The Nether loads around the anchor, which holds one charge.
         game.enter_level(Dim::Nether).unwrap();
-        light_spawn_chunks(&mut game);
-        let charged = charge_anchor(&mut game);
+        light_spawn_chunks(game);
+        let charged = charge_anchor(game);
         game.tick_server_travel();
 
         // RespawnAnchorBlock.findStandUpPosition: the block's top is the only
@@ -920,7 +923,8 @@ pub(crate) mod credits_respawn_tests {
     #[ignore = "daily"]
     fn a_spectator_leaves_the_end_for_its_nether_point() {
         let mut resources = None;
-        let (_scratch, mut game, _rx) = server_with_a_nether_anchor(&mut resources);
+        let (_scratch, mut fixture, _rx) = server_with_a_nether_anchor(&mut resources);
+        let game = fixture.game_mut();
         game.server.lan.as_mut().unwrap().hub.guests.update(0, |g| {
             g.game_mode = SPECTATOR;
             g.seen_credits = true;
@@ -946,8 +950,8 @@ pub(crate) mod credits_respawn_tests {
         );
         assert_eq!(game.command_guest(2).unwrap().dimension, Dim::End.id());
         game.enter_level(Dim::Nether).unwrap();
-        light_spawn_chunks(&mut game);
-        charge_anchor(&mut game);
+        light_spawn_chunks(game);
+        charge_anchor(game);
         game.tick_server_travel();
         assert_eq!(
             game.command_guest(2).unwrap().dimension,

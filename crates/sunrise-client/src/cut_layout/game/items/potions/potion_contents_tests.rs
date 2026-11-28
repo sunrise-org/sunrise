@@ -13,14 +13,15 @@ use sunrise_sim::motion::PlayerMotion;
 /// A server's game with a player standing at the origin's block.
 fn player_game(
     resources: &mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> sunrise_gameplay::game::ServerGame<'_> {
-    let mut game = server_game(resources);
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'_> {
+    let mut fixture = server_game(resources);
+    let game = fixture.game_mut();
     game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
     // A fixed name: no generated sunrise-player.txt in the working directory.
     game.options.player_name = Some("PotionContents".into());
     game.build_registries();
     game.set_allow_commands(true);
-    game
+    fixture
 }
 
 /// A stack with `custom_effects` of `(effect, duration, amplifier)` on top of
@@ -51,7 +52,8 @@ fn with_custom_effects(mut stack: ItemStack, effects: &[(&str, i32, i32)]) -> It
 #[ignore = "daily"]
 fn a_splash_potion_applies_its_custom_effects_and_duration_scale() {
     let mut resources = None;
-    let mut game = player_game(&mut resources);
+    let mut fixture = player_game(&mut resources);
+    let game = fixture.game_mut();
     let mut stack = with_custom_effects(
         ItemStack::new("minecraft:splash_potion", 1).with_potion("minecraft:swiftness"),
         &[("poison", 900, 0)],
@@ -109,7 +111,8 @@ fn a_splash_potion_applies_its_custom_effects_and_duration_scale() {
 #[ignore = "daily"]
 fn a_lingering_potion_of_custom_effects_makes_its_cloud() {
     let mut resources = None;
-    let mut game = player_game(&mut resources);
+    let mut fixture = player_game(&mut resources);
+    let game = fixture.game_mut();
     let mut stack = with_custom_effects(
         ItemStack::new("minecraft:lingering_potion", 1),
         &[("poison", 900, 0)],
@@ -162,7 +165,8 @@ fn a_lingering_potion_of_custom_effects_makes_its_cloud() {
 #[ignore = "daily"]
 fn a_water_potion_refills_an_axolotl_once() {
     let mut resources = None;
-    let mut game = player_game(&mut resources);
+    let mut fixture = player_game(&mut resources);
+    let game = fixture.game_mut();
     assert!(game.run_command(
         "summon minecraft:axolotl 0.5 64 0.5 {NoAI:1b,PersistenceRequired:1b,Silent:1b}"
     ));
@@ -189,7 +193,8 @@ fn a_water_potion_refills_an_axolotl_once() {
 #[ignore = "daily"]
 fn a_water_potion_with_custom_effects_does_not_douse_fire() {
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     let pos = [2, 4, 3];
     let campfire = game
         .pack
@@ -206,7 +211,7 @@ fn a_water_potion_with_custom_effects_does_not_douse_fire() {
             .and_then(|s| s.properties.get("lit"))
             .is_some_and(|v| v == "true")
     };
-    assert!(lit(&game), "the campfire starts lit");
+    assert!(lit(&*game), "the campfire starts lit");
     // The potion hits the top of the block under the campfire, so the cell
     // `AbstractThrownPotion.douseFire` looks at first is the campfire's.
     let hit = Some(([2, 3, 3], Direction::Up));
@@ -226,15 +231,15 @@ fn a_water_potion_with_custom_effects_does_not_douse_fire() {
     };
     let water = ItemStack::new("minecraft:splash_potion", 1).with_potion("minecraft:water");
     throw(
-        &mut game,
+        game,
         &with_custom_effects(water.clone(), &[("slowness", 1800, 0)]),
     );
     assert!(
-        lit(&game),
+        lit(&*game),
         "water with custom effects is not in #douses_fire"
     );
-    throw(&mut game, &water);
-    assert!(!lit(&game), "plain water puts the campfire out");
+    throw(game, &water);
+    assert!(!lit(&*game), "plain water puts the campfire out");
 }
 
 use sunrise_gameplay_common::game::chat_common::ChatCommonGameExt1 as _;

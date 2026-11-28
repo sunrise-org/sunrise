@@ -11,7 +11,8 @@ use sunrise_gameplay::game::game_tests::tests::server_game;
 #[ignore = "daily"]
 fn cave_air_and_void_air_are_air_to_the_command_filters() {
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     game.build_registries();
     game.set_allow_commands(true);
     game.block_ticks

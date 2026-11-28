@@ -16,10 +16,11 @@ use {
 
 fn game(
     resources: &mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> sunrise_gameplay::game::ServerGame<'_> {
-    let mut game = server_game(resources);
-    set_up(&mut game);
-    game
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'_> {
+    let mut fixture = server_game(resources);
+    let game = fixture.game_mut();
+    set_up(game);
+    fixture
 }
 
 fn set_up(game: &mut sunrise_gameplay::game::ServerGame<'_>) {
@@ -115,12 +116,13 @@ fn stack(meal: bool) -> Option<ItemStack> {
 #[ignore = "daily"]
 fn block_drops_off_stops_the_pop_of_bone_meal_and_harvests() {
     let mut resources = None;
-    let mut game = game(&mut resources);
+    let mut fixture = game(&mut resources);
+    let game = fixture.game_mut();
     assert!(game.run_command("gamerule block_drops false"));
     for (block, _, _, meal, off, _) in CASES {
-        place(&mut game, off, block);
+        place(game, off, block);
         let before = game.world.random.clone();
-        assert!(use_block(&mut game, off, stack(meal)), "{block} was used");
+        assert!(use_block(game, off, stack(meal)), "{block} was used");
         assert!(
             game.dropped.is_empty(),
             "{block} drops nothing with block_drops off"
@@ -146,8 +148,8 @@ fn block_drops_off_stops_the_pop_of_bone_meal_and_harvests() {
     // is read per use, not taken once when the level is built.
     assert!(game.run_command("gamerule block_drops true"));
     let (block, item, _, meal, _, on) = CASES[0];
-    place(&mut game, on, block);
-    assert!(use_block(&mut game, on, stack(meal)));
+    place(game, on, block);
+    assert!(use_block(game, on, stack(meal)));
     assert_eq!(game.dropped.len(), 1, "the rule on pops {item} again");
     assert_eq!(&*game.dropped[0].stack.item, item);
 }
@@ -156,16 +158,17 @@ fn block_drops_off_stops_the_pop_of_bone_meal_and_harvests() {
 #[ignore = "daily"]
 fn block_drops_on_keeps_the_pop() {
     let mut resources = None;
-    let mut game = game(&mut resources);
+    let mut fixture = game(&mut resources);
+    let game = fixture.game_mut();
     assert!(
         game.ui
             .rules
             .bool_at(sunrise_game_data::gamerules::vanilla::BLOCK_DROPS)
     );
     for (block, item, drops, meal, _, on) in CASES {
-        place(&mut game, on, block);
+        place(game, on, block);
         let mut expected = game.world.random.clone();
-        assert!(use_block(&mut game, on, stack(meal)), "{block} was used");
+        assert!(use_block(game, on, stack(meal)), "{block} was used");
         assert_eq!(game.dropped.len(), drops, "{block} pops its stacks");
         for dropped in &game.dropped {
             assert_eq!(&*dropped.stack.item, item);

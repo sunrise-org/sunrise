@@ -141,11 +141,12 @@ pub(crate) mod score_condition_tests {
 
     pub(crate) fn game(
         resources: &mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-    ) -> sunrise_gameplay::game::ServerGame<'_> {
-        let mut game = server_game(resources);
+    ) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'_> {
+        let mut fixture = server_game(resources);
+        let game = fixture.game_mut();
         game.build_registries();
         game.set_allow_commands(true);
-        game
+        fixture
     }
 
     #[allow(unused_imports)]
@@ -158,13 +159,11 @@ pub(crate) use sunrise_gameplay::game::server_side::commands_server::execute::sc
     #[ignore = "daily"]
     fn an_unknown_source_objective_fails_a_terminal_condition() {
         let mut resources = None;
-        let mut game = game(&mut resources);
+        let mut fixture = game(&mut resources);
+        let game = fixture.game_mut();
         assert!(game.run_command("scoreboard objectives add a dummy"));
         for sign in ["if", "unless"] {
-            let (ok, said) = say(
-                &mut game,
-                &format!("execute {sign} score zero a = zero nope"),
-            );
+            let (ok, said) = say(game, &format!("execute {sign} score zero a = zero nope"));
             assert!(!ok, "{sign}: {said:?}");
             assert!(
                 said.iter().any(|m| m.contains("nope")),
@@ -180,11 +179,12 @@ pub(crate) use sunrise_gameplay::game::server_side::commands_server::execute::sc
     #[ignore = "daily"]
     fn an_unknown_source_objective_drops_a_forked_condition_silently() {
         let mut resources = None;
-        let mut game = game(&mut resources);
+        let mut fixture = game(&mut resources);
+        let game = fixture.game_mut();
         assert!(game.run_command("scoreboard objectives add a dummy"));
         for sign in ["if", "unless"] {
             let (ok, said) = say(
-                &mut game,
+                game,
                 &format!("execute {sign} score zero a = zero nope run say hi"),
             );
             assert!(ok, "{sign}: {said:?}");

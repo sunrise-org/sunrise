@@ -8,7 +8,8 @@ mod typed_state_range_read_tests {
     fn loaded_pack_state_ranges_match_typed_controls() {
         let scratch = tempfile::tempdir().unwrap();
         let mut resources = None;
-        let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let game = fixture.game_mut();
         let source =
             std::path::PathBuf::from(std::env::var_os("SUNRISE_TYPED_RANGE_PACK").unwrap());
         game.server.world_root = scratch.path().join("typed-range-world");
@@ -109,8 +110,8 @@ mod typed_state_range_read_tests {
                 assert_eq!(game.world.game_time, clock);
             }
         };
-        callback(&mut game, 0, "always", true);
-        callback(&mut game, 0, "never", false);
+        callback(game, 0, "always", true);
+        callback(game, 0, "never", false);
         for sign in ["if", "unless"] {
             for h in ["#r", "#s"] {
                 assert!(game.run_command(&format!("scoreboard players set {h} ranges -99")));
@@ -136,7 +137,7 @@ mod typed_state_range_read_tests {
                 ("inverted", false),
                 ("boolean", !wet),
             ] {
-                callback(&mut game, x, name, want);
+                callback(game, x, name, want);
             }
         }
         assert!(game.run_command("setblock 10 199 0 minecraft:farmland"));
@@ -154,7 +155,7 @@ mod typed_state_range_read_tests {
                 ("age_inverted", false),
                 ("age_exact", age == 5),
             ] {
-                callback(&mut game, 10, name, want);
+                callback(game, 10, name, want);
             }
         }
         assert_eq!(game.block_entity_nbt([0, 200, 0]).as_ref(), Some(&chest));
@@ -171,7 +172,8 @@ mod typed_state_range_read_tests {
     fn loaded_pack_direction_ranges_keep_full_and_filtered_domains() {
         let scratch = tempfile::tempdir().unwrap();
         let mut resources = None;
-        let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let game = fixture.game_mut();
         let source =
             std::path::PathBuf::from(std::env::var_os("SUNRISE_TYPED_RANGE_PACK").unwrap());
         game.server.world_root = scratch.path().join("typed-direction-world");
@@ -312,12 +314,12 @@ mod typed_state_range_read_tests {
             )));
             assert!(game.run_command("execute if loaded 2 200 0"));
             callback(
-                &mut game,
+                game,
                 2,
                 "direction_span",
                 matches!(facing, "north" | "south" | "west"),
             );
-            callback(&mut game, 2, "direction_reversed", false);
+            callback(game, 2, "direction_reversed", false);
         }
         for (x, block) in [(4, "pointed_dripstone"), (6, "sulfur_spike")] {
             for vertical in ["up", "down"] {
@@ -328,8 +330,8 @@ mod typed_state_range_read_tests {
                     "execute if block {x} 200 0 minecraft:{block}[vertical_direction={vertical}]"
                 )));
                 assert!(game.run_command(&format!("execute if loaded {x} 200 0")));
-                callback(&mut game, x, "vertical_up", vertical == "up");
-                callback(&mut game, x, "vertical_invalid", false);
+                callback(game, x, "vertical_up", vertical == "up");
+                callback(game, x, "vertical_invalid", false);
             }
         }
     }

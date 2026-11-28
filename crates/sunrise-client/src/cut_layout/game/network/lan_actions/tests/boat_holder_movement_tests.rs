@@ -79,13 +79,14 @@ pub(in crate::game) fn group(
 }
 pub(in crate::game) fn walk_stop(assert_trajectory: bool) {
     let mut resources = None;
-    let (mut g, _rx) = scene(&mut resources);
+    let (mut fixture, _rx) = scene(&mut resources);
+    let g = fixture.game_mut();
     for _ in 0..2 {
         g.tick_boats();
     }
     let id = g.boats[0].id;
     group(
-        &mut g,
+        g,
         vec![S::Interact(play::Interact {
             id: id as i32,
             hand: 0,
@@ -101,7 +102,7 @@ pub(in crate::game) fn walk_stop(assert_trajectory: bool) {
     for tick in 1..=30 {
         x += 0.4;
         group(
-            &mut g,
+            g,
             vec![
                 S::MovePlayerPos(play::MovePlayerPos {
                     x,
@@ -121,7 +122,7 @@ pub(in crate::game) fn walk_stop(assert_trajectory: bool) {
     }
     for tick in 1..=10 {
         group(
-            &mut g,
+            g,
             vec![S::ClientTickEnd(sunrise_protocol::packets::Empty)],
             31 + tick,
         );
@@ -157,10 +158,11 @@ fn boat_tick_uses_stopped_players_known_movement() {
 #[ignore = "daily"]
 fn walking_then_still_tick_end_preserves_the_accepted_displacement() {
     let mut resources = None;
-    let (mut g, _rx) = scene(&mut resources);
+    let (mut fixture, _rx) = scene(&mut resources);
+    let g = fixture.game_mut();
     let id = g.boats[0].id;
     group(
-        &mut g,
+        g,
         vec![S::Interact(play::Interact {
             id: id as i32,
             hand: 0,
@@ -170,7 +172,7 @@ fn walking_then_still_tick_end_preserves_the_accepted_displacement() {
         1,
     );
     group(
-        &mut g,
+        g,
         vec![
             S::MovePlayerPos(play::MovePlayerPos {
                 x: 0.9,
@@ -182,16 +184,16 @@ fn walking_then_still_tick_end_preserves_the_accepted_displacement() {
         ],
         2,
     );
-    let walking = snapshot(&g);
+    let walking = snapshot(&*g);
     assert_eq!(walking.known, [0.4, 0.0, 0.0]);
     assert_eq!(walking.previous, [0.5, 100.0, 0.5]);
     assert_eq!(walking.position, [0.9, 100.0, 0.5]);
     group(
-        &mut g,
+        g,
         vec![S::ClientTickEnd(sunrise_protocol::packets::Empty)],
         3,
     );
-    let still = snapshot(&g);
+    let still = snapshot(&*g);
     assert_eq!(still.known, [0.0; 3]);
     assert_eq!(still.previous, walking.previous);
     assert_eq!(still.position, walking.position);

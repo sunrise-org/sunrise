@@ -10,7 +10,8 @@ use sunrise_gameplay::game::game_tests::tests::server_game;
 #[ignore = "daily"]
 fn compute_sources_store_the_providers_value() {
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     game.build_registries();
     game.set_allow_commands(true);
     let store = "h_compute:values";
@@ -22,22 +23,22 @@ fn compute_sources_store_the_providers_value() {
     assert!(game.run_command(&format!(
         r#"data modify storage {store} x set compute default integer {{type:"minecraft:constant",value:5}}"#
     )));
-    assert_eq!(stored(&game, "x"), Some(Tag::Int(5)));
+    assert_eq!(stored(&*game, "x"), Some(Tag::Int(5)));
     assert!(game.run_command(&format!(
         r#"data modify storage {store} x set compute default float {{type:"minecraft:constant",value:2.5}}"#
     )));
-    assert_eq!(stored(&game, "x"), Some(Tag::Float(2.5f32.to_bits())));
+    assert_eq!(stored(&*game, "x"), Some(Tag::Float(2.5f32.to_bits())));
 
     // ContextFloatProvider.getFloat and ContextIntProvider.getInt read a
     // failure (a non-finite value, an ArithmeticException) as 0.
     assert!(game.run_command(&format!(
         r#"data modify storage {store} x set compute default float {{type:"minecraft:div",left:1,right:0}}"#
     )));
-    assert_eq!(stored(&game, "x"), Some(Tag::Float(0.0f32.to_bits())));
+    assert_eq!(stored(&*game, "x"), Some(Tag::Float(0.0f32.to_bits())));
     assert!(game.run_command(&format!(
         r#"data modify storage {store} x set compute default integer {{type:"minecraft:pow",base:0,exponent:0}}"#
     )));
-    assert_eq!(stored(&game, "x"), Some(Tag::Int(0)));
+    assert_eq!(stored(&*game, "x"), Some(Tag::Int(0)));
 
     // A provider the argument cannot decode fails the command and writes nothing.
     assert!(game.run_command(&format!(
@@ -46,7 +47,7 @@ fn compute_sources_store_the_providers_value() {
     assert!(!game.run_command(&format!(
         "data modify storage {store} x set compute default integer minecraft:no_such_provider"
     )));
-    assert_eq!(stored(&game, "x"), Some(Tag::Int(9)));
+    assert_eq!(stored(&*game, "x"), Some(Tag::Int(9)));
 
     // `compute block <pos>`: the context's block state reaches the provider.
     assert!(game.run_command("forceload add 0 0 15 15"));
@@ -55,10 +56,10 @@ fn compute_sources_store_the_providers_value() {
         r#"data modify storage {store} y set compute block 8 229 8 integer {{type:"minecraft:conditional",condition:{{type:"minecraft:match_block",blocks:"minecraft:smoker"}},on_true:7,on_false:3}}"#
     );
     assert!(game.run_command(&on_block));
-    assert_eq!(stored(&game, "y"), Some(Tag::Int(7)));
+    assert_eq!(stored(&*game, "y"), Some(Tag::Int(7)));
     assert!(game.run_command("setblock 8 229 8 minecraft:air"));
     assert!(game.run_command(&on_block));
-    assert_eq!(stored(&game, "y"), Some(Tag::Int(3)));
+    assert_eq!(stored(&*game, "y"), Some(Tag::Int(3)));
 
     // `compute entity <target>`: the entity context is resolved, and the
     // value is stored.
@@ -66,7 +67,7 @@ fn compute_sources_store_the_providers_value() {
     assert!(game.run_command(&format!(
         r#"data modify storage {store} z set compute entity @e[type=minecraft:pig,limit=1] integer {{type:"minecraft:add",inputs:[1,1]}}"#
     )));
-    assert_eq!(stored(&game, "z"), Some(Tag::Int(2)));
+    assert_eq!(stored(&*game, "z"), Some(Tag::Int(2)));
 }
 
 use sunrise_gameplay_common::game::chat_common::ChatCommonGameExt1 as _;

@@ -9,7 +9,8 @@ use sunrise_level::{brewing::BrewingStand, containers::BlockEntity};
 #[ignore = "daily"]
 fn starting_a_brew_marks_the_chunk() {
     let mut game_resources = None;
-    let mut game = server_game(&mut game_resources);
+    let mut fixture = server_game(&mut game_resources);
+    let game = fixture.game_mut();
     let state = game
         .pack
         .assets

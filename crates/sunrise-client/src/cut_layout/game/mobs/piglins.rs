@@ -13,7 +13,8 @@ pub(crate) mod tests {
     #[ignore = "daily"]
     fn a_throw_swings_the_off_hand_once() {
         let mut resources = None;
-        let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let game = fixture.game_mut();
         game.build_registries();
         game.set_allow_commands(true);
         assert!(game.run_command("summon piglin 8.5 80 8.5 {NoAI:1b,PersistenceRequired:1b}"));

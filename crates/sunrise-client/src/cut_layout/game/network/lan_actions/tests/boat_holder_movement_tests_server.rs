@@ -7,8 +7,12 @@ use sunrise_sim::lan::{Joined, NetConfig, Out, PlayerSender, guest::Guest, hub::
 
 pub(crate) fn scene<'a>(
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> (sunrise_gameplay::game::ServerGame<'a>, mpsc::Receiver<Out>) {
-    let mut g = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+) -> (
+    sunrise_gameplay::game::game_tests::tests::TestServerGame<'a>,
+    mpsc::Receiver<Out>,
+) {
+    let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+    let g = fixture.game_mut();
     g.build_registries();
     g.set_allow_commands(true);
     let stone = g
@@ -84,7 +88,7 @@ pub(crate) fn scene<'a>(
     g.server.lan.as_mut().unwrap().hub.guests.push(guest);
     g.sync_tick_chunks();
     g.server.ticked_entities_through = g.server.next_entity;
-    (g, rx)
+    (fixture, rx)
 }
 
 use sunrise_gameplay_common::game::chat_common::ChatCommonGameExt1 as _;

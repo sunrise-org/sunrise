@@ -18,8 +18,9 @@ use sunrise_world::lazy_json::LazyJson;
 fn campfire_game<'a>(
     pos: [i32; 3],
     resources: &'a mut Option<Arc<Resources>>,
-) -> sunrise_gameplay::game::ServerGame<'a> {
-    let mut game = server_game(resources);
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'a> {
+    let mut fixture = server_game(resources);
+    let game = fixture.game_mut();
     // A local player, not a dedicated server's silent world: criteria and
     // statistics apply to them.
     game.options.dedicated = None;
@@ -66,7 +67,7 @@ fn campfire_game<'a>(
             f64::from(pos[2]) + 0.5,
         ],
     });
-    game
+    fixture
 }
 
 /// The campfire's four cooking slots.
@@ -87,7 +88,8 @@ fn slots(game: &sunrise_gameplay::game::ServerGame<'_>, pos: [i32; 3]) -> usize 
 fn a_sneak_keeps_the_food_and_placing_it_fires_item_used_on_block() {
     const POS: [i32; 3] = [2, 4, 3];
     let mut resources = None;
-    let mut game = campfire_game(POS, &mut resources);
+    let mut fixture = campfire_game(POS, &mut resources);
+    let game = fixture.game_mut();
     // The tree a data pack with one `item_used_on_block` criterion on this
     // campfire would be indexed into.
     let mut tree = Tree::default();
@@ -116,7 +118,7 @@ fn a_sneak_keeps_the_food_and_placing_it_fires_item_used_on_block() {
     let hit = game.server.forced_hit.unwrap();
     game.server_set_acting_sneak(true);
     assert!(game.use_hand(Some(&hit)).unwrap());
-    assert_eq!(slots(&game, POS), 0, "the sneak put no beef on the fire");
+    assert_eq!(slots(&*game, POS), 0, "the sneak put no beef on the fire");
     assert_eq!(game.held().unwrap().count, 4, "the beef stayed in hand");
     assert!(game.using.is_some(), "the beef is being eaten");
     assert!(
@@ -127,7 +129,7 @@ fn a_sneak_keeps_the_food_and_placing_it_fires_item_used_on_block() {
     game.using = None;
     game.server_set_acting_sneak(false);
     assert!(game.use_hand(Some(&hit)).unwrap());
-    assert_eq!(slots(&game, POS), 1, "the beef went on the fire");
+    assert_eq!(slots(&*game, POS), 1, "the beef went on the fire");
     assert_eq!(game.held().unwrap().count, 3, "one beef was used");
     assert!(game.using.is_none(), "the click was consumed");
     assert!(

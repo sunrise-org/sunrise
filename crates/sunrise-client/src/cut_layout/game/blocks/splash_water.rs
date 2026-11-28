@@ -11,7 +11,8 @@ mod tests {
     #[ignore = "daily"]
     fn a_doused_campfire_posts_block_change_from_the_potion_owner() {
         let mut resources = None;
-        let mut game = server_game(&mut resources);
+        let mut fixture = server_game(&mut resources);
+        let game = fixture.game_mut();
         let pos = [2, 4, 3];
         let campfire = game
             .pack

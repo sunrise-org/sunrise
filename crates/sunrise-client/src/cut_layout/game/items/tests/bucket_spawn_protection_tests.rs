@@ -36,7 +36,8 @@ fn use_item(sequence: i32) -> Serverbound {
 #[ignore = "daily"]
 fn a_guest_without_build_rights_neither_empties_nor_fills_a_bucket_under_spawn_protection() {
     let mut resources = None;
-    let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+    let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+    let game = fixture.game_mut();
     game.options.execution_role =
         sunrise_gameplay_common::game::execution_role::ExecutionRole::DedicatedServer;
     game.build_registries();
@@ -146,64 +147,64 @@ fn a_guest_without_build_rights_neither_empties_nor_fills_a_bucket_under_spawn_p
 
     // Emptying a water bucket on the floor: the non-operator is refused, and
     // keeps the full bucket.
-    give(&mut game, "minecraft:water_bucket");
+    give(game, "minecraft:water_bucket");
     game.lan_guest_packet(CONN, use_item(1));
     assert_eq!(
-        state(&game, POURED),
+        state(&*game, POURED),
         air,
         "a non-operator's water is refused"
     );
     assert_eq!(
-        held(&game).as_deref(),
+        held(&*game).as_deref(),
         Some("minecraft:water_bucket"),
         "and the refused bucket is not emptied"
     );
     // The same non-operator 17 blocks east of the spawn, past the radius,
     // pours it: `isUnderSpawnProtection` measures the distance to the spawn.
-    move_to(&mut game, [25.5, 200.0, 8.5]);
+    move_to(game, [25.5, 200.0, 8.5]);
     game.lan_guest_packet(CONN, use_item(2));
     assert_eq!(
-        state(&game, OUTSIDE),
+        state(&*game, OUTSIDE),
         water,
         "outside the radius a non-operator pours"
     );
     assert_eq!(
-        held(&game).as_deref(),
+        held(&*game).as_deref(),
         Some("minecraft:bucket"),
         "and gets the empty bucket"
     );
     // The same click from an operator pours it inside the radius.
-    move_to(&mut game, [8.5, 200.0, 8.5]);
-    give(&mut game, "minecraft:water_bucket");
-    op(&mut game, true);
+    move_to(game, [8.5, 200.0, 8.5]);
+    give(game, "minecraft:water_bucket");
+    op(game, true);
     game.lan_guest_packet(CONN, use_item(3));
-    assert_eq!(state(&game, POURED), water, "an operator still pours");
+    assert_eq!(state(&*game, POURED), water, "an operator still pours");
     assert_eq!(
-        held(&game).as_deref(),
+        held(&*game).as_deref(),
         Some("minecraft:bucket"),
         "and gets the empty bucket"
     );
     // Filling from a water source in the protected area, from beside it.
-    op(&mut game, false);
-    move_to(&mut game, [10.5, 200.0, 10.5]);
-    give(&mut game, "minecraft:bucket");
+    op(game, false);
+    move_to(game, [10.5, 200.0, 10.5]);
+    give(game, "minecraft:bucket");
     game.lan_guest_packet(CONN, use_item(4));
     assert_eq!(
-        state(&game, SOURCE),
+        state(&*game, SOURCE),
         water,
         "a non-operator's fill is refused"
     );
     assert_eq!(
-        held(&game).as_deref(),
+        held(&*game).as_deref(),
         Some("minecraft:bucket"),
         "and the refused bucket stays empty"
     );
     // The operator fills it.
-    op(&mut game, true);
+    op(game, true);
     game.lan_guest_packet(CONN, use_item(5));
-    assert_eq!(state(&game, SOURCE), air, "an operator still fills");
+    assert_eq!(state(&*game, SOURCE), air, "an operator still fills");
     assert_eq!(
-        held(&game).as_deref(),
+        held(&*game).as_deref(),
         Some("minecraft:water_bucket"),
         "and gets the full bucket"
     );

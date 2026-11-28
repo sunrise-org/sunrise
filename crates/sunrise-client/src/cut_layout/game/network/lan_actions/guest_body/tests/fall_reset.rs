@@ -82,19 +82,20 @@ fn fall_distance_handle_reads_the_guests_fall_and_landing() {
         || {
             let mut resources = None;
             let scratch = tempfile::tempdir().unwrap();
-            let mut game = scene(&mut resources, scratch.path());
+            let mut fixture = scene(&mut resources, scratch.path());
+            let game = fixture.game_mut();
             let entity = game.player(1).unwrap().entity();
-            drain_moves(&mut game, [(109.0, 0)]);
-            assert_eq!(entity.fall_distance(&game), Some(1.0));
+            drain_moves(game, [(109.0, 0)]);
+            assert_eq!(entity.fall_distance(&*game), Some(1.0));
             game.tick_lan(false);
-            drain_moves(&mut game, [(108.0, 0)]);
-            assert_eq!(entity.fall_distance(&game), Some(2.0));
+            drain_moves(game, [(108.0, 0)]);
+            assert_eq!(entity.fall_distance(&*game), Some(2.0));
             game.tick_lan(false);
-            drain_moves(&mut game, [(100.0, 1)]);
+            drain_moves(game, [(100.0, 1)]);
             let guest = game.server.lan.as_ref().unwrap().hub.guest(1).unwrap();
             assert_eq!(guest.position, [12.5, 100.0, 12.5]);
             assert!(guest.on_ground);
-            assert_eq!(entity.fall_distance(&game), Some(0.0));
+            assert_eq!(entity.fall_distance(&*game), Some(0.0));
         },
     );
 }
@@ -107,29 +108,26 @@ fn a_guest_move_that_goes_up_ends_its_fall() {
         || {
             let mut resources = None;
             let scratch = tempfile::tempdir().unwrap();
-            let mut g = scene(&mut resources, scratch.path());
+            let mut fixture = scene(&mut resources, scratch.path());
+            let g = fixture.game_mut();
             // One block down: a fall of 1, tracked from where the tick left the guest.
-            tick_with_moves(&mut g, &[109.0], (1.0, None, [false; 3]));
-            assert_eq!(fall(&g), (1.0, Some([12.5, 109.0, 12.5]), [false; 3]));
+            tick_with_moves(g, &[109.0], (1.0, None, [false; 3]));
+            assert_eq!(fall(&*g), (1.0, Some([12.5, 109.0, 12.5]), [false; 3]));
             // Half a block up: no fall left, and the fall of half a block is awarded.
-            tick_with_moves(&mut g, &[109.5], (0.0, None, [true, true, false]));
-            assert_eq!(fall(&g), (0.0, None, [true, true, false]));
+            tick_with_moves(g, &[109.5], (0.0, None, [true, true, false]));
+            assert_eq!(fall(&*g), (0.0, None, [true, true, false]));
 
             for name in ["any", "short"] {
                 assert!(g.run_command(&format!("advancement revoke {NAME} only fall:{name}")));
             }
-            tick_with_moves(&mut g, &[108.5], (1.0, None, [false; 3]));
-            assert_eq!(fall(&g), (1.0, Some([12.5, 108.5, 12.5]), [false; 3]));
+            tick_with_moves(g, &[108.5], (1.0, None, [false; 3]));
+            assert_eq!(fall(&*g), (1.0, Some([12.5, 108.5, 12.5]), [false; 3]));
             // Three moves in one server tick: down to 104, up to 104.5, down to 103.5. The move up
             // ends the fall where it is, 4 blocks below its start, not at the tick's end, 5 below.
             // The last move starts a new fall of 1.
-            tick_with_moves(
-                &mut g,
-                &[104.0, 104.5, 103.5],
-                (1.0, None, [true, false, false]),
-            );
+            tick_with_moves(g, &[104.0, 104.5, 103.5], (1.0, None, [true, false, false]));
             assert_eq!(
-                fall(&g),
+                fall(&*g),
                 (1.0, Some([12.5, 103.5, 12.5]), [true, false, false])
             );
 
@@ -144,7 +142,7 @@ fn a_guest_move_that_goes_up_ends_its_fall() {
                 g.tick_lan(false);
             }
             assert!(g.run_command("setblock 12 105 12 minecraft:stone"));
-            tick_with_moves(&mut g, &[104.0], (0.0, None, [true, true, false]));
+            tick_with_moves(g, &[104.0], (0.0, None, [true, true, false]));
             let guest = &g.server.lan.as_ref().unwrap().hub.guests[0];
             assert!(
                 guest.health <= 0.0,
@@ -152,7 +150,7 @@ fn a_guest_move_that_goes_up_ends_its_fall() {
                 guest.health
             );
             // Half a block up from where the last fall began: any fall, and a short one.
-            assert_eq!(fall(&g).2, [true, true, false]);
+            assert_eq!(fall(&*g).2, [true, true, false]);
         },
     );
 }
@@ -165,18 +163,19 @@ fn entering_water_ends_a_tracked_fall_before_the_next_move() {
         || {
             let mut resources = None;
             let scratch = tempfile::tempdir().unwrap();
-            let mut g = scene(&mut resources, scratch.path());
+            let mut fixture = scene(&mut resources, scratch.path());
+            let g = fixture.game_mut();
             assert!(g.run_command("setblock 12 104 12 minecraft:water"));
-            tick_with_moves(&mut g, &[105.0], (5.0, None, [false; 3]));
-            assert_eq!(fall(&g).1, Some([12.5, 105.0, 12.5]));
+            tick_with_moves(g, &[105.0], (5.0, None, [false; 3]));
+            assert_eq!(fall(&*g).1, Some([12.5, 105.0, 12.5]));
 
             // Enter airborne water a half block down, then fall below it in the same batch.
-            drain_moves(&mut g, [(104.5, 0), (101.5, 0)]);
+            drain_moves(g, [(104.5, 0), (101.5, 0)]);
             assert_eq!(
                 g.server.lan.as_ref().unwrap().hub.guests[0].position[1],
                 101.5
             );
-            assert_eq!(fall(&g), (0.0, None, [true, true, false]));
+            assert_eq!(fall(&*g), (0.0, None, [true, true, false]));
         },
     );
 }
@@ -184,8 +183,9 @@ fn entering_water_ends_a_tracked_fall_before_the_next_move() {
 pub(crate) fn lethal_landing(totem: bool) {
     let mut resources = None;
     let scratch = tempfile::tempdir().unwrap();
-    let mut g = scene(&mut resources, scratch.path());
-    tick_with_moves(&mut g, &[105.0], (5.0, None, [false; 3]));
+    let mut fixture = scene(&mut resources, scratch.path());
+    let g = fixture.game_mut();
+    tick_with_moves(g, &[105.0], (5.0, None, [false; 3]));
     g.as_guest(1, |game| {
         game.player
             .as_mut()
@@ -200,14 +200,14 @@ pub(crate) fn lethal_landing(totem: bool) {
     .unwrap();
 
     // Land, then report stepping up, with no world or connection tick in between.
-    drain_moves(&mut g, [(100.0, 1), (100.5, 0)]);
+    drain_moves(g, [(100.0, 1), (100.5, 0)]);
     let guest = &g.server.lan.as_ref().unwrap().hub.guests[0];
     if totem {
         assert!(!guest.dead);
         assert_eq!(guest.health, 1.0);
         assert!(guest.offhand.is_none());
         assert_eq!(guest.position[1], 100.5);
-        assert_eq!(fall(&g), (0.0, None, [true, false, true]));
+        assert_eq!(fall(&*g), (0.0, None, [true, false, true]));
     } else {
         assert!(guest.dead);
         assert_eq!(guest.position[1], 100.0);
@@ -221,7 +221,7 @@ pub(crate) fn lethal_landing(totem: bool) {
             drop.position.y,
             100.0 + guest.eye_height() - f64::from(0.3_f32)
         );
-        assert_eq!(fall(&g), (0.0, None, [false; 3]));
+        assert_eq!(fall(&*g), (0.0, None, [false; 3]));
     }
 }
 
@@ -279,8 +279,9 @@ fn a_mods_protector_from_outside_the_hands_saves_the_guest() {
             mod_platform::testing::with_mods(mods, || {
                 let mut resources = None;
                 let scratch = tempfile::tempdir().unwrap();
-                let mut g = scene(&mut resources, scratch.path());
-                tick_with_moves(&mut g, &[105.0], (5.0, None, [false; 3]));
+                let mut fixture = scene(&mut resources, scratch.path());
+                let g = fixture.game_mut();
+                tick_with_moves(g, &[105.0], (5.0, None, [false; 3]));
                 let stick = ItemStack::new("minecraft:stick", 2);
                 g.as_guest(1, |game| {
                     game.player
@@ -293,7 +294,7 @@ fn a_mods_protector_from_outside_the_hands_saves_the_guest() {
                 })
                 .unwrap();
 
-                drain_moves(&mut g, [(100.0, 1)]);
+                drain_moves(g, [(100.0, 1)]);
                 let guest = &g.server.lan.as_ref().unwrap().hub.guests[0];
                 assert!(!guest.dead);
                 assert_eq!(guest.health, 1.0);
@@ -312,8 +313,9 @@ fn lethal_landing_consumes_one_item_with_death_protection_from_the_selected_slot
         || {
             let mut resources = None;
             let scratch = tempfile::tempdir().unwrap();
-            let mut g = scene(&mut resources, scratch.path());
-            tick_with_moves(&mut g, &[105.0], (5.0, None, [false; 3]));
+            let mut fixture = scene(&mut resources, scratch.path());
+            let g = fixture.game_mut();
+            tick_with_moves(g, &[105.0], (5.0, None, [false; 3]));
 
             let mut item = ItemStack::new("minecraft:stick", 2);
             item.data_mut().set_other(
@@ -331,7 +333,7 @@ fn lethal_landing_consumes_one_item_with_death_protection_from_the_selected_slot
             })
             .unwrap();
 
-            drain_moves(&mut g, [(100.0, 1)]);
+            drain_moves(g, [(100.0, 1)]);
             let guest = &g.server.lan.as_ref().unwrap().hub.guests[0];
             assert!(!guest.dead);
             assert_eq!(guest.health, 1.0);

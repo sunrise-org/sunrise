@@ -235,10 +235,11 @@ pub(crate) mod jukebox_component_tests {
     #[ignore = "daily"]
     fn a_jukebox_reads_the_discs_own_jukebox_component() {
         let mut resources = None;
-        let mut game = server_game(&mut resources);
+        let mut fixture = server_game(&mut resources);
+        let game = fixture.game_mut();
         let cat = game.items().songs.get("minecraft:cat").unwrap().comparator;
         assert_eq!(
-            comparator(&mut game, ItemStack::new("minecraft:music_disc_cat", 1)),
+            comparator(game, ItemStack::new("minecraft:music_disc_cat", 1)),
             cat,
             "the item's default song"
         );
@@ -249,7 +250,7 @@ pub(crate) mod jukebox_component_tests {
             Some(Tag::Compound(Default::default())),
         );
         assert_eq!(
-            comparator(&mut game, removed),
+            comparator(game, removed),
             0,
             "a removed playable component names no song"
         );
@@ -260,7 +261,7 @@ pub(crate) mod jukebox_component_tests {
             Some(Tag::String("minecraft:cat".into())),
         );
         assert_eq!(
-            comparator(&mut game, other),
+            comparator(game, other),
             cat,
             "the stack's own component names the song"
         );
@@ -270,7 +271,8 @@ pub(crate) mod jukebox_component_tests {
     #[ignore = "daily"]
     fn a_jukebox_takes_what_the_stacks_component_makes_playable() {
         let mut resources = None;
-        let mut game = server_game(&mut resources);
+        let mut fixture = server_game(&mut resources);
+        let game = fixture.game_mut();
         let state = game
             .pack
             .assets
@@ -281,15 +283,15 @@ pub(crate) mod jukebox_component_tests {
         let takes = |game: &sunrise_gameplay::game::ServerGame<'_>, stack: ItemStack| {
             game.jukebox_takes([8, 64, 8], Some(&stack))
         };
-        assert!(takes(&game, ItemStack::new("minecraft:music_disc_cat", 1)));
-        assert!(!takes(&game, ItemStack::new("minecraft:stone", 1)));
+        assert!(takes(&*game, ItemStack::new("minecraft:music_disc_cat", 1)));
+        assert!(!takes(&*game, ItemStack::new("minecraft:stone", 1)));
         let mut removed = ItemStack::new("minecraft:music_disc_cat", 1);
         removed.data_mut().set_other(
             "!minecraft:jukebox_playable",
             Some(Tag::Compound(Default::default())),
         );
         assert!(
-            !takes(&game, removed),
+            !takes(&*game, removed),
             "a removed component is not playable"
         );
         let mut stone = ItemStack::new("minecraft:stone", 1);
@@ -298,7 +300,7 @@ pub(crate) mod jukebox_component_tests {
             Some(Tag::String("minecraft:cat".into())),
         );
         assert!(
-            takes(&game, stone),
+            takes(&*game, stone),
             "the stack's own component makes it playable"
         );
     }

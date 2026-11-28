@@ -7,8 +7,9 @@ use sunrise_sim::{mobs::Mob, motion::PlayerMotion};
 
 fn with_game(test: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>)) {
     let mut resources = None;
-    let mut g = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
-    test(&mut g);
+    let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+    let g = fixture.game_mut();
+    test(g);
 }
 
 /// A mace with `breach` levels of Breach.

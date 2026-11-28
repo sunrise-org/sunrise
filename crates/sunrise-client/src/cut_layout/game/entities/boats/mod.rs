@@ -131,7 +131,8 @@ pub(crate) mod cobweb_tests {
     #[ignore = "daily"]
     fn a_cobweb_slows_a_boat_and_resets_its_fall() {
         let mut resources = None;
-        let mut game = server_game(&mut resources);
+        let mut fixture = server_game(&mut resources);
+        let game = fixture.game_mut();
         let web = game
             .pack
             .assets
@@ -196,7 +197,8 @@ pub(crate) mod cobweb_tests {
     #[ignore = "daily"]
     fn a_boat_leaving_a_cobweb_for_powder_snow_takes_the_powder_snow() {
         let mut resources = None;
-        let mut game = server_game(&mut resources);
+        let mut fixture = server_game(&mut resources);
+        let game = fixture.game_mut();
         let (web, snow) = {
             let registry = &game.pack.assets.registry;
             (

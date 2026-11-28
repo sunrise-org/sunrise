@@ -153,10 +153,11 @@ pub(crate) mod changed_tests {
     #[ignore = "daily"]
     fn a_released_bee_marks_the_chunk() {
         let mut game_resources = None;
-        let mut game = server_game(&mut game_resources);
+        let mut fixture = server_game(&mut game_resources);
+        let game = fixture.game_mut();
         let key = (8, 64, 8);
         hive_at(
-            &mut game,
+            game,
             key,
             Beehive {
                 bees: vec![Occupant {
@@ -189,9 +190,10 @@ pub(crate) mod changed_tests {
     #[ignore = "daily"]
     fn a_bee_going_in_marks_the_chunk() {
         let mut game_resources = None;
-        let mut game = server_game(&mut game_resources);
+        let mut fixture = server_game(&mut game_resources);
+        let game = fixture.game_mut();
         let key = (8, 64, 8);
-        hive_at(&mut game, key, Beehive::default());
+        hive_at(game, key, Beehive::default());
         let kind = game.res.mob_types().get("minecraft:bee").unwrap().clone();
         game.mobs
             .push(Mob::new(42, kind, Vec3::new(8.0, 64.0, 8.0), 0.0));

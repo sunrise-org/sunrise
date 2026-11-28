@@ -36,7 +36,8 @@ fn blast_boat(
 #[ignore = "daily"]
 fn a_mob_owned_blast_spares_vehicles_only_without_mob_griefing() {
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     game.build_registries();
     let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
     game.mobs
@@ -45,20 +46,20 @@ fn a_mob_owned_blast_spares_vehicles_only_without_mob_griefing() {
     let steve = (1, Text::literal("Steve"));
     // VehicleEntity.ignoreExplosion: the indirect source is a mob and
     // mobGriefing is off, so the boat is neither hurt nor pushed.
-    let (damage, velocity) = blast_boat(&mut game, Some(pig()), false, false);
+    let (damage, velocity) = blast_boat(game, Some(pig()), false, false);
     assert_eq!(damage, 0.0, "a mob's blast spares the boat");
     assert_eq!(velocity, Vec3::ZERO, "and does not push it");
     // The same blast with mobGriefing on still hits it.
-    let (damage, velocity) = blast_boat(&mut game, Some(pig()), false, true);
+    let (damage, velocity) = blast_boat(game, Some(pig()), false, true);
     assert!(damage > 0.0, "mobGriefing on lets the boat be hurt");
     assert_ne!(velocity, Vec3::ZERO, "and pushed");
     // A player-owned TNT is not a mob: mobGriefing off does not spare it.
-    let (damage, velocity) = blast_boat(&mut game, Some(steve), true, false);
+    let (damage, velocity) = blast_boat(game, Some(steve), true, false);
     assert!(damage > 0.0, "a player's blast still hurts the boat");
     assert_ne!(velocity, Vec3::ZERO, "and pushes it");
     // PrimedTnt.getOwner no longer resolves a removed mob.
     game.mobs[0].removed = true;
-    let (damage, _) = blast_boat(&mut game, Some(pig()), false, false);
+    let (damage, _) = blast_boat(game, Some(pig()), false, false);
     assert!(damage > 0.0, "a removed owner no longer spares the boat");
 }
 
@@ -66,7 +67,8 @@ fn a_mob_owned_blast_spares_vehicles_only_without_mob_griefing() {
 #[ignore = "daily"]
 fn a_creeper_blast_primes_tnt_with_the_creeper_as_its_owner() {
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     game.build_registries();
     let creeper = 77;
     let kind = game
@@ -112,7 +114,8 @@ fn a_creeper_blast_primes_tnt_with_the_creeper_as_its_owner() {
 #[ignore = "daily"]
 fn a_projectiles_owner_primes_tnt_and_a_gone_owner_does_not() {
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     game.build_registries();
     let ghast = 91;
     let kind = game.res.mob_types().get("minecraft:ghast").unwrap().clone();

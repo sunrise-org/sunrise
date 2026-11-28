@@ -149,8 +149,9 @@ fn with_end_travel(
         mod_platform::testing::with_mods(mods.clone(), || {
             sunrise_gameplay_common::game::api_values::install_parts(&mods).unwrap();
             let mut resources = None;
-            let (_scratch, mut game, rx) = server_with_a_nether_anchor(&mut resources);
-            test(&mut game, &rx, &heard);
+            let (_scratch, mut fixture, rx) = server_with_a_nether_anchor(&mut resources);
+            let game = fixture.game_mut();
+            test(game, &rx, &heard);
         });
     });
 }
@@ -580,8 +581,9 @@ fn with_anchor_death(
         let mods = vec![ModEntry::new("anchor-rules", Box::new(rules))].into();
         mod_platform::testing::with_mods(mods, || {
             let mut resources = None;
-            let (_scratch, mut game, rx) = server_with_a_nether_anchor(&mut resources);
-            light_spawn_chunks(&mut game);
+            let (_scratch, mut fixture, rx) = server_with_a_nether_anchor(&mut resources);
+            let game = fixture.game_mut();
+            light_spawn_chunks(game);
             *game.world.random = LegacyRandom::new(12345);
             if matches!(rules, AnchorRules::SetInCompletion) {
                 game.enter_level(Dim::End).unwrap();
@@ -601,8 +603,8 @@ fn with_anchor_death(
                 );
             }
             game.enter_level(Dim::Nether).unwrap();
-            light_spawn_chunks(&mut game);
-            charge_anchor(&mut game);
+            light_spawn_chunks(game);
+            charge_anchor(game);
             let (bystander, other) = placed_guest(3, Dim::Nether, [11.5, 101.0, 10.5]);
             game.server.lan.as_mut().unwrap().hub.guests.push(bystander);
             game.enter_level(Dim::Overworld).unwrap();
@@ -620,7 +622,7 @@ fn with_anchor_death(
             game.guest_respawn(2);
             assert!(!game.on_server_trip(2));
             assert!(game.server.lan.as_ref().unwrap().hub.guests[0].placed);
-            test(&game, &rx, &other);
+            test(&*game, &rx, &other);
         });
     });
 }
@@ -654,10 +656,11 @@ fn a_forced_spawnpoint_on_a_respawn_anchor_still_depletes_with_its_sound() {
     mod_platform::testing::with_mods(Vec::new().into(), || {
         // PlayerList plays the sound even for a forced point. The anchor itself keeps its charge.
         let mut resources = None;
-        let (_scratch, mut game, rx) = server_with_a_nether_anchor(&mut resources);
+        let (_scratch, mut fixture, rx) = server_with_a_nether_anchor(&mut resources);
+        let game = fixture.game_mut();
         game.enter_level(Dim::Nether).unwrap();
-        light_spawn_chunks(&mut game);
-        let charged = charge_anchor(&mut game);
+        light_spawn_chunks(game);
+        let charged = charge_anchor(game);
         game.build_registries();
         assert!(game.as_console(|g| g.run_command("spawnpoint Guest2 10 100 10")));
         let expected = (Dim::Nether.id().to_owned(), ANCHOR, 0.0, 0.0, true);
@@ -672,7 +675,7 @@ fn a_forced_spawnpoint_on_a_respawn_anchor_still_depletes_with_its_sound() {
         assert!(!guest.dead);
         assert_eq!(guest.dimension, Dim::Nether.id());
         assert_eq!(guest.respawn_elsewhere.as_ref(), Some(&expected));
-        let sounds = anchor_sounds(&game, &rx);
+        let sounds = anchor_sounds(&*game, &rx);
         assert_eq!(sounds.len(), 1);
         let sound = &sounds[0];
         assert_eq!([sound.x, sound.y, sound.z], ANCHOR.map(|c| c * 8));

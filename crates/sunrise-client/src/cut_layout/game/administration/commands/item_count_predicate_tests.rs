@@ -7,7 +7,8 @@ use sunrise_items::items::ItemStack;
 #[ignore = "daily"]
 fn count_equality_uses_live_stack_bounds_and_command_flow() {
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     game.build_registries();
     game.set_allow_commands(true);
     game.block_ticks
@@ -32,7 +33,7 @@ fn count_equality_uses_live_stack_bounds_and_command_flow() {
             slots[2].as_ref().unwrap().count,
         ]
     };
-    assert_eq!(counts(&game), [1, 3, 4]);
+    assert_eq!(counts(&*game), [1, 3, 4]);
     let mut failed = Vec::new();
     for (slot, count) in [1, 3, 4].into_iter().enumerate() {
         assert!(
@@ -90,7 +91,7 @@ fn count_equality_uses_live_stack_bounds_and_command_flow() {
     assert!(
         game.run_command("execute if items block 4 200 4 container.5 stone[custom_data={h194:1}]")
     );
-    assert_eq!(counts(&game), [1, 3, 4], "no inventory mutation");
+    assert_eq!(counts(&*game), [1, 3, 4], "no inventory mutation");
     assert_eq!(game.world.game_time, clock, "zero actor ticks");
     assert!(
         failed.is_empty(),

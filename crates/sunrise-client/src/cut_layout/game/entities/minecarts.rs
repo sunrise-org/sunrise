@@ -77,7 +77,8 @@ pub(crate) mod tnt_impact_tests {
     #[ignore = "daily"]
     fn a_powered_rail_pushes_a_resting_cart_away_from_soul_sand() {
         let mut resources = None;
-        let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let game = fixture.game_mut();
         let registry = game.pack.assets.registry;
         let rail = registry.default_state("minecraft:powered_rail").unwrap();
         let mut state = registry.state(rail).unwrap().clone();
@@ -132,7 +133,8 @@ pub(crate) mod tnt_impact_tests {
         // height, moves it horizontally (Entity.move records the step) and settles
         // it on the slope; the tick's applyEffectsFromBlocks still sweeps the step.
         let mut resources = None;
-        let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let game = fixture.game_mut();
         let registry = game.pack.assets.registry;
         let stone = registry.default_state("minecraft:stone").unwrap();
         let plate = registry
@@ -182,7 +184,8 @@ pub(crate) mod tnt_impact_tests {
     #[ignore = "daily"]
     fn a_cart_resting_against_a_fence_keeps_toggling_the_plate_above_it() {
         let mut resources = None;
-        let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let game = fixture.game_mut();
         let registry = game.pack.assets.registry;
         let stone = registry.default_state("minecraft:stone").unwrap();
         let fence = registry.default_state("minecraft:oak_fence").unwrap();
@@ -360,7 +363,8 @@ pub(crate) mod cart_push_tests {
         }
 
         let mut resources = None;
-        let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let game = fixture.game_mut();
         // Cart 2 moves east, into cart 1's box; yaw 0 faces east, along the push.
         game.carts.push(Minecart::new(
             1,
@@ -375,38 +379,38 @@ pub(crate) mod cart_push_tests {
         let east = Vec3::new(0.2, 0.0, 0.0);
         // No teams: the moving cart pushes the still one.
         assert_ne!(
-            push_apart(&mut game, 1, 0, east),
+            push_apart(game, 1, 0, east),
             Vec3::ZERO,
             "the moving cart pushes the still one"
         );
         // The target's `never` rule holds the push back.
-        on_a_team(&mut game, 1, CollisionRule::Never);
+        on_a_team(game, 1, CollisionRule::Never);
         assert_eq!(
-            push_apart(&mut game, 1, 0, east),
+            push_apart(game, 1, 0, east),
             Vec3::ZERO,
             "the target's collisionRule never keeps it off"
         );
         // The moving cart's own rule does too.
         game.score.board.remove_team("cart-1");
-        on_a_team(&mut game, 2, CollisionRule::Never);
+        on_a_team(game, 2, CollisionRule::Never);
         assert_eq!(
-            push_apart(&mut game, 1, 0, east),
+            push_apart(game, 1, 0, east),
             Vec3::ZERO,
             "the moving cart's collisionRule never keeps it off"
         );
         // Allies with `pushOwnTeam` do not push each other.
         game.score.board.remove_team("cart-2");
-        on_a_team(&mut game, 1, CollisionRule::PushOwnTeam);
+        on_a_team(game, 1, CollisionRule::PushOwnTeam);
         let name = game.holder_name(Target::Cart(2)).expect("a cart's UUID");
         game.score.board.add_to_team(&name, "cart-1");
         assert_eq!(
-            push_apart(&mut game, 1, 0, east),
+            push_apart(game, 1, 0, east),
             Vec3::ZERO,
             "pushOwnTeam keeps allies apart"
         );
         // A still cart is vanilla's else branch: no team filter at all.
         assert_ne!(
-            push_apart(&mut game, 1, 0, Vec3::ZERO),
+            push_apart(game, 1, 0, Vec3::ZERO),
             Vec3::ZERO,
             "a still cart pushes the minecart in its box whatever the teams"
         );
@@ -422,7 +426,8 @@ pub(crate) mod cart_push_tests {
         use sunrise_sim::mobs::Mob;
 
         let mut resources = None;
-        let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let game = fixture.game_mut();
         let kind = game.res.mob_types().get("minecraft:cow").cloned().unwrap();
         let mut cart = Minecart::new(2, CartKind::Rideable, Vec3::new(8.5, 64.0, 8.5));
         cart.velocity = Vec3::new(0.2, 0.0, 0.0);
@@ -874,7 +879,8 @@ pub(crate) mod cart_cost_bench {
         };
         let (parked, moving) = (n("CARTS_PARKED", 600), n("CARTS_MOVING", 100));
         let mut resources = None;
-        let mut game = server_game(&mut resources);
+        let mut fixture = server_game(&mut resources);
+        let game = fixture.game_mut();
         game.server.settings.simulation_distance = 6;
         game.server.settings.render_distance = 12;
         game.player = Some(

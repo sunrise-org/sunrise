@@ -226,7 +226,8 @@ pub(crate) mod furnace_fuel_transfer_tests {
             return;
         }
         let mut resources = None;
-        let mut game = server_game(&mut resources);
+        let mut fixture = server_game(&mut resources);
+        let game = fixture.game_mut();
         let hopper = (8, 64, 8);
         let furnace = (9, 64, 8);
         let registry = &game.common.pack.assets.registry;
@@ -822,7 +823,8 @@ pub(crate) mod pot_hopper_insertion_tests {
     #[ignore = "daily"]
     fn actual_hopper_ticks_insert_into_the_saved_pot_slot() {
         let mut resources = None;
-        let mut game = server_game(&mut resources);
+        let mut fixture = server_game(&mut resources);
+        let game = fixture.game_mut();
         game.build_registries();
         game.set_allow_commands(true);
         game.block_ticks
@@ -845,21 +847,21 @@ pub(crate) mod pot_hopper_insertion_tests {
                 "Items:[{Slot:0b,id:\"minecraft:wheat\",count:3,components:{\"minecraft:custom_data\":{h282:1}}}]"
             };
             assert!(game.run_command(&format!("setblock 5 200 {z} {target}{{{content}}}")));
-            assert_eq!(count(&game, (4, 200, z), 0), 40);
-            assert_eq!(count(&game, (4, 200, z), 4), 2);
+            assert_eq!(count(&*game, (4, 200, z), 0), 40);
+            assert_eq!(count(&*game, (4, 200, z), 4), 2);
             if target == "decorated_pot" {
                 assert!(!game.world.block_entities.contains_key(&(5, 200, z)));
                 assert!(
                     game.containers().view((5, 200, z), false).is_none(),
                     "generic discovery stays unchanged"
                 );
-                let (tag, item) = pot(&game, z);
+                let (tag, item) = pot(&*game, z);
                 assert_eq!(item.count, 3);
                 assert_eq!(&*item.item, "minecraft:wheat");
                 initial.push((z, tag, item));
             }
         }
-        assert_eq!(count(&game, (5, 200, 12), 0), 3);
+        assert_eq!(count(&*game, (5, 200, 12), 0), 3);
         let start = game.world.game_time;
         let mut failures = Vec::new();
         for elapsed in 1..=217 {
@@ -870,17 +872,17 @@ pub(crate) mod pot_hopper_insertion_tests {
             if [1, 9, 217].contains(&elapsed) {
                 let n = ((elapsed - 1) / 8 + 1) as u32;
                 assert_eq!(
-                    count(&game, (4, 200, 12), 0),
+                    count(&*game, (4, 200, 12), 0),
                     40 - n,
                     "ordinary hopper cadence"
                 );
-                assert_eq!(count(&game, (5, 200, 12), 0), 3 + n);
-                assert_eq!(count(&game, (4, 200, 8), 0), 40, "different item rejected");
-                assert_eq!(pot(&game, 8).1.count, 3);
+                assert_eq!(count(&*game, (5, 200, 12), 0), 3 + n);
+                assert_eq!(count(&*game, (4, 200, 8), 0), 40, "different item rejected");
+                assert_eq!(pot(&*game, 8).1.count, 3);
                 for z in [4, 8, 12] {
-                    assert_eq!(count(&game, (4, 200, z), 4), 2);
+                    assert_eq!(count(&*game, (4, 200, z), 4), 2);
                 }
-                let (mut saved, item) = pot(&game, 4);
+                let (mut saved, item) = pot(&*game, 4);
                 let mut before = initial[0].1.clone();
                 if let (Tag::Compound(a), Tag::Compound(b)) = (&mut saved, &mut before) {
                     a.remove(&"item".into());
@@ -888,7 +890,7 @@ pub(crate) mod pot_hopper_insertion_tests {
                 }
                 assert_eq!(saved, before, "raw metadata preserved");
                 assert!(item.same_item_same_components(&initial[0].2));
-                let donor = count(&game, (4, 200, 4), 0);
+                let donor = count(&*game, (4, 200, 4), 0);
                 assert_eq!(donor + item.count, 43, "actual conserved inventory");
                 assert!(game.containers().view((5, 200, 4), false).is_none());
                 if donor != 40 - n || item.count != 3 + n {
@@ -906,7 +908,8 @@ pub(crate) mod pot_hopper_insertion_tests {
     #[ignore = "daily"]
     fn actual_hopper_pulls_from_the_saved_pot_slot() {
         let mut resources = None;
-        let mut game = server_game(&mut resources);
+        let mut fixture = server_game(&mut resources);
+        let game = fixture.game_mut();
         game.build_registries();
         game.set_allow_commands(true);
         game.block_ticks
@@ -954,7 +957,8 @@ pub(crate) mod tests {
     #[ignore = "daily"]
     fn a_container_writing_a_shelf_posts_block_activate() {
         let mut resources = None;
-        let mut game = server_game(&mut resources);
+        let mut fixture = server_game(&mut resources);
+        let game = fixture.game_mut();
         let key = (2, 4, 3);
         let state = game
             .pack
@@ -1041,7 +1045,8 @@ pub(crate) mod tests {
             "cut_layout::game::server_side::machines::tests::an_idle_hopper_sleeps_and_wakes_for_what_it_could_take",
             || {
                 let mut resources = None;
-                let mut game = server_game(&mut resources);
+                let mut fixture = server_game(&mut resources);
+                let game = fixture.game_mut();
                 game.build_registries();
                 game.player = Some(
                     sunrise_sim::motion::PlayerMotion::new(
@@ -1059,16 +1064,16 @@ pub(crate) mod tests {
                 // placed later, so it runs after the receiver's slot.
                 let side_receiver = (1, 64, 1);
                 let side_feeder = (2, 64, 1);
-                place_hopper(&mut game, side_receiver, "down", true, None);
-                tick_block_entities(&mut game, start + 1);
+                place_hopper(game, side_receiver, "down", true, None);
+                tick_block_entities(game, start + 1);
                 assert!(
                     game.world.block_entities.is_hopper_asleep(&side_receiver),
                     "an empty hopper with no source above sleeps"
                 );
-                place_hopper(&mut game, side_feeder, "west", true, stone());
-                tick_block_entities(&mut game, start + 2);
+                place_hopper(game, side_feeder, "west", true, stone());
+                tick_block_entities(game, start + 2);
                 assert_eq!(
-                    hopper_count(&game, side_receiver),
+                    hopper_count(&*game, side_receiver),
                     1,
                     "the side feeder fills the woken receiver"
                 );
@@ -1082,10 +1087,10 @@ pub(crate) mod tests {
                 // decrements the 8 the feeder set, and still ends at 7.
                 let early_feeder = (6, 64, 1);
                 let later_receiver = (5, 64, 1);
-                place_hopper(&mut game, early_feeder, "west", true, stone());
-                place_hopper(&mut game, later_receiver, "down", true, None);
-                tick_block_entities(&mut game, start + 3);
-                assert_eq!(hopper_count(&game, later_receiver), 1);
+                place_hopper(game, early_feeder, "west", true, stone());
+                place_hopper(game, later_receiver, "down", true, None);
+                tick_block_entities(game, start + 3);
+                assert_eq!(hopper_count(&*game, later_receiver), 1);
                 assert_eq!(
                     game.hopper_cooldown(later_receiver),
                     7,
@@ -1096,15 +1101,15 @@ pub(crate) mod tests {
                 // feeder's insert wakes it, after its own slot.
                 let powered = (8, 64, 1);
                 let above_feeder = (8, 65, 1);
-                place_hopper(&mut game, powered, "down", false, None);
-                tick_block_entities(&mut game, start + 4);
+                place_hopper(game, powered, "down", false, None);
+                tick_block_entities(game, start + 4);
                 assert!(
                     game.world.block_entities.is_hopper_asleep(&powered),
                     "a powered hopper sleeps"
                 );
-                place_hopper(&mut game, above_feeder, "down", true, stone());
-                tick_block_entities(&mut game, start + 5);
-                assert_eq!(hopper_count(&game, powered), 1);
+                place_hopper(game, above_feeder, "down", true, stone());
+                tick_block_entities(game, start + 5);
+                assert_eq!(hopper_count(&*game, powered), 1);
                 assert_eq!(
                     game.hopper_cooldown(powered),
                     7,
@@ -1133,7 +1138,8 @@ pub(crate) mod can_take_tests {
     #[ignore = "daily"]
     fn a_full_hopper_cannot_take_a_book_from_a_chiseled_shelf() {
         let mut resources = None;
-        let mut game = server_game(&mut resources);
+        let mut fixture = server_game(&mut resources);
+        let game = fixture.game_mut();
         let shelf_pos = (2, 4, 3);
         let hopper_pos = (2, 5, 3);
         let shelf_state = game
@@ -1176,7 +1182,7 @@ pub(crate) mod can_take_tests {
                 Direction::Down,
                 &full_hopper,
                 TakeAsk {
-                    game: &game,
+                    game: &*game,
                     attempt: &mut TakeAttempt::default(),
                 },
             ),
@@ -1194,7 +1200,7 @@ pub(crate) mod can_take_tests {
                 Direction::Down,
                 &empty_hopper,
                 TakeAsk {
-                    game: &game,
+                    game: &*game,
                     attempt: &mut TakeAttempt::default(),
                 },
             ),
@@ -1209,7 +1215,8 @@ pub(crate) mod can_take_tests {
     #[ignore = "daily"]
     fn non_container_block_entity_above_hopper_does_not_block_item_suction() {
         let mut resources = None;
-        let mut game = server_game(&mut resources);
+        let mut fixture = server_game(&mut resources);
+        let game = fixture.game_mut();
         let hopper_pos = (2, 4, 3);
         let sign_pos = (2, 5, 3);
         let hopper_state = game

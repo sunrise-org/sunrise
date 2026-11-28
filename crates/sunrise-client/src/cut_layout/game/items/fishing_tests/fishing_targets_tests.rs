@@ -104,8 +104,9 @@ pub(crate) fn align_next_entity_mod4(
 
 pub(crate) fn setup_game<'a>(
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> sunrise_gameplay::game::ServerGame<'a> {
-    let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'a> {
+    let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+    let game = fixture.game_mut();
     game.build_registries();
     game.set_allow_commands(true);
     game.load_ticking_neighbourhood(0, 0);
@@ -124,9 +125,9 @@ pub(crate) fn setup_game<'a>(
     game.player = Some(
         sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 4.5)).unwrap(),
     );
-    sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(&mut game, 7, 7);
+    sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 7, 7);
     game.server.next_entity = game.server.next_entity.max(100);
-    game
+    fixture
 }
 
 pub(crate) fn clear_entities(game: &mut sunrise_gameplay::game::ServerGame<'_>) {
@@ -423,16 +424,17 @@ fn witness_fishing_bobber_targets() {
 pub(crate) fn run_witness_fishing_bobber_targets() {
     let witness = load_witness();
     let mut resources = None;
-    let mut game = setup_game(&mut resources);
+    let mut fixture = setup_game(&mut resources);
+    let game = fixture.game_mut();
     let mut failures = Vec::new();
     for case in &witness.cases {
-        let errs = run_case(&mut game, case, witness.hook_seed, witness.level_seed);
+        let errs = run_case(game, case, witness.hook_seed, witness.level_seed);
         if !errs.is_empty() {
             failures.push(errs.join("\n  "));
         }
     }
     for case in &witness.extra_cases {
-        let errs = run_extra_case(&mut game, case, witness.hook_seed, witness.level_seed);
+        let errs = run_extra_case(game, case, witness.hook_seed, witness.level_seed);
         if !errs.is_empty() {
             failures.push(errs.join("\n  "));
         }

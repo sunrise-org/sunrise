@@ -27,8 +27,8 @@ fn cooldown_shown(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> Option<i
 #[ignore = "daily"]
 fn data_reads_a_hoppers_live_transfer_cooldown() {
     let mut resources = None;
-    let mut game = server_game(&mut resources);
-    let game = &mut game;
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     game.build_registries();
     game.set_allow_commands(true);
     game.block_ticks

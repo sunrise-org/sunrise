@@ -7,8 +7,9 @@
 use sunrise_gameplay_common::game::Resources;
 fn game(
     resources: &mut Option<std::sync::Arc<Resources>>,
-) -> sunrise_gameplay::game::ServerGame<'_> {
-    let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'_> {
+    let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+    let game = fixture.game_mut();
     game.build_registries();
     game.set_allow_commands(true);
     // The fixture does not start streaming: make every forced column resident.
@@ -29,14 +30,15 @@ fn game(
     ] {
         assert!(game.run_command(command), "{command}");
     }
-    game
+    fixture
 }
 
 #[test]
 #[ignore = "daily"]
 fn summoned_drowned_hold_shells_as_guaranteed_drops() {
     let mut game_resources = None;
-    let mut game = game(&mut game_resources);
+    let mut fixture = game(&mut game_resources);
+    let game = fixture.game_mut();
     for index in 0..400 {
         let (x, z) = (f64::from(index % 20) - 9.5, f64::from(index / 20) - 9.5);
         assert!(game.run_command(&format!("summon drowned {x} 100 {z}")));
@@ -83,7 +85,8 @@ fn only_an_empty_offhand_drowned_draws_for_the_shell() {
     use sunrise_core::random::{LegacyRandom, RandomSource};
     use sunrise_sim::mobs::drops::{DEFAULT_DROP_CHANCE, SLOTS, drop_chance};
     let mut game_resources = None;
-    let mut game = game(&mut game_resources);
+    let mut fixture = game(&mut game_resources);
+    let game = fixture.game_mut();
     for command in [
         "summon drowned 0.5 100 0.5 {NoAI:1b}",
         "summon zombie 2.5 100 0.5 {NoAI:1b}",
@@ -125,21 +128,21 @@ fn only_an_empty_offhand_drowned_draws_for_the_shell() {
     // level's random ends each seed on the same state and nothing is put in an empty offhand.
     for kind in ["minecraft:zombie", "minecraft:husk"] {
         for seed in 1..=3 {
-            let spawned = base(&game, kind);
-            let (m, level) = finalize(&mut game, spawned, seed);
+            let spawned = base(&*game, kind);
+            let (m, level) = finalize(game, spawned, seed);
             assert_eq!(m.extra.off_hand_id(), None, "{kind} seed {seed}");
-            let mut held = base(&game, kind);
+            let mut held = base(&*game, kind);
             dandelion(&mut held);
-            let (held, held_level) = finalize(&mut game, held, seed);
+            let (held, held_level) = finalize(game, held, seed);
             assert_eq!(level.state(), held_level.state(), "{kind} seed {seed}");
             assert_eq!(held.extra.off_hand_id(), Some("minecraft:dandelion"));
         }
     }
     // An occupied offhand: no shell draw, the item and the chances stay.
     for seed in 1..=3 {
-        let mut m = base(&game, "minecraft:drowned");
+        let mut m = base(&*game, "minecraft:drowned");
         dandelion(&mut m);
-        let (m, _) = finalize(&mut game, m, seed);
+        let (m, _) = finalize(game, m, seed);
         assert_eq!(m.extra.off_hand_id(), Some("minecraft:dandelion"));
         assert_eq!(m.extra.drop_chances, None);
     }
@@ -147,11 +150,11 @@ fn only_an_empty_offhand_drowned_draws_for_the_shell() {
     // the shell when it is under 0.03.
     let mut shells = 0;
     for seed in 0..400 {
-        let mut occupied = base(&game, "minecraft:drowned");
+        let mut occupied = base(&*game, "minecraft:drowned");
         dandelion(&mut occupied);
-        let (occupied, mut after) = finalize(&mut game, occupied, seed);
-        let fresh = base(&game, "minecraft:drowned");
-        let (empty, level) = finalize(&mut game, fresh, seed);
+        let (occupied, mut after) = finalize(game, occupied, seed);
+        let fresh = base(&*game, "minecraft:drowned");
+        let (empty, level) = finalize(game, fresh, seed);
         let draw = after.next_float();
         assert_eq!(level.state(), after.state(), "seed {seed}: one draw");
         let shell = empty.extra.off_hand_id() == Some("minecraft:nautilus_shell");

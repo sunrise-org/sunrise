@@ -127,7 +127,8 @@ pub(crate) mod game_event_tests {
     #[ignore = "daily"]
     fn putting_and_rotating_a_frame_item_posts_block_change() {
         let mut resources = None;
-        let mut game = server_game(&mut resources);
+        let mut fixture = server_game(&mut resources);
+        let game = fixture.game_mut();
         game.item_frames.clear();
         game.item_frames.extend(vec![frame(1, [0, 64, 1], None)]);
         let center = [0.5, 64.5, 1.03125];
@@ -152,7 +153,8 @@ pub(crate) mod game_event_tests {
     #[ignore = "daily"]
     fn taking_a_frame_item_out_posts_block_change_from_the_player() {
         let mut resources = None;
-        let mut game = server_game(&mut resources);
+        let mut fixture = server_game(&mut resources);
+        let game = fixture.game_mut();
         game.item_frames.clear();
         game.item_frames.extend(vec![frame(
             1,
@@ -194,7 +196,8 @@ pub(crate) mod game_event_tests {
     #[ignore = "daily"]
     fn a_frame_that_falls_posts_block_change_without_source() {
         let mut resources = None;
-        let mut game = server_game(&mut resources);
+        let mut fixture = server_game(&mut resources);
+        let game = fixture.game_mut();
         let mut f = frame(1, [0, 64, 1], None);
         // BlockAttachedEntity.tick checks every 100 ticks.
         f.check_interval = 99;

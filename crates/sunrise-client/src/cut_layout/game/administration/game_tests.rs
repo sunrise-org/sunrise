@@ -13,7 +13,7 @@ pub(crate) mod tests {
     use sunrise_gameplay::game::server_side::test_instances::TestDefSample as _;
     use sunrise_gameplay::game_tests::{Retry, TestError};
 
-    pub use sunrise_gameplay::game::game_tests::tests::server_game;
+    pub use sunrise_gameplay::game::game_tests::tests::{TestServerGame, server_game};
 
     /// Puts the process-wide block namespaces back as it found them.
     pub(crate) struct Published(Option<Vec<String>>);
@@ -226,7 +226,8 @@ mod completed_test_coordinate_feedback_tests {
     #[ignore = "daily"]
     fn actual_completed_test_retains_player_source_for_coordinate_feedback() {
         let mut resources = None;
-        let mut game = tests::server_game(&mut resources);
+        let mut fixture = tests::server_game(&mut resources);
+        let game = fixture.game_mut();
         game.build_registries();
         game.set_allow_commands(true);
         game.level.player_uuid = Some([0, 0, 0, 77]);

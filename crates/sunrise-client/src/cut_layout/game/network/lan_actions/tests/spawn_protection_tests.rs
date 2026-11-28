@@ -11,9 +11,10 @@ use {
 #[ignore = "daily"]
 fn spawn_protection_protects_only_on_the_dedicated_role() {
     let mut resources = None;
-    let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+    let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+    let game = fixture.game_mut();
     game.options.dedicated = Some(Vec::new());
-    let _rx = host_for(&mut game);
+    let _rx = host_for(game);
     game.set_spawn_protection(16);
     // An operator exists, so the guest (uuid 1) is not one and the radius applies to it.
     game.server.lan.as_mut().unwrap().hub.ops.insert(99, 4);

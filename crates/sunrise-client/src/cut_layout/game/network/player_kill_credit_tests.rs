@@ -39,8 +39,9 @@ fn fresh(name: &str, cases: &[&str]) -> bool {
 /// connected, placed guest standing on the floor at (22.5, 100, 9.5).
 fn game<'a>(
     resources: &'a mut Option<Arc<sunrise_gameplay_common::game::Resources>>,
-) -> sunrise_gameplay::game::ServerGame<'a> {
-    let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'a> {
+    let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+    let game = fixture.game_mut();
     game.build_registries();
     game.set_allow_commands(true);
     for x in 0..2 {
@@ -93,7 +94,7 @@ fn game<'a>(
         VICTIM,
         [22.5, 100.0, 9.5],
     ));
-    game
+    fixture
 }
 
 /// A connected, placed guest at `at`, whose client has loaded the world
@@ -208,8 +209,9 @@ fn a_player_killing_another_player_credits_the_kill() {
         return;
     }
     let mut resources = None;
-    let mut game = game(&mut resources);
-    add_objectives(&mut game);
+    let mut fixture = game(&mut resources);
+    let game = fixture.game_mut();
+    add_objectives(game);
     let host_team = game.score.board.add_team("host");
     host_team.color = Some("red".into());
     host_team.prefix = sunrise_game_data::scoreboard::literal("Host: ");
@@ -218,16 +220,16 @@ fn a_player_killing_another_player_credits_the_kill() {
     assert!(game.score.board.add_to_team(VICTIM, "guest"));
 
     kill(
-        &mut game,
+        game,
         Attacker::Player(HOST, PLAYER_NAME),
         "minecraft:player_attack",
     );
-    assert_player_kill(&game, PLAYER_NAME);
+    assert_player_kill(&*game, PLAYER_NAME);
     assert_eq!(game.stats.get("custom", "minecraft:player_kills"), 1);
     assert_eq!(game.stats.get("custom", "minecraft:deaths"), 0);
     assert_eq!(game.stats.get("killed_by", "minecraft:player"), 0);
-    assert_eq!(score(&game, PLAYER_NAME, "teamkill"), Some(1));
-    assert_eq!(score(&game, VICTIM, "killedbyteam"), Some(1));
+    assert_eq!(score(&*game, PLAYER_NAME, "teamkill"), Some(1));
+    assert_eq!(score(&*game, VICTIM, "killedbyteam"), Some(1));
     let display = game
         .score
         .board
@@ -241,8 +243,8 @@ fn a_player_killing_another_player_credits_the_kill() {
         format!("Host: {PLAYER_NAME}")
     );
     game.tick_scoreboard();
-    assert_eq!(score(&game, PLAYER_NAME, "player_kills_stat"), Some(1));
-    assert_eq!(score(&game, VICTIM, "player_kills_stat"), None);
+    assert_eq!(score(&*game, PLAYER_NAME, "player_kills_stat"), Some(1));
+    assert_eq!(score(&*game, VICTIM, "player_kills_stat"), None);
 }
 
 /// `Player.doSweepAttack` uses the local player's source for a secondary victim.
@@ -256,9 +258,10 @@ fn a_local_player_sweep_credits_the_secondary_kill() {
         return;
     }
     let mut resources = None;
-    let mut game = game(&mut resources);
-    add_objectives(&mut game);
-    add_guest_killer(&mut game);
+    let mut fixture = game(&mut resources);
+    let game = fixture.game_mut();
+    add_objectives(game);
+    add_guest_killer(game);
     game.player.as_mut().unwrap().position = Vec3::new(20.5, 100.0, 9.5);
     let primary = game.guest_index(KILLER_CONN).unwrap();
     let victim = game.guest_index(CONN).unwrap();
@@ -293,11 +296,11 @@ fn a_local_player_sweep_credits_the_secondary_kill() {
             .unwrap()
             .dead
     );
-    assert_player_kill(&game, PLAYER_NAME);
+    assert_player_kill(&*game, PLAYER_NAME);
     assert_eq!(game.stats.get("custom", "minecraft:player_kills"), 1);
     game.tick_scoreboard();
-    assert_eq!(score(&game, PLAYER_NAME, "player_kills_stat"), Some(1));
-    assert_eq!(score(&game, VICTIM, "player_kills_stat"), None);
+    assert_eq!(score(&*game, PLAYER_NAME, "player_kills_stat"), Some(1));
+    assert_eq!(score(&*game, VICTIM, "player_kills_stat"), None);
 }
 
 /// The same for a LAN guest's kill: a hosted world's players are all guests,
@@ -312,22 +315,23 @@ fn a_guest_killing_another_guest_credits_the_kill() {
         return;
     }
     let mut resources = None;
-    let mut game = game(&mut resources);
-    add_guest_killer(&mut game);
-    add_objectives(&mut game);
+    let mut fixture = game(&mut resources);
+    let game = fixture.game_mut();
+    add_guest_killer(game);
+    add_objectives(game);
     kill(
-        &mut game,
+        game,
         Attacker::Player(KILLER_ID, KILLER),
         "minecraft:player_attack",
     );
-    assert_player_kill(&game, KILLER);
+    assert_player_kill(&*game, KILLER);
     assert_eq!(
-        guest_stats(&game, KILLER_CONN).get("custom", "minecraft:player_kills"),
+        guest_stats(&*game, KILLER_CONN).get("custom", "minecraft:player_kills"),
         1
     );
-    assert_eq!(score(&game, KILLER, "player_kills_stat"), Some(1));
+    assert_eq!(score(&*game, KILLER, "player_kills_stat"), Some(1));
     // The host's own body is not the killer.
-    assert_eq!(score(&game, PLAYER_NAME, "kills"), None);
+    assert_eq!(score(&*game, PLAYER_NAME, "kills"), None);
     assert_eq!(game.stats.get("custom", "minecraft:player_kills"), 0);
 }
 
@@ -376,9 +380,10 @@ fn a_guest_killing_another_guest_while_displaced_credits_the_kill() {
     .into();
     mod_platform::testing::with_mods(mods, || {
         let mut resources = None;
-        let mut game = game(&mut resources);
-        add_guest_killer(&mut game);
-        add_objectives(&mut game);
+        let mut fixture = game(&mut resources);
+        let game = fixture.game_mut();
+        add_guest_killer(game);
+        add_objectives(game);
         game.as_guest(KILLER_CONN, |g| {
             kill(
                 g,
@@ -395,11 +400,11 @@ fn a_guest_killing_another_guest_while_displaced_credits_the_kill() {
         })
         .unwrap();
         assert_eq!(
-            guest_stats(&game, KILLER_CONN).get("custom", "minecraft:player_kills"),
+            guest_stats(&*game, KILLER_CONN).get("custom", "minecraft:player_kills"),
             2
         );
-        assert_eq!(score(&game, KILLER, "player_kills_stat"), Some(2));
-        assert_eq!(score(&game, PLAYER_NAME, "kills"), None);
+        assert_eq!(score(&*game, KILLER, "player_kills_stat"), Some(2));
+        assert_eq!(score(&*game, PLAYER_NAME, "kills"), None);
         assert_eq!(game.stats.get("custom", "minecraft:player_kills"), 0);
     });
 }
@@ -417,8 +422,9 @@ fn a_displaced_archer_receives_resistance_credit() {
         return;
     }
     let mut resources = None;
-    let mut game = game(&mut resources);
-    add_guest_killer(&mut game);
+    let mut fixture = game(&mut resources);
+    let game = fixture.game_mut();
+    add_guest_killer(game);
     assert!(game.run_command("summon pig 7.5 100 6.5 {NoAI:1b,NoGravity:1b}"));
     assert!(
         game.run_command("effect give @e[type=pig,limit=1] minecraft:resistance infinite 0 true")
@@ -456,8 +462,8 @@ fn a_displaced_archer_receives_resistance_credit() {
         assert_eq!(g.stats.get("custom", stat), 11);
     })
     .unwrap();
-    assert_eq!(guest_stats(&game, KILLER_CONN).get("custom", stat), 11);
-    assert_eq!(guest_stats(&game, CONN).get("custom", stat), 0);
+    assert_eq!(guest_stats(&*game, KILLER_CONN).get("custom", stat), 11);
+    assert_eq!(guest_stats(&*game, CONN).get("custom", stat), 0);
 }
 
 struct ResistanceOrder(Arc<Mutex<Vec<&'static str>>>);
@@ -511,7 +517,8 @@ fn surviving_mob_hit_awards_resistance_before_pre_and_post() {
     .into();
     mod_platform::testing::with_mods(mods, || {
         let mut resources = None;
-        let mut game = game(&mut resources);
+        let mut fixture = game(&mut resources);
+        let game = fixture.game_mut();
         assert!(game.run_command("summon pig 7.5 100 6.5 {NoAI:1b,NoGravity:1b}"));
         assert!(
             game.run_command(
@@ -528,7 +535,7 @@ fn surviving_mob_hit_awards_resistance_before_pre_and_post() {
         .unwrap();
         assert_eq!(&*order.lock().unwrap(), &["award", "pre", "post"]);
         assert_eq!(
-            guest_stats(&game, CONN).get("custom", "minecraft:damage_dealt_resisted"),
+            guest_stats(&*game, CONN).get("custom", "minecraft:damage_dealt_resisted"),
             5
         );
     });
@@ -572,9 +579,10 @@ fn a_stat_award_listener_reads_the_killers_pre_award_count() {
     .into();
     mod_platform::testing::with_mods(mods, || {
         let mut resources = None;
-        let mut game = game(&mut resources);
-        add_guest_killer(&mut game);
-        add_objectives(&mut game);
+        let mut fixture = game(&mut resources);
+        let game = fixture.game_mut();
+        add_guest_killer(game);
+        add_objectives(game);
         game.as_guest(KILLER_CONN, |g| g.stats.custom("player_kills", 7))
             .unwrap();
         let hit = |g: &mut sunrise_gameplay::game::ServerGame<'_>| {
@@ -585,16 +593,16 @@ fn a_stat_award_listener_reads_the_killers_pre_award_count() {
             );
         };
         match std::env::var(FRESH).unwrap().as_str() {
-            "parked" => hit(&mut game),
+            "parked" => hit(game),
             "displaced" => game.as_guest(KILLER_CONN, hit).unwrap(),
             case => panic!("unexpected fresh case {case}"),
         }
-        assert_player_kill(&game, KILLER);
+        assert_player_kill(&*game, KILLER);
         assert_eq!(
-            guest_stats(&game, KILLER_CONN).get("custom", "minecraft:player_kills"),
+            guest_stats(&*game, KILLER_CONN).get("custom", "minecraft:player_kills"),
             10
         );
-        assert_eq!(score(&game, KILLER, "player_kills_stat"), Some(10));
+        assert_eq!(score(&*game, KILLER, "player_kills_stat"), Some(10));
     });
 }
 
@@ -614,8 +622,9 @@ fn a_victim_advancement_matches_the_displaced_killers_facts() {
     const ADVANCEMENT: &str = "test:know_the_killer";
     const TRIGGER: &str = "minecraft:entity_killed_player";
     let mut resources = None;
-    let mut game = game(&mut resources);
-    add_guest_killer(&mut game);
+    let mut fixture = game(&mut resources);
+    let game = fixture.game_mut();
+    add_guest_killer(game);
     game.score.board.add_team("killers");
     assert!(game.score.board.add_to_team(PLAYER_NAME, "killers"));
     assert!(game.score.board.add_to_team(KILLER, "killers"));
@@ -666,7 +675,7 @@ fn a_victim_advancement_matches_the_displaced_killers_facts() {
         kill(g, Attacker::Player(id, name), "minecraft:player_attack");
     };
     match std::env::var(FRESH).unwrap().as_str() {
-        "local" => hit(&mut game, HOST, PLAYER_NAME),
+        "local" => hit(game, HOST, PLAYER_NAME),
         "nested" => game
             .as_guest(KILLER_CONN, |g| hit(g, KILLER_ID, KILLER))
             .unwrap(),
@@ -687,8 +696,9 @@ fn self_kills_and_uncredited_deaths_award_no_kill_score() {
         return;
     }
     let mut resources = None;
-    let mut game = game(&mut resources);
-    add_objectives(&mut game);
+    let mut fixture = game(&mut resources);
+    let game = fixture.game_mut();
+    add_objectives(game);
     let (attacker, ty, killed_by_player) = match std::env::var(FRESH).unwrap().as_str() {
         "self" => (
             Attacker::Player(VICTIM_ID, VICTIM),
@@ -698,13 +708,13 @@ fn self_kills_and_uncredited_deaths_award_no_kill_score() {
         "fall" => (Attacker::None, "minecraft:fall", 0),
         case => panic!("unexpected fresh case {case}"),
     };
-    kill(&mut game, attacker, ty);
+    kill(game, attacker, ty);
     for holder in [PLAYER_NAME, VICTIM] {
-        assert_eq!(score(&game, holder, "kills"), None);
-        assert_eq!(score(&game, holder, "pvp"), None);
+        assert_eq!(score(&*game, holder, "kills"), None);
+        assert_eq!(score(&*game, holder, "pvp"), None);
     }
     assert_eq!(game.stats.get("custom", "minecraft:player_kills"), 0);
-    let victim = guest_stats(&game, CONN);
+    let victim = guest_stats(&*game, CONN);
     assert_eq!(victim.get("custom", "minecraft:player_kills"), 0);
     assert_eq!(victim.get("custom", "minecraft:deaths"), 1);
     assert_eq!(
@@ -722,17 +732,18 @@ fn a_wither_killing_a_player_leaves_a_rose() {
         return;
     }
     let mut resources = None;
-    let mut game = game(&mut resources);
-    add_objectives(&mut game);
+    let mut fixture = game(&mut resources);
+    let game = fixture.game_mut();
+    add_objectives(game);
     assert!(
         game.run_command("summon wither 8.5 100 4.5 {NoAI:1b,Silent:1b,PersistenceRequired:1b}")
     );
     let wither = game.mobs.last().unwrap().id;
-    kill(&mut game, Attacker::Mob(wither), "minecraft:mob_attack");
+    kill(game, Attacker::Mob(wither), "minecraft:mob_attack");
     let name = &*game.res.facts().get(game.world.block(22, 100, 9)).name;
     assert_eq!(name, "minecraft:wither_rose", "the rose block");
     assert_eq!(
-        score(&game, PLAYER_NAME, "kills"),
+        score(&*game, PLAYER_NAME, "kills"),
         None,
         "a mob's kill credits no score"
     );
@@ -751,7 +762,8 @@ fn a_wither_killing_a_player_without_mob_griefing_drops_the_rose() {
         return;
     }
     let mut resources = None;
-    let mut game = game(&mut resources);
+    let mut fixture = game(&mut resources);
+    let game = fixture.game_mut();
     // Experience to drop: `dropAllDeathLoot` drops it before the rose.
     game.server
         .lan
@@ -765,7 +777,7 @@ fn a_wither_killing_a_player_without_mob_griefing_drops_the_rose() {
         game.run_command("summon wither 8.5 100 4.5 {NoAI:1b,Silent:1b,PersistenceRequired:1b}")
     );
     let wither = game.mobs.last().unwrap().id;
-    kill(&mut game, Attacker::Mob(wither), "minecraft:mob_attack");
+    kill(game, Attacker::Mob(wither), "minecraft:mob_attack");
     let rose = game.dropped.last().expect("a rose item");
     assert_eq!(&*rose.stack.item, "minecraft:wither_rose");
     assert_eq!(rose.stack.count, 1);

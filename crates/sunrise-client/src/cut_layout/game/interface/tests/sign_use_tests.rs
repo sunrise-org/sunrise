@@ -13,13 +13,14 @@ type Posted = (&'static str, [f64; 3], Option<Who>);
 /// A server's game with nobody playing, or `None` without prepared resources.
 fn game<'a>(
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> Option<sunrise_gameplay::game::ServerGame<'a>> {
+) -> Option<sunrise_gameplay::game::game_tests::tests::TestServerGame<'a>> {
     std::env::var_os("SUNRISE_TEST_RESOURCES")?;
-    let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+    let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+    let game = fixture.game_mut();
     game.build_registries();
     game.set_allow_commands(true);
     game.player = None;
-    Some(game)
+    Some(fixture)
 }
 
 /// `stack` with a `can_place_on` component naming `block`.
@@ -75,9 +76,10 @@ fn click_sign(
 #[test]
 fn an_adventure_click_on_a_sign_places_a_can_place_on_block() {
     let mut resources = None;
-    let Some(mut game) = game(&mut resources) else {
+    let Some(mut fixture) = game(&mut resources) else {
         return;
     };
+    let game = fixture.game_mut();
     let planks = game
         .pack
         .assets
@@ -86,7 +88,7 @@ fn an_adventure_click_on_a_sign_places_a_can_place_on_block() {
         .unwrap();
 
     let events = click_sign(
-        &mut game,
+        game,
         SignData::default(),
         held("minecraft:oak_planks", 2, "minecraft:oak_sign"),
     );
@@ -99,7 +101,7 @@ fn an_adventure_click_on_a_sign_places_a_can_place_on_block() {
 
     // `can_place_on` names another block: nothing places and nothing is used.
     let events = click_sign(
-        &mut game,
+        game,
         SignData::default(),
         held("minecraft:oak_planks", 2, "minecraft:stone"),
     );
@@ -114,9 +116,10 @@ fn an_adventure_click_on_a_sign_places_a_can_place_on_block() {
 #[test]
 fn a_waxed_sign_or_a_click_command_keeps_the_adventure_click() {
     let mut resources = None;
-    let Some(mut game) = game(&mut resources) else {
+    let Some(mut fixture) = game(&mut resources) else {
         return;
     };
+    let game = fixture.game_mut();
     let planks = game
         .pack
         .assets
@@ -135,7 +138,7 @@ fn a_waxed_sign_or_a_click_command_keeps_the_adventure_click() {
         ..SignData::default()
     };
     click_sign(
-        &mut game,
+        game,
         waxed,
         held("minecraft:oak_planks", 2, "minecraft:oak_sign"),
     );
@@ -155,7 +158,7 @@ fn a_waxed_sign_or_a_click_command_keeps_the_adventure_click() {
         ),
     ]));
     let events = click_sign(
-        &mut game,
+        game,
         command,
         held("minecraft:oak_planks", 2, "minecraft:oak_sign"),
     );

@@ -312,7 +312,8 @@ pub(in crate::game) mod tests {
     fn a_slot_toggled_in_the_menu_lands_on_the_crafter() {
         use crate::game::game_tests::tests::server_game;
         let mut resources = None;
-        let mut game = server_game(&mut resources);
+        let mut fixture = server_game(&mut resources);
+        let game = fixture.game_mut();
         let key = (2, 4, 3);
         let state = game
             .pack
@@ -326,7 +327,7 @@ pub(in crate::game) mod tests {
         game.world
             .block_entities
             .insert(key, BlockEntity::Crafter(crafter));
-        crate::game::server_side::native_item_places::tests::open_to_lan(&mut game);
+        crate::game::server_side::native_item_places::tests::open_to_lan(game);
         let (mut player, _output) =
             sunrise_gameplay_common::game::server_side::native_sound_refs::tests::guest(
                 1,
@@ -415,7 +416,8 @@ pub(in crate::game) mod tests {
         use sunrise_gameplay_common::game::minecarts::{CartKind, Minecart};
         // One game for the three vehicles: loading the resources is the slow part.
         let mut resources = None;
-        let mut game = server_game(&mut resources);
+        let mut fixture = server_game(&mut resources);
+        let game = fixture.game_mut();
         let at = Vec3::new(9.5, 64.0, 8.5);
         for kind in [CartKind::Chest, CartKind::Hopper] {
             game.carts.clear();
@@ -452,7 +454,8 @@ pub(in crate::game) mod tests {
     fn one_transfer_to_a_composter_adds_one_layer_and_eats_one_item() {
         use crate::game::game_tests::tests::server_game;
         let mut resources = None;
-        let mut game = server_game(&mut resources);
+        let mut fixture = server_game(&mut resources);
+        let game = fixture.game_mut();
         let pos = (8, 63, 8);
         let state = game
             .pack

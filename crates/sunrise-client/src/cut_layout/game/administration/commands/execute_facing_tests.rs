@@ -13,10 +13,11 @@ fn summoned_pig(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> u32 {
 #[ignore = "daily"]
 fn facing_wraps_and_uses_mth_atan2() {
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     game.build_registries();
     game.set_allow_commands(true);
-    let pig = summoned_pig(&mut game);
+    let pig = summoned_pig(game);
     // `Entity.forceSetRotation` of a relative `~` gives back the source's
     // rotation, so the mob's yaw is the one `facing` computed. The bits are
     // `CommandSourceStack.facing`'s output on vanilla 26.3. A horizontal
@@ -54,7 +55,8 @@ fn facing_wraps_and_uses_mth_atan2() {
 #[ignore = "daily"]
 fn over_world_surface_skips_cave_air_and_void_air() {
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     game.build_registries();
     game.set_allow_commands(true);
     let registry = game.pack.assets.registry;

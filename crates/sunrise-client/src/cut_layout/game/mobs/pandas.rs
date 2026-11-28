@@ -65,7 +65,8 @@ pub(crate) mod pickup_tests {
     fn a_panda_that_takes_a_thrown_item_credits_the_thrower() {
         let world = tempfile::tempdir().unwrap();
         let mut resources = None;
-        let mut game = server_game(&mut resources);
+        let mut fixture = server_game(&mut resources);
+        let game = fixture.game_mut();
         game.options.dedicated = None;
         game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 100.0, 4.5)).unwrap());
         game.level.player_uuid = Some(THROWER);
@@ -77,7 +78,7 @@ pub(crate) mod pickup_tests {
         // custom tree afterwards so the first tick cannot replace it.
         game.open_world_datapacks(&game.level.enabled_features.clone(), None)
             .unwrap();
-        install_pickup_advancement(&mut game);
+        install_pickup_advancement(game);
         // `DistanceManager` keeps a chunk entity-ticking only while its whole
         // 5x5 neighbourhood is resident.
         for cx in -2..=2 {
@@ -104,13 +105,13 @@ pub(crate) mod pickup_tests {
                 .any(|m| m.id == id && m.extra.main_hand_id() == Some("minecraft:bamboo"))
         };
         for _ in 0..20 {
-            if holding(&game) {
+            if holding(&*game) {
                 break;
             }
             assert!(game.run_command("tick step 1"));
             game.tick_server(false).unwrap();
         }
-        assert!(holding(&game), "the panda took the bamboo");
+        assert!(holding(&*game), "the panda took the bamboo");
         assert!(
             game.adv.progress.has(ADV, "pickup"),
             "the thrower's advancement: {:?}",

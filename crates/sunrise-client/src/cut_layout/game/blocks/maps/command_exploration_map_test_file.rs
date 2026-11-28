@@ -9,7 +9,9 @@ mod command_exploration_map_tests {
     #[ignore = "daily"]
     fn actual_item_modify_materializes_selected_exploration_map() {
         let mut game_resources = None;
-        let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut game_resources);
+        let mut fixture =
+            sunrise_gameplay::game::game_tests::tests::server_game(&mut game_resources);
+        let game = fixture.game_mut();
         game.player = Some(
             sunrise_sim::motion::PlayerMotion::new(
                 game.motion,
@@ -148,8 +150,9 @@ mod added_preservation_tests {
     fn game<'a>(
         label: &str,
         resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-    ) -> sunrise_gameplay::game::ServerGame<'a> {
-        let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+    ) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'a> {
+        let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+        let game = fixture.game_mut();
         game.player = Some(
             sunrise_sim::motion::PlayerMotion::new(
                 game.motion,
@@ -172,7 +175,7 @@ mod added_preservation_tests {
         game.set_allow_commands(true);
         game.reload_datapacks(false, &[]).unwrap();
         assert!(game.structure_tag("mapcmd:empty").is_empty());
-        game
+        fixture
     }
 
     fn pending() -> ItemStack {
@@ -197,7 +200,8 @@ mod added_preservation_tests {
     #[ignore = "daily"]
     fn nonempty_command_keeps_no_destination_but_pending_loot_filters_it() {
         let mut game_resources = None;
-        let mut game = game("map-command-no-destination", &mut game_resources);
+        let mut fixture = game("map-command-no-destination", &mut game_resources);
+        let game = fixture.game_mut();
         assert!(
             game.run_command(
                 "item replace entity @s hotbar.0 with map[custom_data={sentinel:5}] 3"
@@ -237,7 +241,8 @@ mod added_preservation_tests {
     #[ignore = "daily"]
     fn loaded_reference_list_sequence_filter_order_preserves_counts_and_empty() {
         let mut game_resources = None;
-        let mut game = game("map-command-reference-order", &mut game_resources);
+        let mut fixture = game("map-command-reference-order", &mut game_resources);
+        let game = fixture.game_mut();
         let path = game
             .server
             .world_root

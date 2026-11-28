@@ -14,8 +14,9 @@ const OCCUPIED: &str = "0000609b-0000-0000-0000-000000000003";
 
 fn game<'a>(
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> sunrise_gameplay::game::ServerGame<'a> {
-    let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'a> {
+    let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+    let game = fixture.game_mut();
     game.build_registries();
     game.set_allow_commands(true);
     game.world
@@ -35,7 +36,7 @@ fn game<'a>(
     ] {
         assert!(game.run_command(command), "{command}");
     }
-    game
+    fixture
 }
 
 fn id(game: &sunrise_gameplay::game::ServerGame<'_>, uuid: &str) -> u32 {
@@ -72,15 +73,16 @@ fn ints(uuid: &str) -> String {
 #[ignore = "daily"]
 fn a_gifted_poppy_is_a_guaranteed_drop() {
     let mut resources = None;
-    let mut game = game(&mut resources);
+    let mut fixture = game(&mut resources);
+    let game = fixture.game_mut();
     assert!(
         !game.run_command(&format!(
             "execute if items entity {EMPTY} saddle minecraft:poppy"
         )),
         "the antenna starts empty"
     );
-    assert!(!holds(&mut game, EMPTY, "{drop_chances:{saddle:2.0f}}"));
-    gift(&mut game, EMPTY);
+    assert!(!holds(game, EMPTY, "{drop_chances:{saddle:2.0f}}"));
+    gift(game, EMPTY);
     assert!(
         game.run_command(&format!(
             "execute if items entity {EMPTY} saddle minecraft:poppy"
@@ -90,7 +92,7 @@ fn a_gifted_poppy_is_a_guaranteed_drop() {
     // The same check as the vanilla capture (tools: probes/golem-gift).
     assert!(
         holds(
-            &mut game,
+            game,
             EMPTY,
             "{equipment:{saddle:{id:\"minecraft:poppy\"}},drop_chances:{saddle:2.0f}}"
         ),
@@ -102,22 +104,23 @@ fn a_gifted_poppy_is_a_guaranteed_drop() {
 #[ignore = "daily"]
 fn the_gift_keeps_the_other_slots_chances() {
     let mut resources = None;
-    let mut game = game(&mut resources);
+    let mut fixture = game(&mut resources);
+    let game = fixture.game_mut();
     assert!(holds(
-        &mut game,
+        game,
         CHANCES,
         "{drop_chances:{head:0.5f,mainhand:0.25f}}"
     ));
-    gift(&mut game, CHANCES);
+    gift(game, CHANCES);
     assert!(holds(
-        &mut game,
+        game,
         CHANCES,
         "{equipment:{saddle:{id:\"minecraft:poppy\"}},drop_chances:{head:0.5f,mainhand:0.25f,saddle:2.0f}}"
     ));
     let i = game
         .mobs
         .iter()
-        .position(|m| m.id == id(&game, CHANCES))
+        .position(|m| m.id == id(&*game, CHANCES))
         .unwrap();
     let chances = *game.mobs[i].extra.drop_chances.clone().unwrap();
     // EquipmentSlot.VALUES: mainhand, offhand, feet, legs, chest, head, body, saddle.
@@ -134,18 +137,19 @@ fn the_gift_keeps_the_other_slots_chances() {
 #[ignore = "daily"]
 fn an_antenna_that_holds_an_item_keeps_it_and_its_chance() {
     let mut resources = None;
-    let mut game = game(&mut resources);
-    gift_item(&mut game, OCCUPIED, "minecraft:dandelion");
+    let mut fixture = game(&mut resources);
+    let game = fixture.game_mut();
+    gift_item(game, OCCUPIED, "minecraft:dandelion");
     assert!(game.run_command(&format!(
         "execute if items entity {OCCUPIED} saddle minecraft:dandelion"
     )));
     let i = game
         .mobs
         .iter()
-        .position(|m| m.id == id(&game, OCCUPIED))
+        .position(|m| m.id == id(&*game, OCCUPIED))
         .unwrap();
     let chances = game.mobs[i].extra.drop_chances.clone();
-    gift(&mut game, OCCUPIED);
+    gift(game, OCCUPIED);
     assert!(game.run_command(&format!(
         "execute if items entity {OCCUPIED} saddle minecraft:dandelion"
     )));
@@ -155,7 +159,7 @@ fn an_antenna_that_holds_an_item_keeps_it_and_its_chance() {
     let i = game
         .mobs
         .iter()
-        .position(|m| m.id == id(&game, OCCUPIED))
+        .position(|m| m.id == id(&*game, OCCUPIED))
         .unwrap();
     assert_eq!(game.mobs[i].extra.drop_chances, chances, "the chances stay");
 }
@@ -177,11 +181,12 @@ fn effective(game: &sunrise_gameplay::game::ServerGame<'_>, uuid: &str) -> Vec<f
 #[ignore = "daily"]
 fn every_other_slot_keeps_its_effective_chance() {
     let mut resources = None;
-    let mut game = game(&mut resources);
+    let mut fixture = game(&mut resources);
+    let game = fixture.game_mut();
     for uuid in [EMPTY, CHANCES] {
-        let before = effective(&game, uuid);
-        gift(&mut game, uuid);
-        let after = effective(&game, uuid);
+        let before = effective(&*game, uuid);
+        gift(game, uuid);
+        let after = effective(&*game, uuid);
         eprintln!("{uuid}: before {before:?} after {after:?}");
         assert_eq!(after[..7], before[..7], "{uuid}: the other slots");
         assert_eq!(after[7], 2.0, "{uuid}: the antenna is a guaranteed drop");
@@ -189,7 +194,7 @@ fn every_other_slot_keeps_its_effective_chance() {
     let i = game
         .mobs
         .iter()
-        .position(|m| m.id == id(&game, EMPTY))
+        .position(|m| m.id == id(&*game, EMPTY))
         .unwrap();
     assert!(
         game.mobs[i].extra.drop_chances.is_some(),

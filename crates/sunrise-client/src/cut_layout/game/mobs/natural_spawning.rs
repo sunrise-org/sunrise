@@ -28,7 +28,8 @@ pub(crate) mod tests {
         use sunrise_protocol::packets::configuration::ClientInformation;
         use sunrise_sim::lan::{Joined, NetConfig, PlayerSender, guest::Guest, hub::HubConfig};
         let mut resources = None;
-        let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let game = fixture.game_mut();
         let net = NetConfig {
             announce: false,
             ..NetConfig::lan(0, "spawner-players-test".into(), 8)
@@ -108,7 +109,7 @@ pub(crate) mod tests {
                 near,
                 "{x} {range}"
             );
-            assert_eq!(full(&game, x, range), near, "{x} {range}");
+            assert_eq!(full(&*game, x, range), near, "{x} {range}");
         }
     }
     /// An End chunk read back from a save holds the table's first biome (badlands) in the
@@ -122,7 +123,8 @@ pub(crate) mod tests {
         use std::sync::Arc;
         use sunrise_level::chunk::{Chunk, LevelShape};
         let mut resources = None;
-        let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let game = fixture.game_mut();
         game.dim = Dim::End;
         game.world.shape = LevelShape::END;
         let end = world_biomes!(game).id("minecraft:the_end");
@@ -245,7 +247,8 @@ pub(crate) mod tests {
     #[ignore = "daily"]
     fn raids_tick_before_natural_and_custom_spawning() {
         let mut resources = None;
-        let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let game = fixture.game_mut();
         sunrise_level::spans::record_here(true);
         let _ = sunrise_level::spans::take_raw();
         game.tick_spawners();

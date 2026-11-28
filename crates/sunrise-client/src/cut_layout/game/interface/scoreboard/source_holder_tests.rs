@@ -12,8 +12,12 @@ use sunrise_sim::lan::{Joined, NetConfig, Out, PlayerSender, guest::Guest, hub::
 fn game_with_guest<'a>(
     resources: &'a mut Option<Arc<sunrise_gameplay_common::game::Resources>>,
     name: &str,
-) -> (sunrise_gameplay::game::ServerGame<'a>, mpsc::Receiver<Out>) {
-    let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+) -> (
+    sunrise_gameplay::game::game_tests::tests::TestServerGame<'a>,
+    mpsc::Receiver<Out>,
+) {
+    let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+    let game = fixture.game_mut();
     game.world
         .chunks
         .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
@@ -67,14 +71,15 @@ fn game_with_guest<'a>(
     guest.dimension = "minecraft:overworld".into();
     guest.placed = true;
     game.server.lan.as_mut().unwrap().hub.guests.push(guest);
-    (game, rx)
+    (fixture, rx)
 }
 
 #[test]
 #[ignore = "daily"]
 fn a_score_for_another_player_uses_their_team_formatted_name() {
     let mut resources = None;
-    let (mut game, _rx) = game_with_guest(&mut resources, "Alex");
+    let (mut fixture, _rx) = game_with_guest(&mut resources, "Alex");
+    let game = fixture.game_mut();
     for command in [
         "team add red",
         "team modify red prefix {\"text\":\"[R] \"}",
@@ -131,7 +136,8 @@ fn guest_trigger_suggestions(
 #[ignore = "daily"]
 fn guest_trigger_completion_lists_the_guests_unlocked_objectives() {
     let mut resources = None;
-    let (mut game, rx) = game_with_guest(&mut resources, "Alex");
+    let (mut fixture, rx) = game_with_guest(&mut resources, "Alex");
+    let game = fixture.game_mut();
     for command in [
         "scoreboard objectives add t1 trigger",
         "scoreboard objectives add t2 trigger",
@@ -140,14 +146,15 @@ fn guest_trigger_completion_lists_the_guests_unlocked_objectives() {
     ] {
         assert!(game.run_command(command), "{command}");
     }
-    assert_eq!(guest_trigger_suggestions(&mut game, &rx), ["t2"]);
+    assert_eq!(guest_trigger_suggestions(game, &rx), ["t2"]);
 }
 
 #[test]
 #[ignore = "daily"]
 fn a_wildcard_reset_names_tracked_holders_without_their_team_formatting() {
     let mut resources = None;
-    let (mut game, _rx) = game_with_guest(&mut resources, "Alex");
+    let (mut fixture, _rx) = game_with_guest(&mut resources, "Alex");
+    let game = fixture.game_mut();
     for command in [
         "team add red",
         "team modify red prefix {\"text\":\"[R] \"}",

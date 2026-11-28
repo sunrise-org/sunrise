@@ -152,7 +152,8 @@ pub(crate) mod stand_lodestone_inventory_tick_tests {
     #[ignore = "daily"]
     fn actual_stand_equipment_compasses_tick_after_loaded_lodestone_removal() {
         let mut resources = None;
-        let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let game = fixture.game_mut();
         game.build_registries();
         game.set_allow_commands(true);
         game.level.health = 20.0;
@@ -352,7 +353,8 @@ pub(crate) mod postbaseline_lodestone_controls {
     #[ignore = "daily"]
     fn postbaseline_six_slots_noncompass_guard_and_dimension_preservation() {
         let mut resources = None;
-        let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let game = fixture.game_mut();
         game.build_registries();
         game.set_allow_commands(true);
         game.block_ticks
@@ -427,13 +429,13 @@ pub(crate) mod postbaseline_lodestone_controls {
                     .map(sunrise_core::nbt::Tag::from)
             })
             .collect();
-        assert!(has_target(stack(&game, mixed, 0)));
-        assert!(has_target(stack(&game, mixed, 1)));
-        assert!(has_target(stack(&game, mixed, 5)));
-        assert!(!has_target(stack(&game, mixed, 2)));
-        assert!(has_target(stack(&game, inactive, 0)));
+        assert!(has_target(stack(&*game, mixed, 0)));
+        assert!(has_target(stack(&*game, mixed, 1)));
+        assert!(has_target(stack(&*game, mixed, 5)));
+        assert!(!has_target(stack(&*game, mixed, 2)));
+        assert!(has_target(stack(&*game, inactive, 0)));
         for slot in 0..6 {
-            assert!(has_target(stack(&game, all, slot)));
+            assert!(has_target(stack(&*game, all, slot)));
         }
         let dimension = game.dim;
         let chunks: std::collections::HashSet<_> = game.world.chunks.keys().copied().collect();
@@ -458,7 +460,7 @@ pub(crate) mod postbaseline_lodestone_controls {
             "non-ticking guard unchanged"
         );
         for slot in 0..6 {
-            let s = stack(&game, all, slot);
+            let s = stack(&*game, all, slot);
             assert!(!has_target(s), "source-backed equipment slot {slot}");
             assert_eq!(s.count, 1);
             assert_eq!(
@@ -485,7 +487,7 @@ pub(crate) mod postbaseline_lodestone_controls {
             before, after,
             "actual non-compass/untracked/other-dimension/targetless stacks preserved"
         );
-        assert!(has_target(stack(&game, inactive, 0)));
+        assert!(has_target(stack(&*game, inactive, 0)));
         assert_eq!(game.dim, dimension);
         assert_eq!(
             game.world

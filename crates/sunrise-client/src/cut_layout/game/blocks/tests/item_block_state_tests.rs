@@ -46,7 +46,8 @@ fn a_block_state_component_does_not_update_neighbours() {
     const LAMP: [i32; 3] = [2, 4, 0];
     const BESIDE: [i32; 3] = [2, 4, 1];
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     game.options.dedicated = None;
     game.set_mode(GameMode::Creative);
     let lamp = game
@@ -68,12 +69,12 @@ fn a_block_state_component_does_not_update_neighbours() {
     assert!(game.use_hand(Some(&hit)).unwrap());
     let lever = [LAMP[0] - 1, LAMP[1], LAMP[2]];
     assert_eq!(
-        property(&game, lever, "powered").as_deref(),
+        property(&*game, lever, "powered").as_deref(),
         Some("true"),
         "the component's powered lever is what was placed"
     );
     assert_eq!(
-        property(&game, LAMP, "lit").as_deref(),
+        property(&*game, LAMP, "lit").as_deref(),
         Some("false"),
         "updateBlockStateFromTag notifies no neighbour, so the lamp stays dark"
     );
@@ -98,7 +99,7 @@ fn a_block_state_component_does_not_update_neighbours() {
         "a redstone block was placed beside the lamp"
     );
     assert_eq!(
-        property(&game, LAMP, "lit").as_deref(),
+        property(&*game, LAMP, "lit").as_deref(),
         Some("true"),
         "an ordinary placement still notifies its neighbours"
     );

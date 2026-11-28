@@ -92,8 +92,9 @@ pub(crate) fn vec_bits(v: Vec3) -> [String; 3] {
 
 pub(crate) fn setup_game<'a>(
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> sunrise_gameplay::game::ServerGame<'a> {
-    let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'a> {
+    let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+    let game = fixture.game_mut();
     game.build_registries();
     game.set_allow_commands(true);
     game.load_ticking_neighbourhood(0, 0);
@@ -104,7 +105,7 @@ pub(crate) fn setup_game<'a>(
         sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 12.5)).unwrap();
     player.client_loaded = true;
     game.player = Some(player);
-    sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(&mut game, 1, 1);
+    sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 1, 1);
     for command in [
         "gamerule spawn_mobs false",
         "gamerule advance_time false",
@@ -115,7 +116,7 @@ pub(crate) fn setup_game<'a>(
     ] {
         let _ = game.run_command(command);
     }
-    game
+    fixture
 }
 
 #[allow(unused_imports)]
@@ -532,13 +533,14 @@ pub(crate) fn check_case(
 pub(crate) fn run_family(filter: impl Fn(&str) -> bool) {
     let witness = load_witness();
     let mut resources = None;
-    let mut game = setup_game(&mut resources);
+    let mut fixture = setup_game(&mut resources);
+    let game = fixture.game_mut();
     let mut failures = Vec::new();
     let mut ran = 0usize;
     for case in witness.cases.iter().filter(|c| filter(&c.target)) {
         ran += 1;
         failures.extend(check_case(
-            &mut game,
+            game,
             case,
             witness.projectile_seed,
             witness.level_seed,

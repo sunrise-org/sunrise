@@ -11,7 +11,8 @@ use sunrise_sim::mobs::Mob;
 fn a_baby_rabbit_takes_a_parents_colour_or_a_fresh_biome_variant() {
     use sunrise_core::random::{LegacyRandom, LevelRandom, RandomSource};
     let mut resources = None;
-    let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+    let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+    let game = fixture.game_mut();
     let kind = game
         .res
         .mob_types()

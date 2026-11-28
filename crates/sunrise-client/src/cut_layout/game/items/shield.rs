@@ -103,7 +103,8 @@ mod blocked_hit_use_tests {
     #[ignore = "daily"]
     fn a_blocked_hit_counts_the_shield_as_used() {
         let mut game_resources = None;
-        let mut game = server_game(&mut game_resources);
+        let mut fixture = server_game(&mut game_resources);
+        let game = fixture.game_mut();
         game.build_registries();
         game.offhand = Some(ItemStack::new("minecraft:shield", 1));
         game.using = Some((OFFHAND_SLOT, 0));

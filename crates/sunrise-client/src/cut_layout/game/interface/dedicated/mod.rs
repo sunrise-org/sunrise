@@ -118,7 +118,8 @@ pub(crate) mod tests {
     fn broadcast_console_destination_follows_role_not_launch_marker() {
         use sunrise_gameplay_common::game::execution_role::ExecutionRole;
         let mut resources = None;
-        let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let game = fixture.game_mut();
         game.options.dedicated = Some(Vec::new());
         for (role, expected) in [
             (

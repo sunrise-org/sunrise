@@ -973,8 +973,9 @@ mod tests {
             return;
         }
         let mut resources = None;
-        let mut game = crate::game::game_tests::tests::server_game(&mut resources);
-        let _rx = host_for(&mut game);
+        let mut fixture = crate::game::game_tests::tests::server_game(&mut resources);
+        let game = fixture.game_mut();
+        let _rx = host_for(game);
         game.server.lan.as_mut().unwrap().hub.guests.update(0, |g| {
             g.dimension = "minecraft:overworld".into();
             g.yaw = 15.0;

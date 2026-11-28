@@ -15,13 +15,14 @@ use sunrise_world::registry::BlockStateId;
 #[ignore = "daily"]
 fn a_ground_jump_awards_the_jump_statistic() {
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     let mut player = PlayerMotion::new(game.motion, Vec3::new(2.5, 64.0, 2.5)).unwrap();
     player.ground.on_ground = true;
     {
         let meta =
             sunrise_gameplay_common::game::side_ops::world::WorldSideGameExt::side_game_side_meta(
-                &game,
+                &*game,
             );
         let side = game_side!(
             game.common,
@@ -65,7 +66,8 @@ fn a_ground_jump_awards_the_jump_statistic() {
 #[ignore = "daily"]
 fn a_worn_out_helmet_awards_the_broken_statistic() {
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 64.0, 2.5)).unwrap());
     let mut helmet = ItemStack::new("minecraft:leather_helmet", 1);
     helmet.damage = 54;
@@ -115,10 +117,11 @@ fn place_bed(game: &mut sunrise_gameplay::game::ServerGame<'_>, x: i32, kind: &s
 #[ignore = "daily"]
 fn sleeping_in_a_straw_bed_awards_its_own_statistic() {
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     // `Level.isDarkOutside`: midnight, so a bed may be slept in.
     game.world.day_time = 18000;
-    let straw = place_bed(&mut game, 2, "minecraft:straw_bed");
+    let straw = place_bed(game, 2, "minecraft:straw_bed");
     game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 64.0, 3.5)).unwrap());
     game.try_sleep(straw);
     assert_eq!(
@@ -130,7 +133,7 @@ fn sleeping_in_a_straw_bed_awards_its_own_statistic() {
     assert_eq!(game.stats.get("custom", "minecraft:sleep_in_bed"), 0);
     game.wake_up(true, true);
     // An ordinary bed keeps the plain statistic.
-    let red = place_bed(&mut game, 4, "minecraft:red_bed");
+    let red = place_bed(game, 4, "minecraft:red_bed");
     game.player.as_mut().unwrap().position = Vec3::new(4.5, 64.0, 3.5);
     game.try_sleep(red);
     assert_eq!(game.sleeping, Some(red), "the player lay in the red bed");

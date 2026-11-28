@@ -338,7 +338,8 @@ pub(crate) mod mob_pickup_sync_tests {
     #[ignore = "daily"]
     fn a_mob_pickup_reaches_guests_as_a_take() {
         let mut resources = None;
-        let mut game = super::super::game_tests::tests::server_game(&mut resources);
+        let mut fixture = super::super::game_tests::tests::server_game(&mut resources);
+        let game = fixture.game_mut();
         game.build_registries();
         game.set_allow_commands(true);
         assert!(game.run_command("summon piglin 8.5 80 8.5 {NoAI:1b,PersistenceRequired:1b}"));
@@ -350,7 +351,7 @@ pub(crate) mod mob_pickup_sync_tests {
             0,
         );
         let item = game.dropped[0].clone();
-        let rx = guest_at(&mut game, [8.5, 80.0, 8.5]);
+        let rx = guest_at(game, [8.5, 80.0, 8.5]);
         game.server_mob_take_item(&item, mob);
         let sent = takes(&rx);
         assert!(
@@ -446,14 +447,15 @@ pub(crate) mod mob_swing_sync_tests {
     #[ignore = "daily"]
     fn an_off_hand_mob_swing_reaches_guests_as_the_off_hand() {
         let mut resources = None;
-        let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let game = fixture.game_mut();
         game.build_registries();
         game.set_allow_commands(true);
         let piglin = "{NoAI:1b,PersistenceRequired:1b}";
         assert!(game.run_command(&format!("summon piglin 8.5 80 8.5 {piglin}")));
         assert!(game.run_command(&format!("summon piglin 10.5 80 10.5 {piglin}")));
         let (off, main) = (game.mobs[0].id, game.mobs[1].id);
-        let rx = guest_at(&mut game, [8.5, 80.0, 8.5]);
+        let rx = guest_at(game, [8.5, 80.0, 8.5]);
         game.mobs[0].swing_hand_modified(true, SwingAnimation::DEFAULT);
         game.mobs[1].swing_hand_modified(false, SwingAnimation::DEFAULT);
         let host = game.server.lan.take().expect("the hub");

@@ -9,7 +9,8 @@ use sunrise_sim::mobs::Species;
 #[ignore = "daily"]
 fn a_cat_spawner_cat_faces_south_without_a_level_draw() {
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     // Day zero is a full moon (brightness 1.0): all_black plus the ten
     // unconditional coats. There is no black-cat structure in this fixture.
     game.world.day_time = 0;
@@ -45,7 +46,7 @@ fn a_cat_spawner_cat_faces_south_without_a_level_draw() {
         let coat = level.next_int_bound(coats.len() as i32).unwrap() as usize;
         let sound = level.next_int_bound(sound_count).unwrap() as usize;
         let before = game.mobs.len();
-        sunrise_gameplay::cat_spawner::spawn_cat(&mut game, [4, 100, 8], false);
+        sunrise_gameplay::cat_spawner::spawn_cat(game, [4, 100, 8], false);
         assert_eq!(game.mobs.len(), before + 1, "one cat");
         let variants = game.world_variants();
         let cat = game.mobs.last().expect("cat");

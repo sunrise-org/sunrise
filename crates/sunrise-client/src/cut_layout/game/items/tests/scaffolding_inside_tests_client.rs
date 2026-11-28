@@ -16,7 +16,8 @@ use {sunrise_gameplay::game::game_tests::tests::server_game, sunrise_gameplay_co
 fn a_click_from_inside_a_scaffolding_block_places_on_the_opposite_face() {
     const COLUMN: [i32; 3] = [2, 5, 0];
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     game.options.dedicated = None;
     game.set_mode(GameMode::Creative);
     let scaffolding = game
@@ -46,22 +47,22 @@ fn a_click_from_inside_a_scaffolding_block_places_on_the_opposite_face() {
     *game.held_mut() = Some(ItemStack::new("minecraft:scaffolding", 1));
     game.yaw = 0.0;
     game.pitch = -90.0;
-    set_sneak(&mut game, true);
+    set_sneak(game, true);
     let hit: Hit = game.pick().expect("the eye is inside the column");
     assert_eq!(hit.pos, COLUMN, "the click is on the block the eye is in");
     assert!(game.use_hand(Some(&hit)).unwrap());
     assert_eq!(
-        name(&game, [COLUMN[0], COLUMN[1] + 1, COLUMN[2]]),
+        name(&*game, [COLUMN[0], COLUMN[1] + 1, COLUMN[2]]),
         "minecraft:scaffolding",
         "inside + sneak places on the opposite of the clicked (down) face: upwards"
     );
     assert_eq!(
-        name(&game, [COLUMN[0], COLUMN[1] - 1, COLUMN[2]]),
+        name(&*game, [COLUMN[0], COLUMN[1] - 1, COLUMN[2]]),
         "minecraft:air",
         "a click without the inside flag places on the clicked face: below"
     );
     assert_eq!(
-        name(&game, [COLUMN[0] + 1, COLUMN[1], COLUMN[2]]),
+        name(&*game, [COLUMN[0] + 1, COLUMN[1], COLUMN[2]]),
         "minecraft:air",
         "a ray that lost the face places beside the column"
     );

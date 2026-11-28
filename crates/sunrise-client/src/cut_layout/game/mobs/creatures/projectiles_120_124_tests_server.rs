@@ -28,12 +28,13 @@ pub(crate) fn alive_124(game: &sunrise_gameplay::game::ServerGame<'_>, t: Target
 pub(crate) fn run_witness_firework_rocket_targets_124() {
     let witness = load_witness();
     let mut resources = None;
-    let mut game = setup_game(&mut resources);
+    let mut fixture = setup_game(&mut resources);
+    let game = fixture.game_mut();
     let mut failures = Vec::new();
 
     for case in &witness.gap_124_fireworks {
         let label = format!("124 {}", case.case);
-        clear_arena(&mut game, 10);
+        clear_arena(game, 10);
         game.world.random.set_seed(witness.level_seed);
 
         if case.case == "item_frame" || case.case == "painting" {
@@ -189,7 +190,7 @@ pub(crate) fn run_witness_firework_rocket_targets_124() {
         });
 
         for exp in &case.ticks {
-            let (events, sounds) = step_recording(&mut game);
+            let (events, sounds) = step_recording(game);
             let live = game.rockets.iter().find(|r| r.id == rocket_id);
             if live.is_some() != exp.rocket_alive {
                 failures.push(format!(
@@ -216,7 +217,7 @@ pub(crate) fn run_witness_firework_rocket_targets_124() {
             }
             let got_alive: BTreeMap<String, bool> = targets
                 .iter()
-                .map(|(k, &t)| (k.clone(), alive_124(&game, t)))
+                .map(|(k, &t)| (k.clone(), alive_124(&*game, t)))
                 .collect();
             if got_alive != exp.targets_alive {
                 failures.push(format!(

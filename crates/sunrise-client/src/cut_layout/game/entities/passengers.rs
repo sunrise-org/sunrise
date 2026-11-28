@@ -1952,7 +1952,8 @@ pub(crate) mod trap_scatter_tests {
         use sunrise_level::chunk::Chunk;
 
         let mut resources = None;
-        let mut game = super::super::game_tests::tests::server_game(&mut resources);
+        let mut fixture = super::super::game_tests::tests::server_game(&mut resources);
+        let game = fixture.game_mut();
         // Mounting resolves epoch-scoped resident handles, just as in an open world.
         game.native_lifecycle
             .begin_open(Some(mod_api::Authority::IntegratedServer));
@@ -1994,7 +1995,8 @@ pub(crate) mod trap_scatter_tests {
     #[ignore = "daily"]
     fn enchant_item_on_an_empty_slot_draws_nothing() {
         let mut resources = None;
-        let mut game = super::super::game_tests::tests::server_game(&mut resources);
+        let mut fixture = super::super::game_tests::tests::server_game(&mut resources);
+        let game = fixture.game_mut();
         let id = game
             .spawn_mob_raw("minecraft:skeleton_horse", [8.5, 64.0, 8.5], false)
             .unwrap();

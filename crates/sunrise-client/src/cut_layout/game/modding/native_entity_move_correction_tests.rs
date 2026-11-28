@@ -73,7 +73,8 @@ fn hosted_guest_starting<R>(
 ) -> R {
     mod_platform::testing::with_mods(mods, || {
         let mut resources = None;
-        let mut game = server_game(&mut resources);
+        let mut fixture = server_game(&mut resources);
+        let game = fixture.game_mut();
         game.build_registries();
         game.set_allow_commands(true);
         let stone = game
@@ -172,7 +173,7 @@ fn hosted_guest_starting<R>(
             .update(0, |g| g.game_mode = mode);
         game.sync_tick_chunks();
         game.server.ticked_entities_through = game.server.next_entity;
-        body(&mut game, rx, at)
+        body(game, rx, at)
     })
 }
 

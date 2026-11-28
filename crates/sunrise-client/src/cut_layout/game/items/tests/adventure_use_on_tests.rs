@@ -15,11 +15,12 @@ use {sunrise_gameplay_common::game::GuestUse, sunrise_gameplay_common::game::Hit
 /// A server's game with the prepared resources, or `None` where CI has none.
 fn game<'a>(
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> Option<sunrise_gameplay::game::ServerGame<'a>> {
+) -> Option<sunrise_gameplay::game::game_tests::tests::TestServerGame<'a>> {
     std::env::var_os("SUNRISE_TEST_RESOURCES")?;
-    let mut game = server_game(resources);
+    let mut fixture = server_game(resources);
+    let game = fixture.game_mut();
     game.build_registries();
-    Some(game)
+    Some(fixture)
 }
 
 /// `stack` with a `can_place_on` component naming `block`.
@@ -109,18 +110,19 @@ fn held(game: &sunrise_gameplay::game::ServerGame<'_>) -> Option<(String, u32)> 
 #[test]
 fn an_adventure_use_on_needs_may_build_or_a_matching_can_place_on() {
     let mut resources = None;
-    let Some(mut game) = game(&mut resources) else {
+    let Some(mut fixture) = game(&mut resources) else {
         return;
     };
+    let game = fixture.game_mut();
     game.set_mode(GameMode::Adventure);
 
     // AxeItem.useOn: strip an oak log.
     let log = [2, 4, 3];
-    let oak_log = place(&mut game, log, "minecraft:oak_log", &[]);
-    click(&mut game, log, ItemStack::new("minecraft:iron_axe", 1));
-    assert_eq!(state(&game, log), oak_log, "the axe stripped nothing");
+    let oak_log = place(game, log, "minecraft:oak_log", &[]);
+    click(game, log, ItemStack::new("minecraft:iron_axe", 1));
+    assert_eq!(state(&*game, log), oak_log, "the axe stripped nothing");
     assert_eq!(
-        held(&game),
+        held(&*game),
         Some(("minecraft:iron_axe".into(), 1)),
         "the axe was not used"
     );
@@ -131,33 +133,29 @@ fn an_adventure_use_on_needs_may_build_or_a_matching_can_place_on() {
         .default_state("minecraft:stripped_oak_log")
         .unwrap();
     click(
-        &mut game,
+        game,
         log,
         placeable("minecraft:iron_axe", 1, "minecraft:oak_log"),
     );
-    assert_eq!(state(&game, log), stripped, "a matching axe strips");
+    assert_eq!(state(&*game, log), stripped, "a matching axe strips");
 
     // The same click through a guest's `UseItemOn`, as single player runs.
     let guest_log = [3, 4, 3];
-    let guest_oak = place(&mut game, guest_log, "minecraft:oak_log", &[]);
-    click_as_guest(
-        &mut game,
-        guest_log,
-        ItemStack::new("minecraft:iron_axe", 1),
-    );
+    let guest_oak = place(game, guest_log, "minecraft:oak_log", &[]);
+    click_as_guest(game, guest_log, ItemStack::new("minecraft:iron_axe", 1));
     assert_eq!(
-        state(&game, guest_log),
+        state(&*game, guest_log),
         guest_oak,
         "the guest's axe stripped nothing"
     );
 
     // HoneycombItem.useOn: wax a copper block.
     let copper = [4, 4, 3];
-    let copper_block = place(&mut game, copper, "minecraft:copper_block", &[]);
-    click(&mut game, copper, ItemStack::new("minecraft:honeycomb", 2));
-    assert_eq!(state(&game, copper), copper_block, "the honeycomb waxed");
+    let copper_block = place(game, copper, "minecraft:copper_block", &[]);
+    click(game, copper, ItemStack::new("minecraft:honeycomb", 2));
+    assert_eq!(state(&*game, copper), copper_block, "the honeycomb waxed");
     assert_eq!(
-        held(&game),
+        held(&*game),
         Some(("minecraft:honeycomb".into(), 2)),
         "the honeycomb was not used"
     );
@@ -168,37 +166,37 @@ fn an_adventure_use_on_needs_may_build_or_a_matching_can_place_on() {
         .default_state("minecraft:waxed_copper_block")
         .unwrap();
     click(
-        &mut game,
+        game,
         copper,
         placeable("minecraft:honeycomb", 2, "minecraft:copper_block"),
     );
-    assert_eq!(state(&game, copper), waxed, "a matching honeycomb waxes");
+    assert_eq!(state(&*game, copper), waxed, "a matching honeycomb waxes");
 
     // BoneMealItem.useOn: grow a wheat crop, which is always used up.
     let wheat = [6, 4, 3];
-    place(&mut game, wheat, "minecraft:wheat", &[]);
-    click(&mut game, wheat, ItemStack::new("minecraft:bone_meal", 3));
+    place(game, wheat, "minecraft:wheat", &[]);
+    click(game, wheat, ItemStack::new("minecraft:bone_meal", 3));
     assert_eq!(
-        held(&game),
+        held(&*game),
         Some(("minecraft:bone_meal".into(), 3)),
         "the bone meal was not used"
     );
     click(
-        &mut game,
+        game,
         wheat,
         placeable("minecraft:bone_meal", 3, "minecraft:wheat"),
     );
     assert_eq!(
-        held(&game),
+        held(&*game),
         Some(("minecraft:bone_meal".into(), 2)),
         "a matching bone meal is used"
     );
 
     // ShearsItem.useOn: crop a growing plant's head to its top age.
     let vines = [8, 4, 3];
-    let young = place(&mut game, vines, "minecraft:weeping_vines", &[("age", "0")]);
-    click(&mut game, vines, ItemStack::new("minecraft:shears", 1));
-    assert_eq!(state(&game, vines), young, "the shears cropped");
+    let young = place(game, vines, "minecraft:weeping_vines", &[("age", "0")]);
+    click(game, vines, ItemStack::new("minecraft:shears", 1));
+    assert_eq!(state(&*game, vines), young, "the shears cropped");
     let grown = {
         let registry = &game.pack.assets.registry;
         let mut state = registry.state(young).unwrap().clone();
@@ -206,21 +204,21 @@ fn an_adventure_use_on_needs_may_build_or_a_matching_can_place_on() {
         registry.id(&state).unwrap()
     };
     click(
-        &mut game,
+        game,
         vines,
         placeable("minecraft:shears", 1, "minecraft:weeping_vines"),
     );
-    assert_eq!(state(&game, vines), grown, "matching shears crop");
+    assert_eq!(state(&*game, vines), grown, "matching shears crop");
 
     // PotionItem.useOn: a water bottle turns dirt to mud.
     let dirt = [10, 4, 3];
-    let dirt_state = place(&mut game, dirt, "minecraft:dirt", &[]);
+    let dirt_state = place(game, dirt, "minecraft:dirt", &[]);
     click(
-        &mut game,
+        game,
         dirt,
         ItemStack::new("minecraft:potion", 1).with_potion("minecraft:water"),
     );
-    assert_eq!(state(&game, dirt), dirt_state, "the water bottle poured");
+    assert_eq!(state(&*game, dirt), dirt_state, "the water bottle poured");
     let mud = game
         .pack
         .assets
@@ -228,85 +226,82 @@ fn an_adventure_use_on_needs_may_build_or_a_matching_can_place_on() {
         .default_state("minecraft:mud")
         .unwrap();
     click(
-        &mut game,
+        game,
         dirt,
         placeable("minecraft:potion", 1, "minecraft:dirt").with_potion("minecraft:water"),
     );
-    assert_eq!(state(&game, dirt), mud, "a matching water bottle pours");
+    assert_eq!(state(&*game, dirt), mud, "a matching water bottle pours");
 
     // SpawnEggItem.useOn: a pig egg spawns a pig on the clicked face.
     let stone = [12, 4, 3];
-    place(&mut game, stone, "minecraft:stone", &[]);
+    place(game, stone, "minecraft:stone", &[]);
     let mobs = game.mobs.len();
-    click(
-        &mut game,
-        stone,
-        ItemStack::new("minecraft:pig_spawn_egg", 1),
-    );
+    click(game, stone, ItemStack::new("minecraft:pig_spawn_egg", 1));
     assert_eq!(game.mobs.len(), mobs, "the egg spawned a mob");
     assert_eq!(
-        held(&game),
+        held(&*game),
         Some(("minecraft:pig_spawn_egg".into(), 1)),
         "the egg was not used"
     );
     click(
-        &mut game,
+        game,
         stone,
         placeable("minecraft:pig_spawn_egg", 1, "minecraft:stone"),
     );
     assert_eq!(game.mobs.len(), mobs + 1, "a matching egg spawns");
-    assert_eq!(held(&game), None, "a matching egg is used up");
+    assert_eq!(held(&*game), None, "a matching egg is used up");
 }
 
 /// A player who may build keeps every one of those uses.
 #[test]
 fn a_builder_use_on_is_unaffected() {
     let mut resources = None;
-    let Some(mut game) = game(&mut resources) else {
+    let Some(mut fixture) = game(&mut resources) else {
         return;
     };
+    let game = fixture.game_mut();
     game.set_mode(GameMode::Survival);
 
     let log = [2, 4, 3];
-    place(&mut game, log, "minecraft:oak_log", &[]);
-    click(&mut game, log, ItemStack::new("minecraft:iron_axe", 1));
+    place(game, log, "minecraft:oak_log", &[]);
+    click(game, log, ItemStack::new("minecraft:iron_axe", 1));
     let stripped = game
         .pack
         .assets
         .registry
         .default_state("minecraft:stripped_oak_log")
         .unwrap();
-    assert_eq!(state(&game, log), stripped, "the axe strips");
+    assert_eq!(state(&*game, log), stripped, "the axe strips");
 
     let copper = [4, 4, 3];
-    place(&mut game, copper, "minecraft:copper_block", &[]);
-    click(&mut game, copper, ItemStack::new("minecraft:honeycomb", 2));
+    place(game, copper, "minecraft:copper_block", &[]);
+    click(game, copper, ItemStack::new("minecraft:honeycomb", 2));
     let waxed = game
         .pack
         .assets
         .registry
         .default_state("minecraft:waxed_copper_block")
         .unwrap();
-    assert_eq!(state(&game, copper), waxed, "the honeycomb waxes");
+    assert_eq!(state(&*game, copper), waxed, "the honeycomb waxes");
 
     let wheat = [6, 4, 3];
-    place(&mut game, wheat, "minecraft:wheat", &[]);
-    click(&mut game, wheat, ItemStack::new("minecraft:bone_meal", 3));
+    place(game, wheat, "minecraft:wheat", &[]);
+    click(game, wheat, ItemStack::new("minecraft:bone_meal", 3));
     assert_eq!(
-        held(&game),
+        held(&*game),
         Some(("minecraft:bone_meal".into(), 2)),
         "the bone meal is used"
     );
 
     let vines = [8, 4, 3];
-    let young = place(&mut game, vines, "minecraft:weeping_vines", &[("age", "0")]);
-    click(&mut game, vines, ItemStack::new("minecraft:shears", 1));
-    assert_ne!(state(&game, vines), young, "the shears crop");
+    let young = place(game, vines, "minecraft:weeping_vines", &[("age", "0")]);
+    click(game, vines, ItemStack::new("minecraft:shears", 1));
+    assert_ne!(state(&*game, vines), young, "the shears crop");
 
     let dirt = [10, 4, 3];
-    place(&mut game, dirt, "minecraft:dirt", &[]);
+    place(game, dirt, "minecraft:dirt", &[]);
     click(
-        &mut game,
+        game,
         dirt,
         ItemStack::new("minecraft:potion", 1).with_potion("minecraft:water"),
     );
@@ -316,18 +311,14 @@ fn a_builder_use_on_is_unaffected() {
         .registry
         .default_state("minecraft:mud")
         .unwrap();
-    assert_eq!(state(&game, dirt), mud, "the water bottle pours");
+    assert_eq!(state(&*game, dirt), mud, "the water bottle pours");
 
     let stone = [12, 4, 3];
-    place(&mut game, stone, "minecraft:stone", &[]);
+    place(game, stone, "minecraft:stone", &[]);
     let mobs = game.mobs.len();
-    click(
-        &mut game,
-        stone,
-        ItemStack::new("minecraft:pig_spawn_egg", 1),
-    );
+    click(game, stone, ItemStack::new("minecraft:pig_spawn_egg", 1));
     assert_eq!(game.mobs.len(), mobs + 1, "the egg spawns");
-    assert_eq!(held(&game), None, "the egg is used up");
+    assert_eq!(held(&*game), None, "the egg is used up");
 }
 
 #[cfg(feature = "client")]

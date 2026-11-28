@@ -9,7 +9,8 @@ use sunrise_sim::motion::PlayerMotion;
 #[ignore = "daily"]
 fn holder_detach_still_dispatches_the_actual_interaction_criterion() {
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     game.options.dedicated = None;
     game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 100.0, 4.5)).unwrap());
     game.level.player_uuid = Some([413, 0, 0, 2]);

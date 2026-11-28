@@ -8,7 +8,7 @@ use sunrise_gameplay::game::game_tests::tests::server_game;
 /// (CI has none: the tests then skip quietly).
 pub(crate) fn server(
     resources: &mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> Option<sunrise_gameplay::game::ServerGame<'_>> {
+) -> Option<sunrise_gameplay::game::game_tests::tests::TestServerGame<'_>> {
     std::env::var_os("SUNRISE_TEST_RESOURCES")?;
     Some(server_game(resources))
 }
@@ -19,11 +19,12 @@ pub(crate) use sunrise_gameplay::game::server_side::minecarts_server::minecart_t
 #[test]
 fn a_silent_tnt_cart_primes_without_its_sound() {
     let mut resources = None;
-    let Some(mut game) = server(&mut resources) else {
+    let Some(mut fixture) = server(&mut resources) else {
         return;
     };
+    let game = fixture.game_mut();
     // Silent: the fuse is lit, the entity event goes out, no sound is played.
-    tnt_cart(&mut game, 42, true);
+    tnt_cart(game, 42, true);
     game.start_audio_capture();
     let mut silent = game.carts[0].clone();
     game.activate_cart(&mut silent, true);
@@ -42,7 +43,7 @@ fn a_silent_tnt_cart_primes_without_its_sound() {
 
     // Not silent: exactly one `entity.tnt.primed` at the cart, on the blocks
     // source (`SoundSource.BLOCKS` ordinal 4), volume and pitch 1.
-    tnt_cart(&mut game, 43, false);
+    tnt_cart(game, 43, false);
     game.start_audio_capture();
     let mut normal = game.carts[0].clone();
     game.activate_cart(&mut normal, true);

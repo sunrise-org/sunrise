@@ -15,8 +15,9 @@ use sunrise_sim::lan::menu::input;
 fn a_guest_crafting_take_teaches_the_recipe_and_counts_what_it_asked_for() {
     const PLANKS: &str = "minecraft:oak_planks";
     let mut resources = None;
-    let mut game = crate::game::game_tests::tests::server_game(&mut resources);
-    let _rx = crate::game::server_side::lan::world_spawn_sync_tests::host_for(&mut game);
+    let mut fixture = crate::game::game_tests::tests::server_game(&mut resources);
+    let game = fixture.game_mut();
+    let _rx = crate::game::server_side::lan::world_spawn_sync_tests::host_for(game);
     let host = game.server.lan.as_mut().expect("a LAN host");
     let conn = host.hub.guests[0].conn;
     assert!(

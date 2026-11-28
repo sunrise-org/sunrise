@@ -931,24 +931,25 @@ pub(crate) mod registered_slot_source_preservation_tests {
     fn loaded_snapshot_changes_only_on_existing_reload_with_pack_precedence() {
         let mut resources = None;
         let directory = tempfile::tempdir().unwrap();
-        let (mut game, file) = scene(
+        let (mut fixture, file) = scene(
             &mut resources,
             directory.path().join("slot-source-snapshot-world"),
         );
+        let game = fixture.game_mut();
         let before = game.block_entity_nbt([0, 100, 0]).unwrap();
         let clock = game.world.game_time;
-        count(&mut game, 3); // Higher-priority pack overrides the same id.
+        count(game, 3); // Higher-priority pack overrides the same id.
         std::fs::write(&file, r#"{"type":"minecraft:limit_slots","limit":2,"slot_source":{"type":"minecraft:slot_range","slots":"container.*"}}"#).unwrap();
-        count(&mut game, 3); // Disk edits do not change the loaded snapshot.
+        count(game, 3); // Disk edits do not change the loaded snapshot.
         game.reload_datapacks(true, &game.level.enabled_features.clone())
             .unwrap();
-        count(&mut game, 2);
+        count(game, 2);
         std::fs::write(file, "{").unwrap();
         assert!(
             game.reload_datapacks(true, &game.level.enabled_features.clone())
                 .is_err()
         );
-        count(&mut game, 2); // A refused reload keeps the loaded data (ReloadableServerRegistries).
+        count(game, 2); // A refused reload keeps the loaded data (ReloadableServerRegistries).
         assert!(!game.run_command("execute if slots block 0 100 0 first_three"));
         assert_eq!(game.block_entity_nbt([0, 100, 0]).as_ref(), Some(&before));
         assert_eq!(game.world.game_time, clock);
@@ -962,13 +963,14 @@ pub(crate) mod registered_slot_source_preservation_tests {
     fn quoted_holders_resolve_and_a_non_int_limit_fails_to_parse() {
         let mut resources = None;
         let directory = tempfile::tempdir().unwrap();
-        let (mut game, _) = scene(
+        let (mut fixture, _) = scene(
             &mut resources,
             directory.path().join("slot-source-quoted-world"),
         );
+        let game = fixture.game_mut();
         let before = game.block_entity_nbt([0, 100, 0]).unwrap();
         let clock = game.world.game_time;
-        count(&mut game, 3);
+        count(game, 3);
         for source in [
             r#""parity:first_three""#,
             r#"{type:"group",terms:"parity:first_three"}"#,
@@ -1005,10 +1007,11 @@ pub(crate) mod registered_slot_source_preservation_tests {
     fn a_byte_or_fractional_limit_selects_its_int_value() {
         let mut resources = None;
         let directory = tempfile::tempdir().unwrap();
-        let (mut game, _) = scene(
+        let (mut fixture, _) = scene(
             &mut resources,
             directory.path().join("slot-source-numeric-limit-world"),
         );
+        let game = fixture.game_mut();
         let source = |limit: &str| {
             format!(
                 "{{type:\"limit_slots\",limit:{limit},slot_source:{{type:\"slot_range\",slots:\"container.*\"}}}}"
@@ -1040,17 +1043,14 @@ pub(crate) mod registered_slot_source_preservation_tests {
             source("1b")
         )));
         assert_eq!(
-            held(&mut game),
+            held(game),
             [stack("diamond", 2), stack("dirt", 2), stack("stone", 7)]
         );
         assert!(game.run_command(&format!(
             "item override block 0 100 0 {} with minecraft:emerald 2",
             source("2.5d")
         )));
-        assert_eq!(
-            held(&mut game),
-            [stack("emerald", 2), None, stack("stone", 7)]
-        );
+        assert_eq!(held(game), [stack("emerald", 2), None, stack("stone", 7)]);
     }
 }
 

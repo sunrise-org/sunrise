@@ -72,22 +72,23 @@ mod owner_attachment_save_tests {
             &format!("{HERE}::an_autosave_writes_the_owners_live_attachments_to_the_file_it_loads"),
             || {
                 let mut resources = None;
-                let mut game =
+                let mut fixture =
                     sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
-                owned_host(&mut game);
+                let game = fixture.game_mut();
+                owned_host(game);
                 // The integrated server has no player of its own: outside a turn, where
                 // the autosave and the pause save run, the owner's map is their record's.
-                set_value(&mut game, 1, 7);
+                set_value(game, 1, 7);
                 assert!(game.store_owner().is_some());
                 assert_eq!(
-                    saved_value(&game),
+                    saved_value(&*game),
                     Some(7),
                     "the autosave stores the live value"
                 );
                 // A later change is what the next autosave writes.
-                set_value(&mut game, 1, 9);
+                set_value(game, 1, 9);
                 game.store_owner();
-                assert_eq!(saved_value(&game), Some(9));
+                assert_eq!(saved_value(&*game), Some(9));
             },
         );
     }
@@ -99,14 +100,15 @@ mod owner_attachment_save_tests {
             &format!("{HERE}::a_save_in_another_players_turn_writes_the_owners_attachments"),
             || {
                 let mut resources = None;
-                let mut game =
+                let mut fixture =
                     sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
-                owned_host(&mut game);
+                let game = fixture.game_mut();
+                owned_host(game);
                 let other =
                     sunrise_gameplay_common::game::native_player_death::tests::new_guest(2, 2);
                 game.server.lan.as_mut().unwrap().hub.guests.push(other);
-                set_value(&mut game, 1, 7);
-                set_value(&mut game, 2, 5);
+                set_value(game, 1, 7);
+                set_value(game, 2, 5);
                 // For their turn, the other player's map is the game's.
                 let saved = game
                     .as_guest(2, |game| {
@@ -131,7 +133,8 @@ mod connected_statistics_save_tests {
             sunrise_gameplay_common::game::execution_role::ExecutionRole,
         };
         let mut resources = None;
-        let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let game = fixture.game_mut();
         game.options.execution_role = ExecutionRole::DedicatedServer;
         // The command's dedicated-only guard also checks the launch mode.
         game.options.dedicated = Some(Vec::new());
@@ -164,8 +167,7 @@ mod connected_statistics_save_tests {
             },
         )));
         game.set_allow_commands(true);
-        let _rx =
-            sunrise_gameplay::game::server_side::lan::world_spawn_sync_tests::host_for(&mut game);
+        let _rx = sunrise_gameplay::game::server_side::lan::world_spawn_sync_tests::host_for(game);
         let host = game.server.lan.as_mut().unwrap();
         host.owner = None;
         host.hub
@@ -245,9 +247,9 @@ mod connected_statistics_save_exclusion_tests {
     #[ignore = "daily"]
     fn excluded_guest_records_are_not_invented_or_written() {
         let mut resources = None;
-        let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
-        let _rx =
-            sunrise_gameplay::game::server_side::lan::world_spawn_sync_tests::host_for(&mut game);
+        let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let game = fixture.game_mut();
+        let _rx = sunrise_gameplay::game::server_side::lan::world_spawn_sync_tests::host_for(game);
         let scratch = tempfile::tempdir().unwrap();
         game.server.world_root = scratch.path().join("stats-excluded");
         std::fs::create_dir_all(&game.server.world_root).unwrap();

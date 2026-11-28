@@ -10,7 +10,8 @@ pub(crate) mod lectern_book_removal_tests {
     #[ignore = "daily"]
     fn a_lectern_book_removal_posts_block_change() {
         let mut game_resources = None;
-        let mut game = server_game(&mut game_resources);
+        let mut fixture = server_game(&mut game_resources);
+        let game = fixture.game_mut();
         let key = (2, 4, 3);
         let state = game
             .pack
@@ -69,7 +70,8 @@ pub(crate) mod lectern_books_tag_tests {
     #[ignore = "daily"]
     fn a_packs_lectern_books_entry_goes_onto_the_lectern() {
         let mut resources = None;
-        let mut game = server_game(&mut resources);
+        let mut fixture = server_game(&mut resources);
+        let game = fixture.game_mut();
         let dir =
             std::env::temp_dir().join(format!("sunrise-lectern-books-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);

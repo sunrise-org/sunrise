@@ -12,7 +12,7 @@ use sunrise_world::registry::BlockStateId;
 /// (CI has none: the tests then skip quietly).
 pub(crate) fn server<'a>(
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> Option<sunrise_gameplay::game::ServerGame<'a>> {
+) -> Option<sunrise_gameplay::game::game_tests::tests::TestServerGame<'a>> {
     std::env::var_os("SUNRISE_TEST_RESOURCES")?;
     Some(server_game(resources))
 }
@@ -115,15 +115,16 @@ pub(crate) fn outside_the_border(game: &mut sunrise_gameplay::game::ServerGame<'
 #[test]
 fn powder_snow_puts_a_burning_player_out_with_the_hiss() {
     let mut resources = None;
-    let Some(mut game) = server(&mut resources) else {
+    let Some(mut fixture) = server(&mut resources) else {
         return;
     };
+    let game = fixture.game_mut();
     let pos = [4, 64, 4];
-    let snow = state(&game, "minecraft:powder_snow", "");
+    let snow = state(&*game, "minecraft:powder_snow", "");
     game.world.set(pos[0], pos[1], pos[2], snow).unwrap();
-    burn_in(&mut game, pos);
+    burn_in(game, pos);
     assert!(game.player.as_ref().unwrap().fire_ticks <= 0, "fire out");
-    assert_eq!(block(&game, pos), "minecraft:air", "the snow is destroyed");
+    assert_eq!(block(&*game, pos), "minecraft:air", "the snow is destroyed");
     let server_hiss = game
         .server
         .pending_sounds
@@ -138,13 +139,14 @@ fn powder_snow_puts_a_burning_player_out_with_the_hiss() {
 #[test]
 fn a_cauldron_puts_a_burning_player_out_with_the_hiss() {
     let mut resources = None;
-    let Some(mut game) = server(&mut resources) else {
+    let Some(mut fixture) = server(&mut resources) else {
         return;
     };
+    let game = fixture.game_mut();
     let pos = [4, 64, 4];
-    let water = state(&game, "minecraft:water_cauldron", "3");
+    let water = state(&*game, "minecraft:water_cauldron", "3");
     game.world.set(pos[0], pos[1], pos[2], water).unwrap();
-    burn_in(&mut game, pos);
+    burn_in(game, pos);
     assert!(game.player.as_ref().unwrap().fire_ticks <= 0, "fire out");
     let level = game
         .pack
@@ -167,16 +169,17 @@ fn a_cauldron_puts_a_burning_player_out_with_the_hiss() {
 #[test]
 fn outside_the_border_powder_snow_stays_but_the_fire_goes_out() {
     let mut resources = None;
-    let Some(mut game) = server(&mut resources) else {
+    let Some(mut fixture) = server(&mut resources) else {
         return;
     };
+    let game = fixture.game_mut();
     let pos = [4, 64, 4];
-    let snow = state(&game, "minecraft:powder_snow", "");
+    let snow = state(&*game, "minecraft:powder_snow", "");
     game.world.set(pos[0], pos[1], pos[2], snow).unwrap();
-    outside_the_border(&mut game);
-    burn_in(&mut game, pos);
+    outside_the_border(game);
+    burn_in(game, pos);
     assert!(game.player.as_ref().unwrap().fire_ticks <= 0, "fire out");
-    assert_eq!(block(&game, pos), "minecraft:powder_snow", "it stays");
+    assert_eq!(block(&*game, pos), "minecraft:powder_snow", "it stays");
     let server_hiss = game
         .server
         .pending_sounds
@@ -191,14 +194,15 @@ fn outside_the_border_powder_snow_stays_but_the_fire_goes_out() {
 #[test]
 fn outside_the_border_a_cauldron_keeps_its_level_but_the_fire_goes_out() {
     let mut resources = None;
-    let Some(mut game) = server(&mut resources) else {
+    let Some(mut fixture) = server(&mut resources) else {
         return;
     };
+    let game = fixture.game_mut();
     let pos = [4, 64, 4];
-    let water = state(&game, "minecraft:water_cauldron", "3");
+    let water = state(&*game, "minecraft:water_cauldron", "3");
     game.world.set(pos[0], pos[1], pos[2], water).unwrap();
-    outside_the_border(&mut game);
-    burn_in(&mut game, pos);
+    outside_the_border(game);
+    burn_in(game, pos);
     assert!(game.player.as_ref().unwrap().fire_ticks <= 0, "fire out");
     let level = game
         .pack

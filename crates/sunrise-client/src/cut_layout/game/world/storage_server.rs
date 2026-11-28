@@ -7,7 +7,8 @@ pub(crate) mod tests {
     #[ignore = "daily"]
     fn a_player_opens_and_closes_a_chest_with_its_own_hinge_sound() {
         let mut resources = None;
-        let mut game = super::super::game_tests::tests::server_game(&mut resources);
+        let mut fixture = super::super::game_tests::tests::server_game(&mut resources);
+        let game = fixture.game_mut();
         game.server.audio_capture_active = true;
         for (block, sound) in [
             ("minecraft:chest", "minecraft:block.chest"),
@@ -55,7 +56,8 @@ pub(crate) mod reach_tests {
     #[ignore = "daily"]
     fn breaking_the_other_half_closes_the_open_double_chest() {
         let mut resources = None;
-        let mut game = server_game(&mut resources);
+        let mut fixture = server_game(&mut resources);
+        let game = fixture.game_mut();
         game.player = Some(
             PlayerMotion::new(game.motion, Vec3::new(8.5, 64.0, 8.5)).expect("a player position"),
         );
@@ -118,7 +120,8 @@ pub(crate) mod lock_tests {
     #[ignore = "daily"]
     fn a_locked_container_refuses_the_local_players_open() {
         let mut resources = None;
-        let mut game = server_game(&mut resources);
+        let mut fixture = server_game(&mut resources);
+        let game = fixture.game_mut();
         game.options.dedicated = None;
         let state = game
             .pack
@@ -141,7 +144,7 @@ pub(crate) mod lock_tests {
         game.server.guest_packets.clear();
         game.open_block_effect_menu([8, 64, 8]);
         assert_eq!(game.container, None, "a locked chest opened");
-        assert!(has_overlay(&game), "no `container.isLocked` action bar");
+        assert!(has_overlay(&*game), "no `container.isLocked` action bar");
 
         // `LockCode.canUnlock` reads the main hand: the key in the off hand
         // does not open it.
@@ -161,7 +164,7 @@ pub(crate) mod lock_tests {
         game.server.guest_packets.clear();
         game.open_block_effect_menu([8, 64, 8]);
         assert_eq!(game.container, Some(key), "the lock's item did not open it");
-        assert!(!has_overlay(&game));
+        assert!(!has_overlay(&*game));
     }
 
     /// `ChestBlock.MENU_PROVIDER_COMBINER.createMenu`: a double chest asks
@@ -171,7 +174,8 @@ pub(crate) mod lock_tests {
     #[ignore = "daily"]
     fn a_lock_on_either_half_refuses_a_double_chest() {
         let mut resources = None;
-        let mut game = server_game(&mut resources);
+        let mut fixture = server_game(&mut resources);
+        let game = fixture.game_mut();
         game.options.dedicated = None;
         let registry = game.pack.assets.registry;
         let half = |kind: &str| {
@@ -206,6 +210,6 @@ pub(crate) mod lock_tests {
         game.server.guest_packets.clear();
         game.open_block_effect_menu([8, 64, 8]);
         assert_eq!(game.container, None, "a half-locked double chest opened");
-        assert!(has_overlay(&game));
+        assert!(has_overlay(&*game));
     }
 }

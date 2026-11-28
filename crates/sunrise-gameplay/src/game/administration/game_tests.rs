@@ -1875,6 +1875,7 @@ pub mod tests {
 
     use crate::game::native_entity_refs::tests::load_fixture_server_resources;
     use std::sync::Arc;
+    use sunrise_game_data::lang::{self, Language};
     use sunrise_gameplay_common::game::{
         Options, Resources,
         execution_role::ExecutionRole,
@@ -1882,9 +1883,29 @@ pub mod tests {
     };
     use sunrise_level::sim_settings::SimSettings;
 
-    pub fn server_game(resources: &mut Option<Arc<Resources>>) -> crate::game::ServerGame<'_> {
+    /// An owned server fixture whose language is installed on the calling thread.
+    /// Drop nested fixtures in reverse construction order, like other language scopes.
+    pub struct TestServerGame<'a> {
+        // Drop the game while its language is still installed on this thread.
+        game: crate::game::ServerGame<'a>,
+        _language: lang::PublicationGuard,
+    }
+
+    impl<'a> TestServerGame<'a> {
+        pub fn game(&self) -> &crate::game::ServerGame<'a> {
+            &self.game
+        }
+
+        pub fn game_mut(&mut self) -> &mut crate::game::ServerGame<'a> {
+            &mut self.game
+        }
+    }
+
+    /// Boot a fixture with English available through construction, use and teardown.
+    pub fn server_game(resources: &mut Option<Arc<Resources>>) -> TestServerGame<'_> {
         let root = fixture_root();
         let settings = SimSettings::default();
+        let language = lang::isolate_publication(Language::of("en_us", []));
         let (loaded, pack) = load_fixture_server_resources(&root, ExecutionRole::IntegratedServer);
         let mut options = Options::parse(std::iter::empty()).unwrap().unwrap();
         options.resources = root;
@@ -1900,6 +1921,9 @@ pub mod tests {
         game.world
             .chunks
             .insert((0, 0), Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)));
-        game
+        TestServerGame {
+            game,
+            _language: language,
+        }
     }
 }

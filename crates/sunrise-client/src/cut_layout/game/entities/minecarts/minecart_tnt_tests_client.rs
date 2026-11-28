@@ -6,10 +6,11 @@ use sunrise_items::items::ItemStack;
 #[test]
 fn flint_and_steel_passes_on_a_tnt_cart_without_lighting_it() {
     let mut resources = None;
-    let Some(mut game) = server(&mut resources) else {
+    let Some(mut fixture) = server(&mut resources) else {
         return;
     };
-    tnt_cart(&mut game, 42, false);
+    let game = fixture.game_mut();
+    tnt_cart(game, 42, false);
     let selected = game.selected;
     game.inventory[selected] = Some(ItemStack::new("minecraft:flint_and_steel", 1));
     game.start_audio_capture();

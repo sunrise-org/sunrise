@@ -32,20 +32,21 @@ fn ghast_fireball(
 #[ignore = "daily"]
 fn a_blast_gives_its_causing_entity_to_the_redirectable_projectiles_in_reach() {
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     game.build_registries();
-    host_above_the_blast(&mut game);
+    host_above_the_blast(game);
     let ghast = 91;
     // A ghast's large fireball is in `#minecraft:redirectable_projectile`; a
     // blaze's small one is not.
     let large = ghast_fireball(
-        &mut game,
+        game,
         ProjectileKind::LargeFireball { power: 1 },
         ghast,
         Vec3::new(9.5, 64.5, 8.5),
     );
     let small = ghast_fireball(
-        &mut game,
+        game,
         ProjectileKind::SmallFireball,
         ghast,
         Vec3::new(7.5, 64.5, 8.5),
@@ -92,9 +93,10 @@ fn a_blast_gives_its_causing_entity_to_the_redirectable_projectiles_in_reach() {
 #[ignore = "daily"]
 fn an_acting_guests_blast_gives_the_projectile_the_guest() {
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     game.build_registries();
-    host_above_the_blast(&mut game);
+    host_above_the_blast(game);
     // The guest's turn lends them the player body: the blast's cause is that
     // body's entity id, and the guest's connection is the one acting.
     game.server.lan_acting = Some(9);
@@ -103,7 +105,7 @@ fn an_acting_guests_blast_gives_the_projectile_the_guest() {
     game.server.lan_acting_entity = Some(1);
     let ghast = 91;
     let fireball = ghast_fireball(
-        &mut game,
+        game,
         ProjectileKind::LargeFireball { power: 1 },
         ghast,
         Vec3::new(9.5, 64.5, 8.5),

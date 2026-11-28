@@ -41,7 +41,8 @@ pub(in crate::game) mod lectern_signal_tests {
     #[ignore = "daily"]
     fn a_lectern_without_the_has_book_state_feeds_no_comparator() {
         let mut resources = None;
-        let mut game = server_game(&mut resources);
+        let mut fixture = server_game(&mut resources);
+        let game = fixture.game_mut();
         let key = (8, 64, 8);
         let state = game
             .pack
@@ -67,7 +68,7 @@ pub(in crate::game) mod lectern_signal_tests {
             })
         };
         assert_eq!(
-            signal(&mut game, state),
+            signal(game, state),
             0,
             "the block state says the lectern holds no book"
         );
@@ -79,7 +80,7 @@ pub(in crate::game) mod lectern_signal_tests {
         let with_book = registry.id(&with_book).unwrap();
         game.world.set(key.0, key.1, key.2, with_book).unwrap();
         assert_eq!(
-            signal(&mut game, with_book),
+            signal(game, with_book),
             15,
             "with HAS_BOOK the book's page signal"
         );
@@ -97,7 +98,8 @@ pub(in crate::game) mod lectern_signal_tests {
     #[ignore = "daily"]
     fn a_lecterns_signal_adds_one_only_for_a_book() {
         let mut resources = None;
-        let mut game = server_game(&mut resources);
+        let mut fixture = server_game(&mut resources);
+        let game = fixture.game_mut();
         let writable = Some(ItemStack::new("minecraft:writable_book", 1));
         let mut written = ItemStack::new("minecraft:written_book", 1);
         written.data_mut().written = Some(WrittenBook {
@@ -107,23 +109,15 @@ pub(in crate::game) mod lectern_signal_tests {
             ..Default::default()
         });
         // `has_book=false`: no signal, whatever the block entity holds.
-        assert_eq!(signal(&mut game, false, None, 0), 0);
-        assert_eq!(
-            signal(&mut game, false, writable.clone(), 0),
-            0,
-            "state denies"
-        );
+        assert_eq!(signal(game, false, None, 0), 0);
+        assert_eq!(signal(game, false, writable.clone(), 0), 0, "state denies");
         // `has_book=true`, an entity with no book: page progress 1.0.
-        assert_eq!(signal(&mut game, true, None, 0), 14, "no book");
+        assert_eq!(signal(game, true, None, 0), 14, "no book");
         let stone = Some(ItemStack::new("minecraft:stone", 1));
-        assert_eq!(signal(&mut game, true, stone, 0), 14, "no book content");
+        assert_eq!(signal(game, true, stone, 0), 14, "no book content");
         // `writable_book_content` is a writable book's default component.
-        assert_eq!(signal(&mut game, true, writable, 0), 15, "a book");
-        assert_eq!(
-            signal(&mut game, true, Some(written.clone()), 0),
-            1,
-            "page 0"
-        );
-        assert_eq!(signal(&mut game, true, Some(written), 1), 15, "last page");
+        assert_eq!(signal(game, true, writable, 0), 15, "a book");
+        assert_eq!(signal(game, true, Some(written.clone()), 0), 1, "page 0");
+        assert_eq!(signal(game, true, Some(written), 1), 15, "last page");
     }
 }

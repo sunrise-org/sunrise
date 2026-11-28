@@ -8,8 +8,9 @@ use sunrise_sim::mobs::leash::Holder;
 
 fn game<'a>(
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> sunrise_gameplay::game::ServerGame<'a> {
-    let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'a> {
+    let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+    let game = fixture.game_mut();
     game.build_registries();
     game.set_allow_commands(true);
     game.world
@@ -27,14 +28,15 @@ fn game<'a>(
     ] {
         assert!(game.run_command(command), "{command}");
     }
-    game
+    fixture
 }
 
 #[test]
 #[ignore = "daily"]
 fn a_mob_leashed_to_a_knots_uuid_is_tied_to_its_post() {
     let mut resources = None;
-    let mut game = game(&mut resources);
+    let mut fixture = game(&mut resources);
+    let game = fixture.game_mut();
     assert!(
         game.run_command("summon minecraft:wolf 2.5 64 6.5 {NoAI:1b,leash:{UUID:[I;7193,0,0,1]}}")
     );
@@ -54,7 +56,8 @@ fn a_mob_leashed_to_a_knots_uuid_is_tied_to_its_post() {
 #[ignore = "daily"]
 fn a_boat_leashed_to_a_knots_uuid_is_tied_to_its_post() {
     let mut resources = None;
-    let mut game = game(&mut resources);
+    let mut fixture = game(&mut resources);
+    let game = fixture.game_mut();
     assert!(game.run_command("summon minecraft:oak_boat 2.5 64 9.5 {leash:{UUID:[I;7193,0,0,1]}}"));
     for _ in 0..150 {
         game.tick_server(false).unwrap();

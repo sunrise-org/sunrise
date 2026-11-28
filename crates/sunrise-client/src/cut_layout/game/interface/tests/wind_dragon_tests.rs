@@ -7,8 +7,9 @@ use {sunrise_gameplay::game::wind::Source, sunrise_gameplay_common::game::creatu
 
 fn end_game<'a>(
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> sunrise_gameplay::game::ServerGame<'a> {
-    let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'a> {
+    let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+    let game = fixture.game_mut();
     game.build_registries();
     game.set_allow_commands(true);
     assert_eq!(
@@ -28,14 +29,15 @@ fn end_game<'a>(
     // for the center column to be lit; the surrounding eight are already resident.
     game.world.dirty_light.insert((0, 0));
     assert!(game.run_command("forceload add 0 0"));
-    game
+    fixture
 }
 
 #[test]
 #[ignore = "daily"]
 fn a_wind_burst_pushes_the_dragon_without_damage() {
     let mut resources = None;
-    let mut game = end_game(&mut resources);
+    let mut fixture = end_game(&mut resources);
+    let game = fixture.game_mut();
     game.spawn_dragon_spawned(
         [0.0, 70.0, 0.0],
         SpawnSite::Finalizing(Reason::SpawnItemUse),
@@ -58,7 +60,8 @@ fn a_wind_burst_pushes_the_dragon_without_damage() {
 #[ignore = "daily"]
 fn a_wind_burst_scales_the_dragons_push_by_its_multiplier() {
     let mut resources = None;
-    let mut game = end_game(&mut resources);
+    let mut fixture = end_game(&mut resources);
+    let game = fixture.game_mut();
     game.spawn_dragon_spawned(
         [0.0, 70.0, 0.0],
         SpawnSite::Finalizing(Reason::SpawnItemUse),

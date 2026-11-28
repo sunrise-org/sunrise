@@ -194,7 +194,8 @@ pub(crate) mod gateway_age_tests {
     #[ignore = "daily"]
     fn a_gateway_that_ages_marks_the_chunk() {
         let mut resources = None;
-        let mut game = server_game(&mut resources);
+        let mut fixture = server_game(&mut resources);
+        let game = fixture.game_mut();
         let state = game
             .pack
             .assets

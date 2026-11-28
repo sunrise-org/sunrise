@@ -56,8 +56,12 @@ impl mod_api::CommandArgumentType for WarpNames {
 fn game_with_guest<'a>(
     resources: &'a mut Option<Arc<sunrise_gameplay_common::game::Resources>>,
     name: &str,
-) -> (sunrise_gameplay::game::ServerGame<'a>, mpsc::Receiver<Out>) {
-    let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+) -> (
+    sunrise_gameplay::game::game_tests::tests::TestServerGame<'a>,
+    mpsc::Receiver<Out>,
+) {
+    let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+    let game = fixture.game_mut();
     game.world
         .chunks
         .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
@@ -111,7 +115,7 @@ fn game_with_guest<'a>(
     guest.dimension = "minecraft:overworld".into();
     guest.placed = true;
     game.server.lan.as_mut().unwrap().hub.guests.push(guest);
-    (game, rx)
+    (fixture, rx)
 }
 
 /// The warps command in the server's dispatcher and in every player's tree: `/warp` for everyone,
@@ -221,7 +225,8 @@ fn custom_id_reads_a_mid_command_identifier_and_sends_its_vanilla_parser() {
             }
 
             let mut resources = None;
-            let (mut game, rx) = game_with_guest(&mut resources, "IdTester");
+            let (mut fixture, rx) = game_with_guest(&mut resources, "IdTester");
+            let game = fixture.game_mut();
             game.ui.dispatcher.0 = Arc::new(dispatcher);
             game.server
                 .lan
@@ -251,7 +256,7 @@ fn custom_id_reads_a_mid_command_identifier_and_sends_its_vanilla_parser() {
                     .is_ok()
             );
             assert_eq!(
-                suggestions(&mut game, &rx, "/modprobe tconstruct:ha"),
+                suggestions(game, &rx, "/modprobe tconstruct:ha"),
                 ["tconstruct:haste"]
             );
         },
@@ -352,7 +357,8 @@ impl mod_api::CommandArgumentType for OversizedAndMany {
 #[ignore = "daily"]
 fn oversized_entries_drop_individually_and_large_regular_replies_sort_before_truncation() {
     let mut resources = None;
-    let (mut game, rx) = game_with_guest(&mut resources, "Alex");
+    let (mut fixture, rx) = game_with_guest(&mut resources, "Alex");
+    let game = fixture.game_mut();
     let arguments: CommandArguments = std::collections::HashMap::from([
         (
             "test:mixed".to_owned(),
@@ -387,7 +393,7 @@ fn oversized_entries_drop_individually_and_large_regular_replies_sort_before_tru
     assert_eq!(children(&packet, "probe"), ["value"]);
 
     assert_eq!(
-        suggestions(&mut game, &rx, "mixed "),
+        suggestions(game, &rx, "mixed "),
         ["ok_sibling".to_owned(), "z".repeat(32767)]
     );
     let dispatcher = &game.ui.dispatcher.0;
@@ -401,11 +407,11 @@ fn oversized_entries_drop_individually_and_large_regular_replies_sort_before_tru
 
     let prefix = "a".repeat(32001);
     assert_eq!(
-        suggestions(&mut game, &rx, &format!("mixed {prefix}a")),
+        suggestions(game, &rx, &format!("mixed {prefix}a")),
         [format!("{prefix}{}", "b".repeat(766)), "short".into()]
     );
 
-    let truncated = suggestions(&mut game, &rx, "probe ");
+    let truncated = suggestions(game, &rx, "probe ");
     assert_eq!(truncated.len(), 1000);
     assert_eq!(truncated[0], "cand_0000");
     assert_eq!(truncated[999], "cand_0999");
@@ -440,7 +446,8 @@ fn an_identifier_listener_replies_on_the_wire_and_leaves_room_for_the_next_argum
     .into();
     mod_platform::testing::with_mods(mods, || {
         let mut resources = None;
-        let (mut game, rx) = game_with_guest(&mut resources, "Alex");
+        let (mut fixture, rx) = game_with_guest(&mut resources, "Alex");
+        let game = fixture.game_mut();
         let arguments = CommandArguments::new();
         let (tree, _, problems) = command_tree(
             &[mod_api::Command::new("probe <value:id> <count:integer>")],
@@ -590,7 +597,8 @@ fn a_quotable_argument_reads_a_quoted_phrase_mid_command_and_goes_out_as_a_quota
             assert_eq!(error.cursor, line.len());
 
             let mut resources = None;
-            let (mut game, rx) = game_with_guest(&mut resources, "QuestTester");
+            let (mut fixture, rx) = game_with_guest(&mut resources, "QuestTester");
+            let game = fixture.game_mut();
             // Vanilla's en_us text for `readerExpectedEndOfQuote`, in the game's language.
             assert_eq!(
                 sunrise_game_data::text::Text::tr("parsing.quote.expected.end", &[]).plain(),
@@ -693,11 +701,12 @@ fn a_quotable_argument_reads_a_quoted_phrase_mid_command_and_goes_out_as_a_quota
 #[ignore = "daily"]
 fn a_plain_players_tree_and_completions_leave_out_the_paths_they_may_not_run() {
     let mut resources = None;
-    let (mut game, rx) = game_with_guest(&mut resources, "Alex");
-    install_warps(&mut game);
+    let (mut fixture, rx) = game_with_guest(&mut resources, "Alex");
+    let game = fixture.game_mut();
+    install_warps(game);
     assert_eq!(children(&last_tree(&rx), "warp"), ["go"]);
-    assert_eq!(suggestions(&mut game, &rx, "warp "), ["go"]);
-    assert_eq!(suggestions(&mut game, &rx, "warp go "), ["spawn"]);
+    assert_eq!(suggestions(game, &rx, "warp "), ["go"]);
+    assert_eq!(suggestions(game, &rx, "warp go "), ["spawn"]);
     let at_player = Registries {
         permission: 0,
         ..Registries::default()
@@ -724,8 +733,8 @@ fn a_plain_players_tree_and_completions_leave_out_the_paths_they_may_not_run() {
         4
     );
     assert_eq!(children(&last_tree(&rx), "warp"), ["admin", "go"]);
-    assert_eq!(suggestions(&mut game, &rx, "warp "), ["admin", "go"]);
-    assert_eq!(suggestions(&mut game, &rx, "warp go "), ["secret", "spawn"]);
+    assert_eq!(suggestions(game, &rx, "warp "), ["admin", "go"]);
+    assert_eq!(suggestions(game, &rx, "warp go "), ["secret", "spawn"]);
     let at_owner = Registries {
         permission: 4,
         ..Registries::default()

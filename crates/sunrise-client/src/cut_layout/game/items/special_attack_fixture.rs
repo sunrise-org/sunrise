@@ -14,7 +14,8 @@ pub(crate) mod tests {
     pub(crate) fn run_special_attack_cases_without_world_startup() {
         let spec = std::env::var("SUNRISE_SPECIAL_ATTACK_CASES").expect("case paths required");
         let mut resources = None;
-        let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let game = fixture.game_mut();
         game.build_registries();
         game.dispense_fixture(&spec).unwrap();
     }

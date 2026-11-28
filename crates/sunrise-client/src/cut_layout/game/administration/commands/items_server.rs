@@ -130,7 +130,8 @@ pub(crate) mod registered_slot_source_read_tests {
     fn registered_first_three_reads_match_inline_and_keep_the_chest() {
         let directory = tempfile::tempdir().unwrap();
         let mut resources = None;
-        let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let game = fixture.game_mut();
         game.build_registries();
         game.set_allow_commands(true);
         let root = directory.path().join("registered-slot-read-world");
@@ -235,10 +236,11 @@ pub(crate) mod registered_slot_source_preservation_tests {
     fn a_command_the_player_types_binds_this_to_them() {
         let mut resources = None;
         let directory = tempfile::tempdir().unwrap();
-        let (mut game, _) = scene(
+        let (mut fixture, _) = scene(
             &mut resources,
             directory.path().join("slot-source-player-this-world"),
         );
+        let game = fixture.game_mut();
         game.player = Some(
             sunrise_sim::motion::PlayerMotion::new(
                 game.motion,
@@ -259,10 +261,11 @@ pub(crate) mod registered_slot_source_preservation_tests {
     fn admitted_absent_executor_sources_fail_without_player_fallback() {
         let mut resources = None;
         let directory = tempfile::tempdir().unwrap();
-        let (mut game, _) = scene(
+        let (mut fixture, _) = scene(
             &mut resources,
             directory.path().join("slot-source-unsupported-world"),
         );
+        let game = fixture.game_mut();
         let path = game
             .server
             .world_root
@@ -275,7 +278,7 @@ pub(crate) mod registered_slot_source_preservation_tests {
         game.reload_datapacks(true, &[]).unwrap();
         let before = game.block_entity_nbt([0, 100, 0]).unwrap();
         let clock = game.world.game_time;
-        count(&mut game, 3);
+        count(game, 3);
         let player_was_present = game.player.is_some();
         println!("absent executor: actual Player present={player_was_present}");
         let mut commands = vec![
@@ -316,8 +319,12 @@ pub(crate) mod registered_slot_source_preservation_tests {
     pub(crate) fn scene<'a>(
         resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
         root: std::path::PathBuf,
-    ) -> (sunrise_gameplay::game::ServerGame<'a>, std::path::PathBuf) {
-        let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+    ) -> (
+        sunrise_gameplay::game::game_tests::tests::TestServerGame<'a>,
+        std::path::PathBuf,
+    ) {
+        let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+        let game = fixture.game_mut();
         game.build_registries();
         game.set_allow_commands(true);
         assert!(!root.exists());
@@ -334,7 +341,7 @@ pub(crate) mod registered_slot_source_preservation_tests {
         game.ensure_datapacks();
         assert!(game.run_command("setblock 0 100 0 chest{Items:[{Slot:0b,id:\"stone\",count:5},{Slot:1b,id:\"dirt\",count:2},{Slot:3b,id:\"stone\",count:7}]}"));
         assert!(game.run_command("scoreboard objectives add slotprobe dummy"));
-        (game, high)
+        (fixture, high)
     }
 }
 

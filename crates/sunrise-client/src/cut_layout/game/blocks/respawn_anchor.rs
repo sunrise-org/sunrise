@@ -36,7 +36,8 @@ pub(crate) mod connected_spawnpoint_rotation_tests {
     #[ignore = "daily"]
     fn command_forced_free_point_survives_real_guest_death_and_respawn_packet() {
         let mut resources = None;
-        let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let game = fixture.game_mut();
         game.set_allow_commands(true);
         let scratch = std::env::temp_dir().join(format!(
             "sunrise-forced-spawn-{}-{}",
@@ -132,7 +133,7 @@ pub(crate) mod connected_spawnpoint_rotation_tests {
         guest.pitch = 0.0;
         game.server.lan.as_mut().unwrap().hub.guests.push(guest);
         let clock = game.world.game_time;
-        command(&mut game, "spawnpoint Alice 12 100 12 45 10");
+        command(game, "spawnpoint Alice 12 100 12 45 10");
         let host = game.server.lan.as_ref().unwrap();
         assert!(host.owner.is_none());
         let guest = &host.hub.guests[0];
@@ -153,7 +154,7 @@ pub(crate) mod connected_spawnpoint_rotation_tests {
             respawn.get("pos"),
             Some(&sunrise_core::nbt::Tag::IntArray(vec![12, 100, 12]))
         );
-        command(&mut game, "kill Alice");
+        command(game, "kill Alice");
         game.tick_lan(false);
         let host = game.server.lan.take().unwrap();
         assert_eq!(host.hub.guests[0].uuid, 77);
@@ -232,7 +233,7 @@ pub(crate) mod connected_spawnpoint_rotation_tests {
             )
         );
         drop(host);
-        drop(game);
+        drop(fixture);
         std::fs::remove_dir_all(scratch).unwrap();
     }
 }
@@ -330,7 +331,8 @@ pub(crate) mod pitch_preservation_controls {
     #[ignore = "daily"]
     fn bed_and_anchor_facing_ignore_stored_pitch() {
         let mut resources = None;
-        let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let game = fixture.game_mut();
         let stone = game
             .pack
             .assets
@@ -354,12 +356,12 @@ pub(crate) mod pitch_preservation_controls {
             registry.resolve(&value).unwrap()
         };
         let head = state(
-            &game,
+            &*game,
             "minecraft:red_bed",
             &[("facing", "north"), ("part", "head")],
         );
         let foot = state(
-            &game,
+            &*game,
             "minecraft:red_bed",
             &[("facing", "north"), ("part", "foot")],
         );
@@ -387,7 +389,7 @@ pub(crate) mod pitch_preservation_controls {
 
         // Existing built-in dimension facts select the anchor rule; no new world or actor API.
         game.dim = Dim::Nether;
-        let anchor = state(&game, "minecraft:respawn_anchor", &[("charges", "2")]);
+        let anchor = state(&*game, "minecraft:respawn_anchor", &[("charges", "2")]);
         game.world.set(10, 100, 10, anchor).unwrap();
         assert!(game.anchor_works() && game.is_anchor(anchor));
         let c = RespawnConfig {

@@ -81,7 +81,8 @@ fn state_at(game: &crate::game::ServerGame<'_>, pos: [i32; 3]) -> (String, i32) 
 #[ignore = "daily"]
 fn a_placed_lectern_takes_has_book_from_its_item() {
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     game.set_mode_id(1);
     game.ui.registries.permission = 2;
     *game.held_mut() = Some(lectern_item());
@@ -90,7 +91,7 @@ fn a_placed_lectern_takes_has_book_from_its_item() {
         matches!(game.world.block_entities.get(&(8, 64, 8)), Some(BlockEntity::Lectern(l)) if l.book.is_some())
     );
     // A two-page book on page 0: `floor(0 / 1 * 14) + 1`.
-    assert_eq!(state_at(&game, [8, 64, 8]), ("true".into(), 1));
+    assert_eq!(state_at(&*game, [8, 64, 8]), ("true".into(), 1));
 
     // The same item from a placer who may not use game-master blocks gains
     // neither the state nor the block entity book, so the comparator reads 0.
@@ -100,7 +101,7 @@ fn a_placed_lectern_takes_has_book_from_its_item() {
     assert!(
         matches!(game.world.block_entities.get(&(10, 64, 8)), Some(BlockEntity::Lectern(l)) if l.book.is_none())
     );
-    assert_eq!(state_at(&game, [10, 64, 8]), ("false".into(), 0));
+    assert_eq!(state_at(&*game, [10, 64, 8]), ("false".into(), 0));
 }
 
 fn record_events(record: bool) {
@@ -127,9 +128,10 @@ fn block_changes() -> Vec<(&'static str, [f64; 3], Option<Who>)> {
 #[ignore = "daily"]
 fn a_book_going_on_or_off_posts_one_block_change() {
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     let key = (8, 64, 8);
-    lectern(&mut game, [8, 64, 8], false, None);
+    lectern(game, [8, 64, 8], false, None);
     *game.held_mut() = Some(ItemStack::new("minecraft:written_book", 1));
     record_events(true);
     assert!(game.use_hand(Some(&click([8, 64, 8]))).unwrap());
@@ -141,7 +143,7 @@ fn a_book_going_on_or_off_posts_one_block_change() {
             Some(Who::Player)
         )]
     );
-    assert_eq!(state_at(&game, [8, 64, 8]).0, "true");
+    assert_eq!(state_at(&*game, [8, 64, 8]).0, "true");
 
     // Taking it back off through the lectern's menu.
     record_events(true);
@@ -152,7 +154,7 @@ fn a_book_going_on_or_off_posts_one_block_change() {
         block_changes(),
         [("minecraft:block_change", [8.5, 64.5, 8.5], None)]
     );
-    assert_eq!(state_at(&game, [8, 64, 8]).0, "false");
+    assert_eq!(state_at(&*game, [8, 64, 8]).0, "false");
     record_events(false);
 }
 

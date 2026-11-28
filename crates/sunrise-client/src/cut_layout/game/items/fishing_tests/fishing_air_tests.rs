@@ -12,7 +12,8 @@ use {
 #[ignore = "daily"]
 fn cave_air_above_a_water_source_is_open_water_and_catches_treasure() {
     let mut resources = None;
-    let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+    let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+    let game = fixture.game_mut();
     let (air, cave_air, void_air, water, stone) = {
         let registry = &game.pack.assets.registry;
         let id = |name: &str| registry.default_state(name).unwrap();

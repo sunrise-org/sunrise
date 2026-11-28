@@ -10,8 +10,9 @@ use sunrise_sim::motion::PlayerMotion;
 
 pub(crate) fn game<'a>(
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> sunrise_gameplay::game::ServerGame<'a> {
-    let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'a> {
+    let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+    let game = fixture.game_mut();
     game.build_registries();
     game.set_allow_commands(true);
     game.world
@@ -19,8 +20,8 @@ pub(crate) fn game<'a>(
         .insert((0, 0), Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)));
     game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 100.0, 0.5)).unwrap());
     game.reset_entity_residency();
-    sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(&mut game, 1, 1);
-    game
+    sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 1, 1);
+    fixture
 }
 
 #[allow(unused_imports)]
@@ -36,9 +37,10 @@ pub(crate) fn only(said: &[String]) -> &str {
 #[ignore = "daily"]
 fn modifier_add_on_an_attribute_the_player_lacks_is_the_no_attribute_error() {
     let mut resources = None;
-    let mut game = game(&mut resources);
+    let mut fixture = game(&mut resources);
+    let game = fixture.game_mut();
     let (ok, said) = run(
-        &mut game,
+        game,
         "attribute @s minecraft:follow_range modifier add test:a 1 add_value",
     );
     assert!(!ok, "vanilla throws ERROR_NO_SUCH_ATTRIBUTE: {said:?}");
@@ -65,12 +67,12 @@ fn modifier_add_on_an_attribute_the_player_lacks_is_the_no_attribute_error() {
     );
     // The same modifier on an attribute the player does have is added and read.
     let (ok, said) = run(
-        &mut game,
+        game,
         "attribute @s minecraft:movement_speed modifier add test:a 1 add_value",
     );
     assert!(ok, "{said:?}");
     let (ok, said) = run(
-        &mut game,
+        game,
         "attribute @s minecraft:movement_speed modifier value get test:a",
     );
     assert!(ok, "{said:?}");
@@ -81,9 +83,10 @@ fn modifier_add_on_an_attribute_the_player_lacks_is_the_no_attribute_error() {
 #[ignore = "daily"]
 fn modifier_remove_on_an_attribute_the_player_lacks_is_the_no_attribute_error() {
     let mut resources = None;
-    let mut game = game(&mut resources);
+    let mut fixture = game(&mut resources);
+    let game = fixture.game_mut();
     let (ok, said) = run(
-        &mut game,
+        game,
         "attribute @s minecraft:follow_range modifier remove test:a",
     );
     assert!(!ok, "vanilla throws ERROR_NO_SUCH_ATTRIBUTE: {said:?}");
@@ -92,7 +95,7 @@ fn modifier_remove_on_an_attribute_the_player_lacks_is_the_no_attribute_error() 
     assert!(said.contains("Mob Follow Range"), "{said:?}");
     // On an attribute the player has, an absent modifier is the no-modifier error.
     let (ok, said) = run(
-        &mut game,
+        game,
         "attribute @s minecraft:movement_speed modifier remove test:a",
     );
     assert!(!ok, "{said:?}");

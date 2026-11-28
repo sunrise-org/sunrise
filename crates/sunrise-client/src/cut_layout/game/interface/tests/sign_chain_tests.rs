@@ -40,7 +40,8 @@ fn click_sign(
     // The prepared resources, or nothing where CI has no vanilla data.
     std::env::var_os("SUNRISE_TEST_RESOURCES")?;
     let mut resources = None;
-    let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+    let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+    let game = fixture.game_mut();
     // A sign's click command needs the command tree's registries (`setblock`'s
     // block types).
     game.build_registries();
@@ -106,8 +107,8 @@ fn click_sign(
     game.stop_audio_capture();
     Some(Click {
         events,
-        chained: name(&game, [face[0], 70 + face[1], face[2]]),
-        commanded: name(&game, [5, 70, 5]),
+        chained: name(&*game, [face[0], 70 + face[1], face[2]]),
+        commanded: name(&*game, [5, 70, 5]),
         held: game.held().map_or(0, |stack| stack.count),
         sounds,
     })

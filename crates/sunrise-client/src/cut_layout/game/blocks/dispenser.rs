@@ -3,6 +3,7 @@ use sunrise_core::geometry::Vec3;
 #[cfg(test)]
 pub(crate) mod tests {
 
+    use super::super::game_tests::tests::{TestServerGame, server_game};
     use sunrise_core::geometry::Direction;
     use sunrise_gameplay::dispense_rules::{CLICK, FAIL, Slot};
     use sunrise_gameplay::game::server_side::dispenser::mod_dispensed;
@@ -321,7 +322,8 @@ pub(crate) mod tests {
         // that accepts players would answer for the stack in place of its component.
         {
             let mut resources = None;
-            let mut game = server_with_guest(&mut resources);
+            let mut fixture = server_with_guest(&mut resources);
+            let game = fixture.game_mut();
             let zombies = vec![Tag::String("zombie".into())];
             let fields = vec![
                 ("slot", Tag::String("head".into())),
@@ -344,7 +346,8 @@ pub(crate) mod tests {
         let fits = Fits::new("minecraft:armor_stand");
         fits.installed(|| {
             let mut resources = None;
-            let mut game = server_with_guest(&mut resources);
+            let mut fixture = server_with_guest(&mut resources);
+            let game = fixture.game_mut();
             // Open the world and admit the guest as a join does, so its handle resolves.
             game.native_lifecycle
                 .begin_open(Some(mod_api::Authority::IntegratedServer));
@@ -358,10 +361,7 @@ pub(crate) mod tests {
                 .guest(2)
                 .unwrap()
                 .entity_id as u32;
-            assert_eq!(
-                dispense_at_guest(&mut game, "minecraft:iron_helmet"),
-                (false, 2)
-            );
+            assert_eq!(dispense_at_guest(game, "minecraft:iron_helmet"), (false, 2));
             let asked = ("head".to_owned(), guest, "minecraft:player".to_owned());
             let at = Some([8.5, 200.0, 8.5]);
             assert_eq!(
@@ -369,10 +369,7 @@ pub(crate) mod tests {
                 [(asked.0.clone(), asked.1, asked.2.clone(), at)]
             );
             *fits.accepts.lock().unwrap() = "minecraft:player";
-            assert_eq!(
-                dispense_at_guest(&mut game, "minecraft:iron_helmet"),
-                (true, 1)
-            );
+            assert_eq!(dispense_at_guest(game, "minecraft:iron_helmet"), (true, 1));
             assert_eq!(fits.asked(), [(asked.0, asked.1, asked.2, at)]);
         });
     }
@@ -520,8 +517,9 @@ pub(crate) mod tests {
     /// standing at (8.5, 200, 8.5) on a stone floor.
     pub(crate) fn server_with_guest(
         resources: &mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-    ) -> sunrise_gameplay::game::ServerGame<'_> {
-        let mut game = super::super::game_tests::tests::server_game(resources);
+    ) -> TestServerGame<'_> {
+        let mut fixture = server_game(resources);
+        let game = fixture.game_mut();
         game.build_registries();
         game.set_allow_commands(true);
         game.block_ticks
@@ -577,7 +575,7 @@ pub(crate) mod tests {
         guest.placed = true;
         guest.loaded = true;
         game.server.lan.as_mut().unwrap().hub.guests.push(guest);
-        game
+        fixture
     }
     /// `EquipmentDispenseItemBehavior`: a server's player, the integrated
     /// owner or a guest, takes the piece (a server has no player of its own).
@@ -585,7 +583,8 @@ pub(crate) mod tests {
     #[ignore = "daily"]
     fn a_dispenser_equips_a_server_player_in_front() {
         let mut resources = None;
-        let mut game = server_with_guest(&mut resources);
+        let mut fixture = server_with_guest(&mut resources);
+        let game = fixture.game_mut();
         assert!(game.player.is_none(), "the server thread has no player");
         // The guest's feet are in block (8, 200, 8): the dispenser at y 201
         // facing down targets the block under it.
@@ -601,7 +600,7 @@ pub(crate) mod tests {
         assert!(!game.dispense_equipment((8, 201, 8), Direction::Down, &mut stack));
         assert_eq!(stack.count, 2);
         // A boots piece still has its own empty slot.
-        let (done, left) = dispense_at_guest(&mut game, "minecraft:iron_boots");
+        let (done, left) = dispense_at_guest(game, "minecraft:iron_boots");
         assert_eq!((done, left), (true, 1), "boots go on the free feet slot");
         let guest = game.server.lan.as_ref().unwrap().hub.guest(2).unwrap();
         assert!(guest.armor[3].is_some() && guest.armor[1].is_none());
@@ -611,7 +610,8 @@ pub(crate) mod tests {
     #[ignore = "daily"]
     fn a_dispenser_skips_a_spectator_and_a_dead_player() {
         let mut resources = None;
-        let mut game = server_with_guest(&mut resources);
+        let mut fixture = server_with_guest(&mut resources);
+        let game = fixture.game_mut();
         for spectate in [true, false] {
             game.server.lan.as_mut().unwrap().hub.guests.update(0, |g| {
                 g.game_mode = if spectate { 3 } else { 0 };
@@ -630,7 +630,8 @@ pub(crate) mod tests {
     fn a_dispenser_skips_an_armor_stand_whose_slot_is_locked() {
         use sunrise_sim::entities::ArmorStand;
         let mut resources = None;
-        let mut game = server_with_guest(&mut resources);
+        let mut fixture = server_with_guest(&mut resources);
+        let game = fixture.game_mut();
         game.server.lan.as_mut().unwrap().hub.guests.clear();
         let at = sunrise_core::geometry::Vec3::new(8.5, 200.0, 8.5);
         let mut stands = [(1, 1u32 << 4), (2, 0)].map(|(id, locked)| {
@@ -665,11 +666,12 @@ pub(crate) mod tests {
     #[ignore = "daily"]
     fn a_dispenser_equips_a_player_whose_client_is_still_loading() {
         let mut resources = None;
-        let mut game = server_with_guest(&mut resources);
+        let mut fixture = server_with_guest(&mut resources);
+        let game = fixture.game_mut();
         game.server.lan.as_mut().unwrap().hub.guests.update(0, |g| {
             (g.loaded, g.loading) = (false, true);
         });
-        let (done, left) = dispense_at_guest(&mut game, "minecraft:iron_helmet");
+        let (done, left) = dispense_at_guest(game, "minecraft:iron_helmet");
         assert_eq!((done, left), (true, 1));
         let guest = game.server.lan.as_ref().unwrap().hub.guest(2).unwrap();
         let head = guest.armor[0].as_ref().map(|s| &*s.item);
@@ -683,7 +685,8 @@ pub(crate) mod tests {
         // (stand id, guest id) -> who wears the helmet: the lower id joined first.
         for (stand_id, guest_id, guest_first) in [(7, 5, true), (3, 5, false)] {
             let mut resources = None;
-            let mut game = server_with_guest(&mut resources);
+            let mut fixture = server_with_guest(&mut resources);
+            let game = fixture.game_mut();
             game.server
                 .lan
                 .as_mut()
@@ -693,7 +696,7 @@ pub(crate) mod tests {
                 .update(0, |g| g.entity_id = guest_id);
             game.armor_stands.clear();
             game.armor_stands.extend(vec![stand_at(stand_id, 8.5, 8.5)]);
-            let (done, _) = dispense_at_guest(&mut game, "minecraft:iron_helmet");
+            let (done, _) = dispense_at_guest(game, "minecraft:iron_helmet");
             assert!(done);
             let guest = game.server.lan.as_ref().unwrap().hub.guest(2).unwrap();
             assert_eq!(
@@ -711,7 +714,8 @@ pub(crate) mod tests {
     #[ignore = "daily"]
     fn a_dispenser_walks_entity_sections_before_ids() {
         let mut resources = None;
-        let mut game = server_with_guest(&mut resources);
+        let mut fixture = server_with_guest(&mut resources);
+        let game = fixture.game_mut();
         game.server.lan.as_mut().unwrap().hub.guests.clear();
         // Stand boxes are 0.5 wide: x 16.2 spans 15.95..16.45.
         game.armor_stands.clear();

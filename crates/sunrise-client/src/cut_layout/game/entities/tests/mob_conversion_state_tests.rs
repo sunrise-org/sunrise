@@ -12,8 +12,9 @@ use sunrise_sim::motion::PlayerMotion;
 
 fn game<'a>(
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> sunrise_gameplay::game::ServerGame<'a> {
-    let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'a> {
+    let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+    let game = fixture.game_mut();
     game.build_registries();
     game.set_allow_commands(true);
     game.world
@@ -25,7 +26,7 @@ fn game<'a>(
     game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
     game.selected = 0;
     game.set_mode_id(0);
-    game
+    fixture
 }
 
 /// `Pig.thunderHit`: the pig becomes a zombified piglin that keeps its name,
@@ -37,7 +38,8 @@ fn game<'a>(
 #[ignore = "daily"]
 fn a_struck_pig_leaves_a_zombified_piglin_that_keeps_its_state() {
     let mut resources = None;
-    let mut game = game(&mut resources);
+    let mut fixture = game(&mut resources);
+    let game = fixture.game_mut();
     // Easy: `Pig.thunderHit` converts outside peaceful, and the strike itself
     // only starts fires on normal and hard.
     game.ui.difficulty = 1;
@@ -110,7 +112,8 @@ fn a_struck_pig_leaves_a_zombified_piglin_that_keeps_its_state() {
 #[ignore = "daily"]
 fn a_sheared_mooshroom_leaves_a_cow_that_keeps_its_state() {
     let mut resources = None;
-    let mut game = game(&mut resources);
+    let mut fixture = game(&mut resources);
+    let game = fixture.game_mut();
     assert!(game.run_command(
         "summon minecraft:mooshroom 2.5 64 2.5 {CustomName:{text:\"Bessie\"},NoAI:1b,Silent:1b}"
     ));
@@ -148,7 +151,8 @@ fn a_sheared_mooshroom_leaves_a_cow_that_keeps_its_state() {
 #[ignore = "daily"]
 fn a_struck_villager_leaves_a_witch_that_keeps_its_state() {
     let mut resources = None;
-    let mut game = game(&mut resources);
+    let mut fixture = game(&mut resources);
+    let game = fixture.game_mut();
     game.ui.difficulty = 1;
     assert!(game.run_command(
         "summon minecraft:villager 2.5 64 2.5 {CustomName:{text:\"Elder\"},Silent:1b}"
@@ -177,7 +181,8 @@ fn a_struck_villager_leaves_a_witch_that_keeps_its_state() {
 #[ignore = "daily"]
 fn a_zombifying_piglin_leaves_a_nauseous_zombified_piglin() {
     let mut resources = None;
-    let mut game = game(&mut resources);
+    let mut fixture = game(&mut resources);
+    let game = fixture.game_mut();
     assert!(game.run_command("summon minecraft:piglin 2.5 64 2.5 {}"));
     let index = game
         .mobs

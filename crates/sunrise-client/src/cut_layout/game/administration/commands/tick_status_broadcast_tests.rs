@@ -58,10 +58,11 @@ fn admin_line(message: serde_json::Value) -> serde_json::Value {
 fn lan_game<'a>(
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
 ) -> (
-    sunrise_gameplay::game::ServerGame<'a>,
+    sunrise_gameplay::game::game_tests::tests::TestServerGame<'a>,
     mpsc::Receiver<sunrise_sim::lan::Out>,
 ) {
-    let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+    let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+    let game = fixture.game_mut();
     game.build_registries();
     game.set_allow_commands(true);
     game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 66.0, 0.5)).unwrap());
@@ -117,31 +118,32 @@ fn lan_game<'a>(
     // An operator (`PlayerList.isOp`): listed in ops.json.
     hub.ops.insert(7, 2);
     hub.guests.push(guest);
-    (game, rx)
+    (fixture, rx)
 }
 
 #[test]
 #[ignore = "daily"]
 fn tick_status_lines_reach_the_other_operators() {
     let mut resources = None;
-    let (mut game, rx) = lan_game(&mut resources);
+    let (mut fixture, rx) = lan_game(&mut resources);
+    let game = fixture.game_mut();
     assert!(game.run_command("tick freeze"));
     assert_eq!(
-        flush_to_operator(&mut game, &rx),
+        flush_to_operator(game, &rx),
         vec![admin_line(
             json!({"translate": "commands.tick.status.frozen"})
         )]
     );
     assert!(game.run_command("tick unfreeze"));
     assert_eq!(
-        flush_to_operator(&mut game, &rx),
+        flush_to_operator(game, &rx),
         vec![admin_line(json!({
             "translate": "commands.tick.status.running"
         }))]
     );
     assert!(game.run_command("tick sprint 20"));
     assert_eq!(
-        flush_to_operator(&mut game, &rx),
+        flush_to_operator(game, &rx),
         vec![admin_line(json!({
             "translate": "commands.tick.status.sprinting"
         }))]
@@ -149,7 +151,7 @@ fn tick_status_lines_reach_the_other_operators() {
     // `tickQuery` passes `broadcast` false: nothing reaches the operator.
     assert!(game.run_command("tick query"));
     assert_eq!(
-        flush_to_operator(&mut game, &rx),
+        flush_to_operator(game, &rx),
         Vec::<serde_json::Value>::new()
     );
 }

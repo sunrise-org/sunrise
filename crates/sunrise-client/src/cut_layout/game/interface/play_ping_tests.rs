@@ -112,10 +112,11 @@ fn complete_sender_tick(game: &mut sunrise_gameplay::game::ServerGame<'_>) {
 pub(crate) fn fixture(
     resources: &mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
 ) -> (
-    sunrise_gameplay::game::ServerGame<'_>,
+    sunrise_gameplay::game::game_tests::tests::TestServerGame<'_>,
     [mpsc::Receiver<Out>; 2],
 ) {
-    let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+    let mut server_fixture = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+    let game = server_fixture.game_mut();
     game.build_registries();
     game.lan_host(
         LanSettings {
@@ -172,7 +173,7 @@ pub(crate) fn fixture(
         rx
     });
     game.server.lan.as_mut().unwrap().hub.ticks = 123;
-    (game, receivers)
+    (server_fixture, receivers)
 }
 
 #[test]
@@ -242,7 +243,8 @@ fn player_pong_observes_order_and_sends_typed_ping() {
     mod_platform::__private::install(mods);
 
     let mut resources = None;
-    let (mut game, receivers) = fixture(&mut resources);
+    let (mut server_fixture, receivers) = fixture(&mut resources);
+    let game = server_fixture.game_mut();
     let guests = &mut game.server.lan.as_mut().unwrap().hub.guests;
     guests
         .update_connection(2, |guest| guest.disconnect_pending = true)
@@ -273,7 +275,7 @@ fn player_pong_observes_order_and_sends_typed_ping() {
         })
         .unwrap();
 
-    complete_sender_tick(&mut game);
+    complete_sender_tick(game);
 
     assert_eq!(
         *seen.lock().unwrap(),
@@ -300,7 +302,8 @@ fn player_pong_observes_order_and_sends_typed_ping() {
 #[ignore = "daily"]
 fn registered_play_ping_echoes_exact_long_to_only_its_connection() {
     let mut resources = None;
-    let (mut game, receivers) = fixture(&mut resources);
+    let (mut server_fixture, receivers) = fixture(&mut resources);
+    let game = server_fixture.game_mut();
     for (turn, time) in [
         1,
         0,
@@ -315,7 +318,7 @@ fn registered_play_ping_echoes_exact_long_to_only_its_connection() {
     {
         let index = turn % 2;
         let conn = index as u32 + 1;
-        pass(&mut game, conn, S::PingRequest(status::Ping { time }));
+        pass(game, conn, S::PingRequest(status::Ping { time }));
         let packets = output(&receivers[index]);
         let echoed: Vec<_> = packets
             .iter()
@@ -353,7 +356,8 @@ fn registered_play_ping_echoes_exact_long_to_only_its_connection() {
 #[ignore = "daily"]
 fn dead_guest_play_ping_is_transport_not_an_action() {
     let mut resources = None;
-    let (mut game, receivers) = fixture(&mut resources);
+    let (mut server_fixture, receivers) = fixture(&mut resources);
+    let game = server_fixture.game_mut();
     game.server
         .lan
         .as_mut()
@@ -362,11 +366,7 @@ fn dead_guest_play_ping_is_transport_not_an_action() {
         .guests
         .update_connection(1, |guest| guest.dead = true)
         .unwrap();
-    pass(
-        &mut game,
-        1,
-        S::PingRequest(status::Ping { time: i64::MIN }),
-    );
+    pass(game, 1, S::PingRequest(status::Ping { time: i64::MIN }));
     let packets = output(&receivers[0]);
     assert!(matches!(packets.as_slice(), [C::PongResponse(p)] if p.time == i64::MIN));
     assert!(output(&receivers[1]).is_empty());
@@ -387,7 +387,8 @@ fn dead_guest_play_ping_is_transport_not_an_action() {
 #[ignore = "daily"]
 fn held_guest_play_ping_survives_the_acknowledgement_filter() {
     let mut resources = None;
-    let (mut game, receivers) = fixture(&mut resources);
+    let (mut server_fixture, receivers) = fixture(&mut resources);
+    let game = server_fixture.game_mut();
     game.server
         .lan
         .as_mut()
@@ -399,7 +400,7 @@ fn held_guest_play_ping_survives_the_acknowledgement_filter() {
             guest.held = true;
         })
         .unwrap();
-    pass(&mut game, 1, S::PingRequest(status::Ping { time: -1 }));
+    pass(game, 1, S::PingRequest(status::Ping { time: -1 }));
     assert!(matches!(output(&receivers[0]).as_slice(), [C::PongResponse(p)] if p.time == -1));
     assert!(output(&receivers[1]).is_empty());
     assert_eq!(
@@ -419,7 +420,8 @@ fn held_guest_play_ping_survives_the_acknowledgement_filter() {
 #[ignore = "daily"]
 fn handover_guest_play_ping_survives_the_acknowledgement_filter() {
     let mut resources = None;
-    let (mut game, receivers) = fixture(&mut resources);
+    let (mut server_fixture, receivers) = fixture(&mut resources);
+    let game = server_fixture.game_mut();
     let handover = sunrise_sim::lan::arrivals::Handover {
         id: 0x1234,
         since: 123,
@@ -434,7 +436,7 @@ fn handover_guest_play_ping_survives_the_acknowledgement_filter() {
         .update_connection(1, |guest| guest.handover = Some(handover.clone()))
         .unwrap();
     pass(
-        &mut game,
+        game,
         1,
         S::PingRequest(status::Ping {
             time: 0xfedc_ba98_7654_3210_u64 as i64,

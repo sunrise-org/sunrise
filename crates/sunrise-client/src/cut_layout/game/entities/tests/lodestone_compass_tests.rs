@@ -177,7 +177,8 @@ fn a_framed_lodestone_compass_needle_turns_with_its_frame() {
 #[ignore = "daily"]
 fn only_a_compass_ticks_its_lodestone_tracker() {
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     // The resident chunk (0, 0) holds no lodestone at 5 70 5: the target is gone.
     for (slot, item) in [(0, "minecraft:stick"), (1, "minecraft:compass")] {
         let mut stack = ItemStack::new(item, 1);

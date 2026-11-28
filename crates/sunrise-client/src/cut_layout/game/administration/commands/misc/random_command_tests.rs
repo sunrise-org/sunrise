@@ -61,10 +61,11 @@ pub(crate) fn suggestions(receiver: &mpsc::Receiver<Out>) -> Vec<String> {
 pub(crate) fn server_with_guests<'a>(
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
 ) -> (
-    sunrise_gameplay::game::ServerGame<'a>,
+    sunrise_gameplay::game::game_tests::tests::TestServerGame<'a>,
     Vec<mpsc::Receiver<Out>>,
 ) {
-    let mut game = server_game(resources);
+    let mut fixture = server_game(resources);
+    let game = fixture.game_mut();
     game.build_registries();
     game.set_allow_commands(true);
     game.lan_host(
@@ -120,7 +121,7 @@ pub(crate) fn server_with_guests<'a>(
         game.server.lan.as_mut().unwrap().hub.guests.push(guest);
         receivers.push(rx);
     }
-    (game, receivers)
+    (fixture, receivers)
 }
 
 /// PlayerList.broadcastSystemMessage: a guest's roll reaches every player,
@@ -129,7 +130,8 @@ pub(crate) fn server_with_guests<'a>(
 #[ignore = "daily"]
 fn a_guests_roll_reaches_every_player_once() {
     let mut resources = None;
-    let (mut game, receivers) = server_with_guests(&mut resources);
+    let (mut fixture, receivers) = server_with_guests(&mut resources);
+    let game = fixture.game_mut();
     let (ok, lines) = game
         .run_guest_command_told(sunrise_gameplay_common::game::lan_actions::GuestCommand {
             conn: 2,
@@ -169,7 +171,8 @@ fn a_guests_roll_reaches_every_player_once() {
 #[ignore = "daily"]
 fn the_reset_argument_offers_the_sequences_the_world_has() {
     let mut resources = None;
-    let (mut game, receivers) = server_with_guests(&mut resources);
+    let (mut fixture, receivers) = server_with_guests(&mut resources);
+    let game = fixture.game_mut();
     assert!(game.run_command("random value 1..10 minecraft:test"));
     // ServerGamePacketListenerImpl.handleCustomCommandSuggestions: the
     // `ask_server` request the window's chat box sends for `/random reset `.

@@ -22,8 +22,9 @@ const WIRE: Pos = (2, 64, 0);
 /// ticking chunk.
 fn game<'a>(
     resources: &'a mut Option<Arc<sunrise_gameplay_common::game::Resources>>,
-) -> sunrise_gameplay::game::ServerGame<'a> {
-    let mut game = server_game(resources);
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'a> {
+    let mut fixture = server_game(resources);
+    let game = fixture.game_mut();
     game.build_registries();
     game.set_allow_commands(true);
     for x in -1..=1 {
@@ -50,7 +51,7 @@ fn game<'a>(
     }
     game.update_chunk_tickets();
     assert!(game.server.tickets.0.levels().block_ticking(0, 0));
-    game
+    fixture
 }
 
 /// A block change beside the comparator, so it reads its input again, then
@@ -94,26 +95,28 @@ fn wire_power(game: &sunrise_gameplay::game::ServerGame<'_>) -> i32 {
 #[ignore = "daily"]
 fn a_sitting_cat_silences_the_comparator_reading_a_chest() {
     let mut resources = None;
-    let mut game = game(&mut resources);
-    poke(&mut game, "glass");
-    assert_eq!(wire_power(&game), 1, "a full chest reads 1");
+    let mut fixture = game(&mut resources);
+    let game = fixture.game_mut();
+    poke(game, "glass");
+    assert_eq!(wire_power(&*game), 1, "a full chest reads 1");
 
-    summon_cat(&mut game, true);
-    poke(&mut game, "stone");
-    assert_eq!(wire_power(&game), 0, "a sitting cat blocks the chest");
+    summon_cat(game, true);
+    poke(game, "stone");
+    assert_eq!(wire_power(&*game), 0, "a sitting cat blocks the chest");
 
     // Standing the cat up gives the signal back.
     assert!(game.run_command("data merge entity @e[type=minecraft:cat,limit=1] {Sitting:0b}"));
-    poke(&mut game, "dirt");
-    assert_eq!(wire_power(&game), 1, "a standing cat blocks nothing");
+    poke(game, "dirt");
+    assert_eq!(wire_power(&*game), 1, "a standing cat blocks nothing");
 }
 
 #[test]
 #[ignore = "daily"]
 fn a_sitting_cat_leaves_the_hopper_and_the_menu_alone() {
     let mut resources = None;
-    let mut game = game(&mut resources);
-    summon_cat(&mut game, true);
+    let mut fixture = game(&mut resources);
+    let game = fixture.game_mut();
+    summon_cat(game, true);
     assert!(
         game.containers().view(CHEST, false).is_some(),
         "a hopper's getContainer(.., true) ignores the cat"
@@ -132,12 +135,13 @@ fn a_sitting_cat_leaves_the_hopper_and_the_menu_alone() {
 #[ignore = "daily"]
 fn a_conductor_above_a_chest_still_silences_the_comparator() {
     let mut resources = None;
-    let mut game = game(&mut resources);
-    poke(&mut game, "glass");
-    assert_eq!(wire_power(&game), 1);
+    let mut fixture = game(&mut resources);
+    let game = fixture.game_mut();
+    poke(game, "glass");
+    assert_eq!(wire_power(&*game), 1);
     assert!(game.run_command("setblock 0 65 0 stone"));
-    poke(&mut game, "stone");
-    assert_eq!(wire_power(&game), 0, "a conductor above blocks the chest");
+    poke(game, "stone");
+    assert_eq!(wire_power(&*game), 0, "a conductor above blocks the chest");
 }
 
 use sunrise_gameplay_common::game::chat_common::ChatCommonGameExt1 as _;

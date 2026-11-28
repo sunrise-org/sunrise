@@ -48,9 +48,10 @@ fn counts(game: &sunrise_gameplay::game::ServerGame<'_>, x: i32, id: u32) -> (u3
 #[ignore = "daily"]
 fn a_ridden_hopper_cart_takes_one_item_a_tick() {
     let mut resources = None;
-    let mut game = server_game(&mut resources);
-    chest(&mut game, 8);
-    chest(&mut game, 12);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
+    chest(game, 8);
+    chest(game, 12);
     let ridden = Minecart::new(1, CartKind::Hopper, Vec3::new(8.5, 64.0625, 8.5));
     let empty = Minecart::new(2, CartKind::Hopper, Vec3::new(12.5, 64.0625, 8.5));
     game.carts.push(ridden);
@@ -77,8 +78,8 @@ fn a_ridden_hopper_cart_takes_one_item_a_tick() {
         game.tick_carts();
     }
     assert_eq!(game.riding, Some(1), "the rider keeps its cart");
-    let (ridden_chest, ridden_cart) = counts(&game, 8, 1);
-    let (empty_chest, empty_cart) = counts(&game, 12, 2);
+    let (ridden_chest, ridden_cart) = counts(&*game, 8, 1);
+    let (empty_chest, empty_cart) = counts(&*game, 12, 2);
     assert_eq!((empty_cart, empty_chest), (20, 27 * 64 - 20));
     assert_eq!(ridden_cart, 20, "one item a tick while ridden");
     assert_eq!(ridden_chest, 27 * 64 - ridden_cart);

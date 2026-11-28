@@ -201,6 +201,7 @@ pub fn with_game_role_and_facts(
     test: impl FnOnce(&mut crate::game::ServerGame<'_>),
 ) {
     use mod_api::Authority;
+    use sunrise_game_data::lang::{self, Language};
     use sunrise_gameplay_common::game::Options;
     use sunrise_level::sim_settings::SimSettings;
 
@@ -210,6 +211,7 @@ pub fn with_game_role_and_facts(
     );
     let saves = tempfile::tempdir().unwrap();
     let settings = SimSettings::default();
+    let _language = lang::isolate_publication(Language::of("en_us", []));
     let (mut resources, pack) = load_fixture_server_resources(&root, role);
     if let Some(configure) = configure {
         configure(pack.assets.registry, fixture_facts_mut(&mut resources));
@@ -237,6 +239,55 @@ pub fn with_game_role_and_facts(
         Some(Default::default()),
     ));
     test(&mut game);
+}
+
+#[cfg(test)]
+#[test]
+#[ignore = "daily"]
+fn fixture_boot_keeps_language_publication_local() {
+    use crate::game::game_tests::tests::server_game;
+    use sunrise_game_data::lang;
+
+    const CASE: &str = "SUNRISE_FIXTURE_LANGUAGE_CASE";
+    if run_fresh_cases(
+        "game::server_side::native_entity_refs::tests::fixture_boot_keeps_language_publication_local",
+        CASE,
+        &["with-game", "server-game"],
+    ) {
+        return;
+    }
+
+    // The observer stays outside the fixture thread's language scope and generation count.
+    let generation = lang::generation();
+    assert!(lang::current().is_none());
+    run_with_game_stack(|| {
+        match std::env::var(CASE).as_deref() {
+            Ok("with-game") => with_game(|_| {
+                assert!(lang::has("Anti-aliasing"), "fixture English is not loaded");
+            }),
+            Ok("server-game") => {
+                sunrise_gameplay_common::game::test_fixtures::prepare_game_boot(
+                    &fixture_root(),
+                    mod_api::testing::engine_platform::register_game_keys,
+                );
+                let mut resources = None;
+                let fixture = server_game(&mut resources);
+                assert!(lang::has("Anti-aliasing"), "fixture English is not loaded");
+                assert_eq!(
+                    lang::tr("commands.random.roll", &[&"Dice", &2, &1, &2]),
+                    "Dice rolled 2 (from 1 to 2)"
+                );
+                drop(fixture);
+            }
+            case => panic!("unexpected fixture boot case: {case:?}"),
+        }
+        assert!(
+            lang::current().is_none(),
+            "fixture language was not restored"
+        );
+    });
+    assert!(lang::current().is_none(), "fixture English leaked globally");
+    assert_eq!(lang::generation(), generation);
 }
 
 pub(in crate::game) fn load_fixture_server_resources(

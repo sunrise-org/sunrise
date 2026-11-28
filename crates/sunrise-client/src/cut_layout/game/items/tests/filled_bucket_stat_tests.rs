@@ -14,8 +14,9 @@ fn cauldron_game<'a>(
     state: &str,
     level: Option<u8>,
     held: ItemStack,
-) -> sunrise_gameplay::game::ServerGame<'a> {
-    let mut game = server_game(resources);
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'a> {
+    let mut fixture = server_game(resources);
+    let game = fixture.game_mut();
     game.creative = false;
     game.player = Some(
         sunrise_sim::motion::PlayerMotion::new(
@@ -48,7 +49,7 @@ fn cauldron_game<'a>(
             f64::from(POS[2]) + 0.5,
         ],
     });
-    game
+    fixture
 }
 
 /// The held item's id.
@@ -62,12 +63,13 @@ fn hand<'a>(game: &'a sunrise_gameplay::game::ServerGame<'_>) -> &'a str {
 #[ignore = "daily"]
 fn emptying_a_filled_bucket_counts_as_used() {
     let mut resources = None;
-    let mut game = cauldron_game(
+    let mut fixture = cauldron_game(
         &mut resources,
         "minecraft:stone",
         None,
         ItemStack::new("minecraft:water_bucket", 1),
     );
+    let game = fixture.game_mut();
     let hit = game.server.forced_hit.unwrap();
     assert!(game.use_hand(Some(&hit)).unwrap(), "the bucket empties");
     let poured = game
@@ -77,7 +79,7 @@ fn emptying_a_filled_bucket_counts_as_used() {
         .state(game.world.block(POS[0], POS[1] + 1, POS[2]))
         .map(|state| state.name.as_str());
     assert_eq!(poured, Some("minecraft:water"), "the water went above");
-    assert_eq!(hand(&game), "minecraft:bucket", "the bucket came back");
+    assert_eq!(hand(&*game), "minecraft:bucket", "the bucket came back");
     assert_eq!(game.stats.get("used", "minecraft:water_bucket"), 1);
     // A second pour is a second use.
     *game.held_mut() = Some(ItemStack::new("minecraft:water_bucket", 1));
@@ -91,15 +93,16 @@ fn emptying_a_filled_bucket_counts_as_used() {
 #[ignore = "daily"]
 fn pouring_a_bucket_into_a_cauldron_counts_both() {
     let mut resources = None;
-    let mut game = cauldron_game(
+    let mut fixture = cauldron_game(
         &mut resources,
         "minecraft:cauldron",
         None,
         ItemStack::new("minecraft:water_bucket", 1),
     );
+    let game = fixture.game_mut();
     let hit = game.server.forced_hit.unwrap();
     assert!(game.use_hand(Some(&hit)).unwrap(), "the cauldron takes it");
-    assert_eq!(hand(&game), "minecraft:bucket", "the bucket came back");
+    assert_eq!(hand(&*game), "minecraft:bucket", "the bucket came back");
     assert_eq!(game.stats.get("custom", "minecraft:fill_cauldron"), 1);
     assert_eq!(game.stats.get("used", "minecraft:water_bucket"), 1);
 }
@@ -110,15 +113,16 @@ fn pouring_a_bucket_into_a_cauldron_counts_both() {
 #[ignore = "daily"]
 fn filling_a_bucket_from_a_cauldron_counts_both() {
     let mut resources = None;
-    let mut game = cauldron_game(
+    let mut fixture = cauldron_game(
         &mut resources,
         "minecraft:water_cauldron",
         Some(3),
         ItemStack::new("minecraft:bucket", 1),
     );
+    let game = fixture.game_mut();
     let hit = game.server.forced_hit.unwrap();
     assert!(game.use_hand(Some(&hit)).unwrap(), "the cauldron takes it");
-    assert_eq!(hand(&game), "minecraft:water_bucket", "the bucket filled");
+    assert_eq!(hand(&*game), "minecraft:water_bucket", "the bucket filled");
     assert_eq!(game.stats.get("custom", "minecraft:use_cauldron"), 1);
     assert_eq!(game.stats.get("used", "minecraft:bucket"), 1);
 }
@@ -128,15 +132,16 @@ fn filling_a_bucket_from_a_cauldron_counts_both() {
 #[ignore = "daily"]
 fn a_glass_bottle_used_on_a_cauldron_counts_as_used() {
     let mut resources = None;
-    let mut game = cauldron_game(
+    let mut fixture = cauldron_game(
         &mut resources,
         "minecraft:water_cauldron",
         Some(3),
         ItemStack::new("minecraft:glass_bottle", 1),
     );
+    let game = fixture.game_mut();
     let hit = game.server.forced_hit.unwrap();
     assert!(game.use_hand(Some(&hit)).unwrap(), "the cauldron takes it");
-    assert_eq!(hand(&game), "minecraft:potion", "the bottle filled");
+    assert_eq!(hand(&*game), "minecraft:potion", "the bottle filled");
     assert_eq!(game.stats.get("custom", "minecraft:use_cauldron"), 1);
     assert_eq!(game.stats.get("used", "minecraft:glass_bottle"), 1);
 }
@@ -146,15 +151,16 @@ fn a_glass_bottle_used_on_a_cauldron_counts_as_used() {
 #[ignore = "daily"]
 fn a_water_potion_used_on_a_cauldron_counts_as_used() {
     let mut resources = None;
-    let mut game = cauldron_game(
+    let mut fixture = cauldron_game(
         &mut resources,
         "minecraft:cauldron",
         None,
         ItemStack::new("minecraft:potion", 1).with_potion("minecraft:water"),
     );
+    let game = fixture.game_mut();
     let hit = game.server.forced_hit.unwrap();
     assert!(game.use_hand(Some(&hit)).unwrap(), "the cauldron takes it");
-    assert_eq!(hand(&game), "minecraft:glass_bottle", "the potion emptied");
+    assert_eq!(hand(&*game), "minecraft:glass_bottle", "the potion emptied");
     assert_eq!(game.stats.get("custom", "minecraft:use_cauldron"), 1);
     assert_eq!(game.stats.get("used", "minecraft:potion"), 1);
 }
@@ -164,15 +170,16 @@ fn a_water_potion_used_on_a_cauldron_counts_as_used() {
 #[ignore = "daily"]
 fn washing_a_shulker_box_is_not_an_item_used() {
     let mut resources = None;
-    let mut game = cauldron_game(
+    let mut fixture = cauldron_game(
         &mut resources,
         "minecraft:water_cauldron",
         Some(3),
         ItemStack::new("minecraft:white_shulker_box", 1),
     );
+    let game = fixture.game_mut();
     let hit = game.server.forced_hit.unwrap();
     assert!(game.use_hand(Some(&hit)).unwrap(), "the cauldron takes it");
-    assert_eq!(hand(&game), "minecraft:shulker_box", "the box washed");
+    assert_eq!(hand(&*game), "minecraft:shulker_box", "the box washed");
     assert_eq!(game.stats.get("custom", "minecraft:clean_shulker_box"), 1);
     assert_eq!(game.stats.get("used", "minecraft:white_shulker_box"), 0);
 }

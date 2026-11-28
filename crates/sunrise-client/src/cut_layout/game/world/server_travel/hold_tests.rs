@@ -23,9 +23,13 @@ fn light(game: &mut sunrise_gameplay::game::ServerGame<'_>, around: i32) {
 /// A server with one guest standing on lit land at the origin.
 fn server<'a>(
     resources: &'a mut Option<Arc<sunrise_gameplay_common::game::Resources>>,
-) -> (sunrise_gameplay::game::ServerGame<'a>, mpsc::Receiver<Out>) {
-    let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
-    light(&mut game, 0);
+) -> (
+    sunrise_gameplay::game::game_tests::tests::TestServerGame<'a>,
+    mpsc::Receiver<Out>,
+) {
+    let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+    let game = fixture.game_mut();
+    light(game, 0);
     game.lan_host(
         LanSettings {
             port: 0,
@@ -78,7 +82,7 @@ fn server<'a>(
     guest.load_timeout = 0;
     guest.health = 20.0;
     game.server.lan.as_mut().unwrap().hub.guests.push(guest);
-    (game, rx)
+    (fixture, rx)
 }
 
 fn landing(host: &LanHost) -> bool {
@@ -89,7 +93,8 @@ fn landing(host: &LanHost) -> bool {
 #[ignore = "daily"]
 fn a_hold_ignores_the_clients_moves_until_a_tp_to_lit_land_replaces_it() {
     let mut resources = None;
-    let (mut game, _rx) = server(&mut resources);
+    let (mut fixture, _rx) = server(&mut resources);
+    let game = fixture.game_mut();
     game.server
         .lan
         .as_mut()
@@ -124,7 +129,8 @@ fn a_hold_ignores_the_clients_moves_until_a_tp_to_lit_land_replaces_it() {
 #[ignore = "daily"]
 fn a_hold_ended_by_a_trip_elsewhere_hears_the_client_again() {
     let mut resources = None;
-    let (mut game, _rx) = server(&mut resources);
+    let (mut fixture, _rx) = server(&mut resources);
+    let game = fixture.game_mut();
     game.server
         .lan
         .as_mut()
@@ -145,7 +151,8 @@ fn a_hold_ended_by_a_trip_elsewhere_hears_the_client_again() {
 #[ignore = "daily"]
 fn a_hold_places_the_player_once_the_chunks_are_lit() {
     let mut resources = None;
-    let (mut game, _rx) = server(&mut resources);
+    let (mut fixture, _rx) = server(&mut resources);
+    let game = fixture.game_mut();
     game.server
         .lan
         .as_mut()
@@ -156,7 +163,7 @@ fn a_hold_places_the_player_once_the_chunks_are_lit() {
     game.hold_for_chunks(CONN, Vec3::new(FAR, 150.0, FAR));
     game.tick_server_travel();
     assert!(landing(game.server.lan.as_ref().unwrap()));
-    light(&mut game, (FAR as i32) >> 4);
+    light(game, (FAR as i32) >> 4);
     game.tick_server_travel();
     let guest = &game.server.lan.as_ref().unwrap().hub.guests[0];
     assert!(!game.on_server_trip(CONN));
@@ -181,7 +188,8 @@ fn a_hold_places_the_player_once_the_chunks_are_lit() {
 #[ignore = "daily"]
 fn a_hold_follows_the_destination_a_mod_chose() {
     let mut resources = None;
-    let (mut game, _rx) = server(&mut resources);
+    let (mut fixture, _rx) = server(&mut resources);
+    let game = fixture.game_mut();
     game.server
         .lan
         .as_mut()
@@ -236,7 +244,8 @@ fn a_command_arrival_holds_movement_until_lit_then_ticks_damage_again() {
     use sunrise_sim::lan::guest::InboxItem;
 
     let mut resources = None;
-    let (mut game, _rx) = server(&mut resources);
+    let (mut fixture, _rx) = server(&mut resources);
+    let game = fixture.game_mut();
     let at = [FAR, 150.0, FAR];
     let chunk = (FAR as i32) >> 4;
     // The client can already stand and move here, but the arrival's full 5x5 is not lit.
@@ -280,7 +289,7 @@ fn a_command_arrival_holds_movement_until_lit_then_ticks_damage_again() {
         g.inbox
             .push_back(InboxItem::Packet(S::MovePlayerPos(step.clone()), None));
     });
-    drain_packets(&mut game);
+    drain_packets(game);
     assert_eq!(
         game.server.lan.as_ref().unwrap().hub.guests[0].position,
         at,
@@ -315,7 +324,7 @@ fn a_command_arrival_holds_movement_until_lit_then_ticks_damage_again() {
         "the held tick did not complete the due destroy"
     );
 
-    light(&mut game, chunk);
+    light(game, chunk);
     game.tick_server_travel();
     assert!(!game.on_server_trip(CONN));
     assert!(!landing(game.server.lan.as_ref().unwrap()));
@@ -328,7 +337,7 @@ fn a_command_arrival_holds_movement_until_lit_then_ticks_damage_again() {
         g.inbox
             .push_back(InboxItem::Packet(S::MovePlayerPos(step), None));
     });
-    drain_packets(&mut game);
+    drain_packets(game);
     assert_eq!(
         game.server.lan.as_ref().unwrap().hub.guests[0].position,
         [at[0] + 1.0, at[1], at[2]]
@@ -359,7 +368,8 @@ fn respawn_arrivals_hold_movement_then_resume_damage_and_pickups() {
     mod_platform::testing::with_mods(Vec::new().into(), || {
         for personal in [false, true] {
             let mut resources = None;
-            let (mut game, _rx) = server(&mut resources);
+            let (mut fixture, _rx) = server(&mut resources);
+            let game = fixture.game_mut();
             game.options.dedicated = Some(Vec::new());
             let pos = [FAR as i32, 150, FAR as i32];
             let chunk = pos[0] >> 4;
@@ -414,7 +424,7 @@ fn respawn_arrivals_hold_movement_then_resume_damage_and_pickups() {
                         None,
                     ));
                 });
-            drain_packets(&mut game);
+            drain_packets(game);
             let guest = game.command_guest(CONN).unwrap();
             assert!(guest.left_reason.is_empty());
             assert_eq!(guest.position, at, "cannot abandon the respawn destination");
@@ -422,7 +432,7 @@ fn respawn_arrivals_hold_movement_then_resume_damage_and_pickups() {
             // differs from the original target; it must not turn into an ordinary teleport hold.
             game.tick_server_travel();
             assert!(landing(game.server.lan.as_ref().unwrap()));
-            light(&mut game, chunk);
+            light(game, chunk);
             game.tick_server_travel();
             assert!(!game.on_server_trip(CONN));
             assert!(!landing(game.server.lan.as_ref().unwrap()));
@@ -491,7 +501,8 @@ fn a_world_spawn_search_keeps_movement_held_between_candidate_chunks() {
 
     mod_platform::testing::with_mods(Vec::new().into(), || {
         let mut resources = None;
-        let (mut game, _rx) = server(&mut resources);
+        let (mut fixture, _rx) = server(&mut resources);
+        let game = fixture.game_mut();
         // The old body stays on the origin; the effective spawn sits one chunk away,
         // with only four of its rows lit when the player requests a respawn.
         let spawn = [16, 100, 16];
@@ -509,7 +520,7 @@ fn a_world_spawn_search_keeps_movement_held_between_candidate_chunks() {
         // A deterministic search starts at (-48, -48), outside the newly lit square.
         // This is the search state an arrival pass keeps when a candidate is missing.
         game.server.server_trips[0].finder = Some(PlayerSpawnFinder::new(spawn, 64, |_| 0));
-        light(&mut game, 1);
+        light(game, 1);
         for _ in 0..2 {
             game.tick_server_travel();
             assert!(game.on_server_trip(CONN));

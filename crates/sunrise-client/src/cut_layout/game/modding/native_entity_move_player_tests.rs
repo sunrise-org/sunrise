@@ -37,7 +37,8 @@ fn a_cancelled_player_packet_sends_the_guest_a_correction() {
     .into();
     mod_platform::testing::with_mods(mods, || {
         let mut resources = None;
-        let mut game = server_game(&mut resources);
+        let mut fixture = server_game(&mut resources);
+        let game = fixture.game_mut();
         game.build_registries();
         game.set_allow_commands(true);
         let stone = game
@@ -173,7 +174,8 @@ fn a_cancelled_vehicle_packet_sends_the_guest_a_correction() {
     .into();
     mod_platform::testing::with_mods(mods, || {
         let mut resources = None;
-        let mut game = server_game(&mut resources);
+        let mut fixture = server_game(&mut resources);
+        let game = fixture.game_mut();
         game.build_registries();
         game.set_allow_commands(true);
         let stone = game

@@ -15,7 +15,8 @@ use sunrise_sim::motion::PlayerMotion;
 #[ignore = "daily"]
 fn items_fall_to_each_dimensions_own_void_floor() {
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 70.0, 8.5)).unwrap());
     for x in -2..=2 {
         for z in -2..=2 {

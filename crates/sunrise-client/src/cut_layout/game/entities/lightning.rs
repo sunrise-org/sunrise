@@ -10,7 +10,8 @@ pub(crate) mod tests {
     #[ignore = "daily"]
     fn a_struck_rod_updates_the_wire_beside_the_block_behind_it() {
         let mut resources = None;
-        let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+        let game = fixture.game_mut();
         let registry = game.pack.assets.registry;
         let stone = registry.default_state("minecraft:stone").unwrap();
         let wire = registry.default_state("minecraft:redstone_wire").unwrap();

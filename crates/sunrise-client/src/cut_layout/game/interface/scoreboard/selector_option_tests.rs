@@ -18,27 +18,29 @@ fn select(game: &mut sunrise_gameplay::game::ServerGame<'_>, text: &str) -> Hash
 
 fn game<'a>(
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> sunrise_gameplay::game::ServerGame<'a> {
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'a> {
     use sunrise_sim::motion::PlayerMotion;
-    let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+    let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+    let game = fixture.game_mut();
     game.build_registries();
     game.set_allow_commands(true);
     game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
     assert!(game.run_command("team add red"));
     assert!(game.run_command("team modify red prefix \"[R] \""));
     assert!(game.run_command("team join red @s"));
-    game
+    fixture
 }
 
 #[test]
 #[ignore = "daily"]
 fn name_compares_the_plain_name() {
     let mut resources = None;
-    let mut game = game(&mut resources);
+    let mut fixture = game(&mut resources);
+    let game = fixture.game_mut();
     // The team prefix shows in the display name, never in the plain one.
     assert_eq!(game.target_name(Target::Player).plain(), "[R] Player");
     assert_eq!(
-        select(&mut game, "@a[name=Player]"),
+        select(game, "@a[name=Player]"),
         HashSet::from([Target::Player])
     );
 }
@@ -47,26 +49,28 @@ fn name_compares_the_plain_name() {
 #[ignore = "daily"]
 fn gamemode_compares_the_real_mode() {
     let mut resources = None;
-    let mut game = game(&mut resources);
+    let mut fixture = game(&mut resources);
+    let game = fixture.game_mut();
     assert!(game.run_command("gamemode adventure"));
     assert_eq!(
-        select(&mut game, "@a[gamemode=adventure]"),
+        select(game, "@a[gamemode=adventure]"),
         HashSet::from([Target::Player])
     );
-    assert!(select(&mut game, "@a[gamemode=survival]").is_empty());
+    assert!(select(game, "@a[gamemode=survival]").is_empty());
     assert!(game.run_command("gamemode spectator"));
     assert_eq!(
-        select(&mut game, "@a[gamemode=spectator]"),
+        select(game, "@a[gamemode=spectator]"),
         HashSet::from([Target::Player])
     );
-    assert!(select(&mut game, "@a[gamemode=creative]").is_empty());
+    assert!(select(game, "@a[gamemode=creative]").is_empty());
 }
 
 #[test]
 #[ignore = "daily"]
 fn team_falls_back_to_the_owners_team() {
     let mut resources = None;
-    let mut game = game(&mut resources);
+    let mut fixture = game(&mut resources);
+    let game = fixture.game_mut();
     // `Owner` tames a wolf (TamableAnimal.readAdditionalSaveData).
     let owner = game.acting_player_uuid();
     assert!(game.run_command(&format!(
@@ -79,21 +83,21 @@ fn team_falls_back_to_the_owners_team() {
     let untamed = game.target_with_uuid([271, 0, 0, 2]).unwrap();
     assert!(matches!(tamed, Target::Mob(_)) && matches!(untamed, Target::Mob(_)));
     assert_eq!(
-        select(&mut game, "@e[type=wolf,team=red]"),
+        select(game, "@e[type=wolf,team=red]"),
         HashSet::from([tamed])
     );
     assert_eq!(
-        select(&mut game, "@e[type=wolf,team=]"),
+        select(game, "@e[type=wolf,team=]"),
         HashSet::from([untamed])
     );
     // A team of its own wins over the owner's (`super.getTeam()` first).
     assert!(game.run_command("team add blue"));
     assert!(game.run_command("team join blue @e[type=wolf,team=red]"));
     assert_eq!(
-        select(&mut game, "@e[type=wolf,team=blue]"),
+        select(game, "@e[type=wolf,team=blue]"),
         HashSet::from([tamed])
     );
-    assert!(select(&mut game, "@e[type=wolf,team=red]").is_empty());
+    assert!(select(game, "@e[type=wolf,team=red]").is_empty());
 }
 
 use sunrise_gameplay_common::game::chat_common::ChatCommonGameExt1 as _;

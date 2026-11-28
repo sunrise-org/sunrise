@@ -13,7 +13,8 @@ use sunrise_level::chunk::Chunk;
 fn a_packs_own_item_and_block_tags_admit_and_match_its_functions() {
     use crate::game::server_side::game_tests::tests::server_game;
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     let dir = std::env::temp_dir().join(format!(
         "sunrise-pack-tags-{}-{}",
         std::process::id(),
@@ -95,21 +96,21 @@ fn a_packs_own_item_and_block_tags_admit_and_match_its_functions() {
     };
     assert!(game.run_command("item replace entity @s weapon.mainhand with minecraft:diamond"));
     assert!(game.run_command("function p:t"));
-    assert_eq!(score(&game, "#item"), 1, "the diamond is in #p:shiny");
-    assert_eq!(score(&game, "#block"), 1, "the stone is in #p:stopper");
+    assert_eq!(score(&*game, "#item"), 1, "the diamond is in #p:shiny");
+    assert_eq!(score(&*game, "#block"), 1, "the stone is in #p:stopper");
     // The same tag, a member it doesn't hold: the function still runs, and
     // neither test matches.
     game.world.set(4, 200, 4, dirt).unwrap();
     assert!(game.run_command("item replace entity @s weapon.mainhand with minecraft:stick"));
     assert!(game.run_command("function p:t"));
-    assert_eq!(score(&game, "#item"), 1, "a stick is not in #p:shiny");
-    assert_eq!(score(&game, "#block"), 1, "dirt is not in #p:stopper");
+    assert_eq!(score(&*game, "#item"), 1, "a stick is not in #p:shiny");
+    assert_eq!(score(&*game, "#block"), 1, "dirt is not in #p:stopper");
     // Both match again.
     game.world.set(4, 200, 4, stone).unwrap();
     assert!(game.run_command("item replace entity @s weapon.mainhand with minecraft:diamond"));
     assert!(game.run_command("function p:t"));
-    assert_eq!(score(&game, "#item"), 2);
-    assert_eq!(score(&game, "#block"), 2);
+    assert_eq!(score(&*game, "#item"), 2);
+    assert_eq!(score(&*game, "#block"), 2);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

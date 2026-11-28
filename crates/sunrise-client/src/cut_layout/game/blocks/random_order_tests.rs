@@ -13,8 +13,9 @@ use sunrise_level::chunk::Chunk;
 fn game_loading<'a>(
     resources: &'a mut Option<Arc<sunrise_gameplay_common::game::Resources>>,
     order: &[(i32, i32)],
-) -> sunrise_gameplay::game::ServerGame<'a> {
-    let mut game = server_game(resources);
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'a> {
+    let mut fixture = server_game(resources);
+    let game = fixture.game_mut();
     game.server.settings.simulation_distance = 5;
     game.server.settings.render_distance = 8;
     game.player = Some(
@@ -27,7 +28,7 @@ fn game_loading<'a>(
         game.world.chunks.insert((x, z), Arc::new(chunk));
     }
     game.update_chunk_tickets();
-    game
+    fixture
 }
 
 #[test]
@@ -37,12 +38,14 @@ fn chunks_random_tick_in_the_same_order_however_they_loaded() {
         .flat_map(|x| (-8..=8).map(move |z| (x, z)))
         .collect();
     let mut first_resources = None;
-    let first = game_loading(&mut first_resources, &loaded);
+    let first_fixture = game_loading(&mut first_resources, &loaded);
+    let first = first_fixture.game();
     // The streaming workers finish in another order on another run.
     loaded.reverse();
     loaded.rotate_left(97);
     let mut second_resources = None;
-    let second = game_loading(&mut second_resources, &loaded);
+    let second_fixture = game_loading(&mut second_resources, &loaded);
+    let second = second_fixture.game();
 
     let (mut a, mut b) = (Vec::new(), Vec::new());
     first.random_tick_chunks(&mut a);

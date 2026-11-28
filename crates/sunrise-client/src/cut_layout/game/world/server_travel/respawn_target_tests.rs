@@ -41,12 +41,13 @@ fn light_the_world_spawn(game: &mut sunrise_gameplay::game::ServerGame<'_>) {
 fn a_charged_anchor_gives_its_position_and_keeps_the_charge() {
     mod_platform::testing::with_mods(Vec::new().into(), || {
         let mut resources = None;
-        let (_scratch, mut game, _rx) = server_with_a_nether_anchor(&mut resources);
+        let (_scratch, mut fixture, _rx) = server_with_a_nether_anchor(&mut resources);
+        let game = fixture.game_mut();
         game.enter_level(Dim::Nether).unwrap();
-        light_spawn_chunks(&mut game);
-        let charged = charge_anchor(&mut game);
-        light_the_world_spawn(&mut game);
-        let target = respawn_target(&mut game).unwrap();
+        light_spawn_chunks(game);
+        let charged = charge_anchor(game);
+        light_the_world_spawn(game);
+        let target = respawn_target(game).unwrap();
         assert_eq!(target.level, game.level(Dim::Nether.id()).unwrap());
         assert_eq!(target.position, [10.5, 101.0, 10.5]);
         assert_eq!((target.yaw, target.pitch), (-90.0, 0.0));
@@ -68,13 +69,14 @@ fn a_charged_anchor_gives_its_position_and_keeps_the_charge() {
 fn a_broken_bed_gives_the_world_spawn_with_missing_respawn_block() {
     mod_platform::testing::with_mods(Vec::new().into(), || {
         let mut resources = None;
-        let (_scratch, mut game, _rx) = server_with_a_nether_anchor(&mut resources);
+        let (_scratch, mut fixture, _rx) = server_with_a_nether_anchor(&mut resources);
+        let game = fixture.game_mut();
         game.level.world_spawn_angle = [45.0, 10.0];
         game.server.lan.as_mut().unwrap().hub.guests.update(0, |g| {
             g.respawn_elsewhere = Some((Dim::Overworld.id().into(), [5, 100, 5], 0.0, 0.0, false));
         });
-        light_the_world_spawn(&mut game);
-        let target = respawn_target(&mut game).unwrap();
+        light_the_world_spawn(game);
+        let target = respawn_target(game).unwrap();
         assert_eq!(target.level, game.level(Dim::Overworld.id()).unwrap());
         assert_eq!([target.position[0], target.position[2]], [0.5, 0.5]);
         assert_eq!((target.yaw, target.pitch), (45.0, 10.0));
@@ -90,7 +92,8 @@ fn a_broken_bed_gives_the_world_spawn_with_missing_respawn_block() {
 fn no_respawn_point_gives_the_world_spawn() {
     mod_platform::testing::with_mods(Vec::new().into(), || {
         let mut resources = None;
-        let (_scratch, mut game, _rx) = server_with_a_nether_anchor(&mut resources);
+        let (_scratch, mut fixture, _rx) = server_with_a_nether_anchor(&mut resources);
+        let game = fixture.game_mut();
         game.level.world_spawn_angle = [45.0, 10.0];
         game.server
             .lan
@@ -100,12 +103,12 @@ fn no_respawn_point_gives_the_world_spawn() {
             .guests
             .update(0, |g| g.respawn_elsewhere = None);
         assert_eq!(
-            respawn_target(&mut game),
+            respawn_target(game),
             Err(RespawnTargetUnavailable::Loading),
             "the world spawn's chunks are not loaded yet"
         );
-        light_the_world_spawn(&mut game);
-        let target = respawn_target(&mut game).unwrap();
+        light_the_world_spawn(game);
+        let target = respawn_target(game).unwrap();
         assert_eq!(target.level, game.level(Dim::Overworld.id()).unwrap());
         assert_eq!([target.position[0], target.position[2]], [0.5, 0.5]);
         assert_eq!((target.yaw, target.pitch), (45.0, 10.0));
@@ -121,7 +124,8 @@ fn no_respawn_point_gives_the_world_spawn() {
 fn a_point_in_another_level_is_refused_while_a_player_is_swapped_in() {
     mod_platform::testing::with_mods(Vec::new().into(), || {
         let mut resources = None;
-        let (_scratch, mut game, _rx) = server_with_a_nether_anchor(&mut resources);
+        let (_scratch, mut fixture, _rx) = server_with_a_nether_anchor(&mut resources);
+        let game = fixture.game_mut();
         let answer = game
             .with_cloning_player(2, CloneScope::LendBody, |game| respawn_target(game))
             .unwrap();

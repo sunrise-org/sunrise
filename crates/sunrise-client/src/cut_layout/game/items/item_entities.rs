@@ -26,7 +26,8 @@ pub(crate) mod destroyed_contents_tests {
     #[ignore = "daily"]
     fn spilled_stacks_rise_from_their_own_randoms() {
         let mut resources = None;
-        let mut game = server_game(&mut resources);
+        let mut fixture = server_game(&mut resources);
+        let game = fixture.game_mut();
         let at = Vec3::new(8.5, 70.0, 8.5);
         let stacks = ["minecraft:stone", "minecraft:dirt", "minecraft:glass"]
             .into_iter()
@@ -34,7 +35,7 @@ pub(crate) mod destroyed_contents_tests {
             .collect();
         let mut level = game.world.random.clone();
         game.spawn_destroyed_contents(stacks);
-        let motions = spilled_motions(&game);
+        let motions = spilled_motions(&*game);
         assert_eq!(motions.len(), 3);
         for motion in &motions {
             assert_eq!(motion[1], 0.2, "the four-argument constructor rises 0.2");
@@ -56,7 +57,8 @@ pub(crate) mod destroyed_contents_tests {
     #[ignore = "daily"]
     fn a_damaged_shulker_box_spills_its_stacks_upward() {
         let mut resources = None;
-        let mut game = server_game(&mut resources);
+        let mut fixture = server_game(&mut resources);
+        let game = fixture.game_mut();
         game.build_registries();
         game.set_allow_commands(true);
         game.world.chunks.insert(
@@ -110,11 +112,12 @@ pub(crate) mod escape_tests {
     #[ignore = "daily"]
     fn an_item_escapes_a_block_at_its_own_randoms_speed() {
         let mut game_resources = None;
-        let mut game = server_game(&mut game_resources);
+        let mut fixture = server_game(&mut game_resources);
+        let game = fixture.game_mut();
         let feet = sunrise_core::geometry::Vec3::new(8.5, 70.0, 8.5);
         game.player = Some(sunrise_sim::motion::PlayerMotion::new(game.motion, feet).unwrap());
         crate::game::native_entity_refs::tests::prepare_entity_ticking_neighborhood(
-            &mut game,
+            game,
             sunrise_core::position::ChunkPos::new(0, 0),
         );
         game.update_chunk_tickets();

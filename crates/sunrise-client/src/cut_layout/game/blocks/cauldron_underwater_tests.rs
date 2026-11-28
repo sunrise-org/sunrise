@@ -12,8 +12,9 @@ use sunrise_sim::motion::PlayerMotion;
 
 fn game<'a>(
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> sunrise_gameplay::game::ServerGame<'a> {
-    let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'a> {
+    let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+    let game = fixture.game_mut();
     game.build_registries();
     game.set_allow_commands(true);
     game.world
@@ -26,7 +27,7 @@ fn game<'a>(
     game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 101.0, 8.5)).unwrap());
     game.selected = 0;
     game.set_mode_id(0);
-    game
+    fixture
 }
 
 fn name(game: &sunrise_gameplay::game::ServerGame<'_>, at: [i32; 3]) -> String {
@@ -89,7 +90,8 @@ fn click_under(
 fn a_cauldron_under_water_swallows_a_lava_or_powder_snow_bucket() {
     use sunrise_sim::cauldron::Outcome;
     let mut resources = None;
-    let mut game = game(&mut resources);
+    let mut fixture = game(&mut resources);
+    let game = fixture.game_mut();
     for (bucket, filled) in [
         ("minecraft:lava_bucket", "minecraft:lava_cauldron"),
         (
@@ -107,17 +109,17 @@ fn a_cauldron_under_water_swallows_a_lava_or_powder_snow_bucket() {
             "minecraft:seagrass",
             "minecraft:bubble_column",
         ] {
-            let (outcome, got) = click_under(&mut game, above, bucket);
+            let (outcome, got) = click_under(game, above, bucket);
             assert_eq!(outcome, Outcome::Consume, "{bucket} under {above}");
             assert_eq!(got, "minecraft:cauldron", "{bucket} under {above}");
-            assert_eq!(held(&game).as_deref(), Some(bucket), "under {above}");
+            assert_eq!(held(&*game).as_deref(), Some(bucket), "under {above}");
         }
         // Air and lava are not water, so the bucket empties into the cauldron.
         for above in ["minecraft:air", "minecraft:lava"] {
-            let (outcome, got) = click_under(&mut game, above, bucket);
+            let (outcome, got) = click_under(game, above, bucket);
             assert_eq!(outcome, Outcome::Success, "{bucket} under {above}");
             assert_eq!(got, filled, "{bucket} under {above}");
-            assert_eq!(held(&game).as_deref(), Some("minecraft:bucket"));
+            assert_eq!(held(&*game).as_deref(), Some("minecraft:bucket"));
         }
     }
 }

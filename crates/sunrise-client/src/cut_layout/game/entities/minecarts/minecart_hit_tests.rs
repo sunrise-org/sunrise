@@ -14,14 +14,15 @@ use {
 /// there for the piglins that look at it.
 fn game_with_player(
     resources: &mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> sunrise_gameplay::game::ServerGame<'_> {
-    let mut game = server_game(resources);
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'_> {
+    let mut fixture = server_game(resources);
+    let game = fixture.game_mut();
     game.build_registries();
     game.set_allow_commands(true);
     game.player = Some(
         sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(8.5, 64.0, 8.5)).unwrap(),
     );
-    game
+    fixture
 }
 
 fn start_events() {
@@ -46,7 +47,8 @@ fn stop_events() {
 #[ignore = "daily"]
 fn a_hit_posts_one_entity_damage_from_its_causing_entity() {
     let mut resources = None;
-    let mut game = game_with_player(&mut resources);
+    let mut fixture = game_with_player(&mut resources);
+    let game = fixture.game_mut();
     let at = Vec3::new(8.5, 64.0, 8.5);
     game.carts.push(Minecart::new(1, CartKind::Rideable, at));
     start_events();
@@ -92,7 +94,8 @@ fn a_hit_posts_one_entity_damage_from_its_causing_entity() {
 #[ignore = "daily"]
 fn a_broken_cart_drops_its_item_under_its_name() {
     let mut resources = None;
-    let mut game = game_with_player(&mut resources);
+    let mut fixture = game_with_player(&mut resources);
+    let game = fixture.game_mut();
     assert!(game.run_command(r#"summon minecart 8.5 64 8.5 {CustomName:"Boat"}"#));
     assert_eq!(game.carts.len(), 1);
     assert_eq!(game.carts[0].kind, CartKind::Rideable);
@@ -123,7 +126,8 @@ fn calm(game: &mut sunrise_gameplay::game::ServerGame<'_>, piglin: usize) {
 #[ignore = "daily"]
 fn a_chest_cart_broken_by_a_player_angers_the_piglins_that_see_them() {
     let mut resources = None;
-    let mut game = game_with_player(&mut resources);
+    let mut fixture = game_with_player(&mut resources);
+    let game = fixture.game_mut();
     assert!(game.run_command("summon piglin 8.5 64 12.5 {NoAI:1b,PersistenceRequired:1b}"));
     let piglin = game
         .mobs
@@ -156,7 +160,7 @@ fn a_chest_cart_broken_by_a_player_angers_the_piglins_that_see_them() {
         game.mobs[piglin].extra.piglin.guarded_angry_at.is_some(),
         "by @p angers the piglins that see the player"
     );
-    calm(&mut game, piglin);
+    calm(game, piglin);
     // A player's own hit that breaks it does.
     game.carts.push(Minecart::new(3, CartKind::Chest, at));
     assert!(game.hurt_cart_result(0, 100.0, false, false, CartHit::player()));

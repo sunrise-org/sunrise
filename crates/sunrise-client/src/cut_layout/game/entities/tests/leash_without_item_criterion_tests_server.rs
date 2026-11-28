@@ -7,11 +7,12 @@ use sunrise_sim::motion::PlayerMotion;
 #[ignore = "daily"]
 fn actual_holder_detach_does_not_reaward_the_held_lead_criterion() {
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     game.options.dedicated = None;
     game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 100.0, 4.5)).unwrap());
     sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(
-        &mut game,
+        game,
         1,
         (413u128 << 96) | 1,
     );

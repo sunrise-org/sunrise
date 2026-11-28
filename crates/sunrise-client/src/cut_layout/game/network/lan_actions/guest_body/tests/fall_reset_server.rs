@@ -12,8 +12,9 @@ use sunrise_sim::{
 pub(crate) fn scene<'a>(
     resources: &'a mut Option<Arc<sunrise_gameplay_common::game::Resources>>,
     scratch: &Path,
-) -> sunrise_gameplay::game::ServerGame<'a> {
-    let mut g = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'a> {
+    let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+    let g = fixture.game_mut();
     g.build_registries();
     g.set_allow_commands(true);
     let folder = scratch.join("data/fall/advancement");
@@ -83,7 +84,7 @@ pub(crate) fn scene<'a>(
     g.server.lan.as_mut().unwrap().hub.guests.push(guest);
     g.sync_tick_chunks();
     g.server.ticked_entities_through = g.server.next_entity;
-    g
+    fixture
 }
 
 use sunrise_gameplay_common::game::chat_common::ChatCommonGameExt1 as _;

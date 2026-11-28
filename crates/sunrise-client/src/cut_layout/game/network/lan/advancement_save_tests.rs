@@ -39,7 +39,9 @@ pub(in crate::game) mod connected_advancement_save_tests {
             sunrise_gameplay_common::game::execution_role::ExecutionRole,
         };
         let mut game_resources = None;
-        let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut game_resources);
+        let mut fixture =
+            sunrise_gameplay::game::game_tests::tests::server_game(&mut game_resources);
+        let game = fixture.game_mut();
         game.options.execution_role = ExecutionRole::DedicatedServer;
         game.options.dedicated = Some(Vec::new());
         let dir = std::env::temp_dir().join(format!(
@@ -70,8 +72,7 @@ pub(in crate::game) mod connected_advancement_save_tests {
             },
         )));
         game.set_allow_commands(true);
-        let _rx =
-            sunrise_gameplay::game::server_side::lan::world_spawn_sync_tests::host_for(&mut game);
+        let _rx = sunrise_gameplay::game::server_side::lan::world_spawn_sync_tests::host_for(game);
         let host = game.server.lan.as_mut().unwrap();
         host.hub.guests.update(0, |g| g.name = "Bob".into());
         host.owner = None;
@@ -85,7 +86,7 @@ pub(in crate::game) mod connected_advancement_save_tests {
         assert!(host.owner.is_none());
         assert_ne!(game.level.player_uuid, Some([0, 0, 0, 1]));
         let start_clock = game.world.game_time;
-        let reload = command(&mut game, "reload");
+        let reload = command(game, "reload");
         assert!(
             reload
                 .iter()
@@ -107,7 +108,7 @@ pub(in crate::game) mod connected_advancement_save_tests {
                 .advancements
                 .has("minecraft:story/mine_stone", "get_stone")
         );
-        command(&mut game, "advancement grant Bob only minecraft:story/root");
+        command(game, "advancement grant Bob only minecraft:story/root");
         let path = stats::player_json(&dir, "advancements", [0, 0, 0, 1]);
         let host = game.server.lan.as_ref().unwrap();
         assert!(
@@ -123,7 +124,7 @@ pub(in crate::game) mod connected_advancement_save_tests {
         assert_eq!(prior["minecraft:story/root"]["done"], true);
         assert!(prior.get("minecraft:story/mine_stone").is_none());
         command(
-            &mut game,
+            game,
             "advancement grant Bob only minecraft:story/mine_stone",
         );
         let mut failures = Vec::new();
@@ -133,10 +134,7 @@ pub(in crate::game) mod connected_advancement_save_tests {
             ("repeat", "save-all flush", false),
         ] {
             if phase == "flush" {
-                command(
-                    &mut game,
-                    "advancement revoke Bob only minecraft:story/root",
-                );
+                command(game, "advancement revoke Bob only minecraft:story/root");
             }
             let host = game.server.lan.as_ref().unwrap();
             assert!(host.owner.is_none());
@@ -155,7 +153,7 @@ pub(in crate::game) mod connected_advancement_save_tests {
                     .advancements
                     .has("minecraft:story/mine_stone", "get_stone")
             );
-            let messages = command(&mut game, save);
+            let messages = command(game, save);
             assert!(
                 messages
                     .iter()
@@ -214,7 +212,9 @@ pub(in crate::game) mod connected_advancement_preservation_tests {
             sunrise_gameplay_common::game::execution_role::ExecutionRole,
         };
         let mut game_resources = None;
-        let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut game_resources);
+        let mut fixture =
+            sunrise_gameplay::game::game_tests::tests::server_game(&mut game_resources);
+        let game = fixture.game_mut();
         game.options.execution_role = ExecutionRole::DedicatedServer;
         // Let a legacy launch-config gate reach the wrong-role control below.
         game.options.dedicated = Some(Vec::new());
@@ -246,8 +246,7 @@ pub(in crate::game) mod connected_advancement_preservation_tests {
             },
         )));
         game.set_allow_commands(true);
-        let _rx =
-            sunrise_gameplay::game::server_side::lan::world_spawn_sync_tests::host_for(&mut game);
+        let _rx = sunrise_gameplay::game::server_side::lan::world_spawn_sync_tests::host_for(game);
         let host = game.server.lan.as_mut().unwrap();
         host.hub.guests.update(0, |g| g.name = "Bob".into());
         host.owner = None;
@@ -260,7 +259,7 @@ pub(in crate::game) mod connected_advancement_preservation_tests {
 
         assert!(host.owner.is_none());
         assert!(!host.hub.guests[0].advancements_loaded);
-        let reload = command(&mut game, "reload");
+        let reload = command(game, "reload");
         assert!(
             reload
                 .iter()
@@ -282,7 +281,7 @@ pub(in crate::game) mod connected_advancement_preservation_tests {
             ),
             ("advancement revoke Bob everything", "save-all flush", true),
         ] {
-            command(&mut game, action);
+            command(game, action);
             let g = &game.server.lan.as_ref().unwrap().hub.guests[0];
             assert!(
                 !g.advancements_loaded,
@@ -292,7 +291,7 @@ pub(in crate::game) mod connected_advancement_preservation_tests {
                 g.advancements.criteria.values().all(|m| m.is_empty()),
                 empty
             );
-            let messages = command(&mut game, save);
+            let messages = command(game, save);
             assert!(
                 messages
                     .iter()
@@ -319,12 +318,12 @@ pub(in crate::game) mod connected_advancement_preservation_tests {
             .hub
             .guests
             .update(0, |g| g.advancements_loaded = true);
-        command(&mut game, "save-all");
+        command(game, "save-all");
         assert_eq!(read().as_object().unwrap().len(), 1);
-        command(&mut game, "advancement grant Bob only minecraft:story/root");
+        command(game, "advancement grant Bob only minecraft:story/root");
         let before = fs::read(&path).unwrap();
         let play = game.server.lan.as_mut().unwrap().play.remove(&1).unwrap();
-        command(&mut game, "save-all flush");
+        command(game, "save-all flush");
         assert_eq!(
             fs::read(&path).unwrap(),
             before,
@@ -363,7 +362,7 @@ pub(in crate::game) mod connected_advancement_preservation_tests {
                     });
                 None
             };
-            command(&mut game, "save-all");
+            command(game, "save-all");
             assert_eq!(
                 fs::read(&path).unwrap(),
                 before,

@@ -32,7 +32,8 @@ fn saved_count(game: &sunrise_gameplay::game::ServerGame<'_>, pos: Pos) -> u32 {
 #[ignore = "daily"]
 fn a_pot_feeds_a_comparator_from_its_saved_slot_like_a_chest() {
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     game.build_registries();
     game.set_allow_commands(true);
     assert!(game.run_command("fill 0 199 0 15 199 15 stone"));
@@ -52,24 +53,25 @@ fn a_pot_feeds_a_comparator_from_its_saved_slot_like_a_chest() {
             "setblock 8 200 10 minecraft:chest{{Items:[{}]}}",
             items.join(",")
         )));
-        assert_eq!(signal(&mut game, pot), expected, "a pot holding {count}");
+        assert_eq!(signal(game, pot), expected, "a pot holding {count}");
         assert_eq!(
-            signal(&mut game, chest),
+            signal(game, chest),
             expected,
             "a chest holding {count} in every slot"
         );
     }
     assert!(game.run_command("data remove block 8 200 8 item"));
     assert!(game.run_command("data merge block 8 200 10 {Items:[]}"));
-    assert_eq!(signal(&mut game, pot), 0, "an empty pot");
-    assert_eq!(signal(&mut game, chest), 0, "an empty chest");
+    assert_eq!(signal(game, pot), 0, "an empty pot");
+    assert_eq!(signal(game, chest), 0, "an empty chest");
 }
 
 #[test]
 #[ignore = "daily"]
 fn a_hopper_inserted_item_updates_the_comparator_beside_the_pot() {
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     game.build_registries();
     game.set_allow_commands(true);
     assert!(game.run_command("fill 0 199 0 15 199 15 stone"));
@@ -94,15 +96,15 @@ fn a_hopper_inserted_item_updates_the_comparator_beside_the_pot() {
     let tick = |game: &mut sunrise_gameplay::game::ServerGame<'_>| {
         game.with_level(|b, level, ticks| b.scheduled_block_tick(level, ticks, comparator));
     };
-    tick(&mut game);
-    assert_eq!(output(&game), 14, "63 items: lerpDiscrete(63/64, 0, 15)");
+    tick(game);
+    assert_eq!(output(&*game), 14, "63 items: lerpDiscrete(63/64, 0, 15)");
     for _ in 0..8 {
         game.world.game_time += 1;
         game.tick_hopper(hopper);
     }
-    assert_eq!(saved_count(&game, pot), 64, "the hopper filled the pot");
-    tick(&mut game);
-    assert_eq!(output(&game), 15, "the comparator re-read the saved pot");
+    assert_eq!(saved_count(&*game, pot), 64, "the hopper filled the pot");
+    tick(game);
+    assert_eq!(output(&*game), 15, "the comparator re-read the saved pot");
 }
 
 use sunrise_gameplay_common::game::chat_common::ChatCommonGameExt1 as _;

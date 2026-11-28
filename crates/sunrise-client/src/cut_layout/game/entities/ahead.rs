@@ -19,7 +19,8 @@ mod tests {
     #[ignore = "daily"]
     fn moves_worked_out_ahead_match_those_made_at_each_turn() {
         let mut resources = None;
-        let mut game = server_game(&mut resources);
+        let mut fixture = server_game(&mut resources);
+        let game = fixture.game_mut();
         let feet = sunrise_core::geometry::Vec3::new(8.5, 70.0, 8.5);
         game.player = Some(sunrise_sim::motion::PlayerMotion::new(game.motion, feet).unwrap());
         // `ChunkMap.prepareEntityTickingChunk`: the chunks within 2 are loaded too.
@@ -118,7 +119,7 @@ mod tests {
         let obstacles = sunrise_sim::entities::ObstacleGrid::new(boxes);
         for changed in 0..3 {
             let mut moves = sunrise_gameplay::game::server_side::ahead::Moves::work_out(
-                &game,
+                &*game,
                 &items,
                 &obstacles,
                 &sunrise_gameplay_common::game::native_ticks::TickRound::default(),

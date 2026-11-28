@@ -444,7 +444,8 @@ pub(crate) mod furnace_changed_tests {
     #[ignore = "daily"]
     fn a_finished_smelt_marks_the_chunk() {
         let mut game_resources = None;
-        let mut game = server_game(&mut game_resources);
+        let mut fixture = server_game(&mut game_resources);
+        let game = fixture.game_mut();
         let state = game
             .pack
             .assets
@@ -502,7 +503,8 @@ pub(crate) mod furnace_changed_tests {
         // same tick: it stays LIT, and consuming the fuel sets changed.
         with_burns(|seen| {
             let mut game_resources = None;
-            let mut game = server_game(&mut game_resources);
+            let mut fixture = server_game(&mut game_resources);
+            let game = fixture.game_mut();
             let registry = &game.pack.assets.registry;
             let default = registry.default_state("minecraft:furnace").unwrap();
             let mut lit = registry.state(default).unwrap().clone();
@@ -569,7 +571,8 @@ pub(crate) mod furnace_changed_tests {
         }
         with_burns(|seen| {
             let mut resources = None;
-            let mut game = server_game(&mut resources);
+            let mut fixture = server_game(&mut resources);
+            let game = fixture.game_mut();
             let pos = (8, 64, 8);
             let state = game
                 .pack
@@ -683,7 +686,8 @@ pub(crate) mod furnace_changed_tests {
             write(&pack.join(path), initial);
         }
         let mut resources = None;
-        let mut game = server_game(&mut resources);
+        let mut fixture = server_game(&mut resources);
+        let game = fixture.game_mut();
         let mut request = WorldRequest::new(
             "furnace",
             Some("furnace"),
@@ -805,9 +809,10 @@ pub(crate) mod slot_guard_tests {
     #[ignore = "daily"]
     fn a_slot_is_entered_as_its_mod_before_and_after_an_entry() {
         let mut game_resources = None;
-        let mut game = server_game(&mut game_resources);
+        let mut fixture = server_game(&mut game_resources);
+        let game = fixture.game_mut();
         let mut tick = BlockEntityTick {
-            game: &mut game,
+            game,
             pos: (8, 64, 8),
             kind: TickedKind::Hopper,
             mod_type: None,
@@ -886,16 +891,17 @@ pub(crate) mod slot_mutation_tests {
         test: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>),
     ) {
         let mut game_resources = None;
-        let mut game = server_game(&mut game_resources);
+        let mut fixture = server_game(&mut game_resources);
+        let game = fixture.game_mut();
         game.player = Some(
             sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(8.5, 65.0, 8.5)).unwrap(),
         );
         game.update_chunk_tickets();
         assert!(game.block_ticking_area()(A.0, A.2));
         for (pos, block) in blocks {
-            place(&mut game, *pos, block);
+            place(game, *pos, block);
         }
-        test(&mut game);
+        test(game);
     }
 
     fn stone_above(game: &mut sunrise_gameplay::game::ServerGame<'_>, pos: Pos) {

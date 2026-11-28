@@ -41,11 +41,12 @@ fn place(
 #[ignore = "daily"]
 fn a_brewed_remainder_ignores_the_block_drops_rule() {
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     assert!(game.ui.rules.set("block_drops", Value::Bool(false)));
     let pos = (8, 64, 8);
     place(
-        &mut game,
+        game,
         pos,
         stand(
             [
@@ -87,7 +88,8 @@ fn a_brewed_remainder_ignores_the_block_drops_rule() {
 #[ignore = "daily"]
 fn a_fuel_item_with_no_uses_marks_the_chunk() {
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     let pos = (8, 64, 8);
     let mut fuel = ItemStack::new("minecraft:blaze_powder", 1);
     fuel.data_mut().set_loot_component(
@@ -96,11 +98,7 @@ fn a_fuel_item_with_no_uses_marks_the_chunk() {
             &serde_json::json!({"uses": 0, "speed_multiplier": 1.0}),
         )),
     );
-    place(
-        &mut game,
-        pos,
-        stand([None, None, None, None, Some(fuel)], 0, 0),
-    );
+    place(game, pos, stand([None, None, None, None, Some(fuel)], 0, 0));
     game.world.modified.clear();
 
     game.tick_brewing_stand(pos).expect("the stand ticks");
@@ -124,7 +122,8 @@ fn a_fuel_item_with_no_uses_marks_the_chunk() {
 #[ignore = "daily"]
 fn a_world_pack_provider_sets_the_brew_time() {
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     let dir = std::env::temp_dir().join(format!(
         "sunrise-brewing-world-providers-{}",
         std::process::id()
@@ -174,7 +173,7 @@ fn a_world_pack_provider_sets_the_brew_time() {
     );
     let pos = (8, 64, 8);
     place(
-        &mut game,
+        game,
         pos,
         stand(
             [

@@ -7,7 +7,8 @@ use sunrise_items::item_data::parse_stack;
 #[ignore = "daily"]
 fn signing_a_book_keeps_its_other_components() {
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     let book = parse_stack(
         r#"{id:"minecraft:writable_book",count:1,components:{
             "minecraft:custom_name":"Diary",

@@ -17,8 +17,9 @@ use sunrise_sim::entities::{ExperienceOrb, ItemEntity};
 /// positional sounds it plays recorded.
 pub(crate) fn standing_game<'a>(
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> sunrise_gameplay::game::ServerGame<'a> {
-    let mut game = server_game(resources);
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'a> {
+    let mut fixture = server_game(resources);
+    let game = fixture.game_mut();
     let feet = Vec3::new(8.5, 70.0, 8.5);
     game.player = Some(sunrise_sim::motion::PlayerMotion::new(game.motion, feet).unwrap());
     game.world
@@ -29,7 +30,7 @@ pub(crate) fn standing_game<'a>(
     assert!(game.entity_ticking_area()(8, 8));
     game.server.ticked_entities_through = u32::MAX;
     game.start_audio_capture();
-    game
+    fixture
 }
 
 #[cfg(feature = "client")]
@@ -53,7 +54,8 @@ pub(crate) use crate::game::client_side::item_entities_client::thrown_items_test
 #[ignore = "daily"]
 fn a_thrown_item_takes_the_throwers_random_not_the_levels() {
     let mut resources = None;
-    let mut game = standing_game(&mut resources);
+    let mut fixture = standing_game(&mut resources);
+    let game = fixture.game_mut();
     game.yaw = 0.0;
     game.pitch = 0.0;
     game.common.inventory[game.common.selected] = Some(ItemStack::new("minecraft:stone", 4));
@@ -84,7 +86,8 @@ fn a_thrown_item_takes_the_throwers_random_not_the_levels() {
 #[ignore = "daily"]
 fn a_death_scatter_takes_the_throwers_random_not_the_levels() {
     let mut resources = None;
-    let mut game = standing_game(&mut resources);
+    let mut fixture = standing_game(&mut resources);
+    let game = fixture.game_mut();
     game.inventory[0] = Some(ItemStack::new("minecraft:stone", 2));
     let level = game.world.random.state();
     game.drop_inventory(
@@ -130,7 +133,8 @@ fn a_pickup_pitch_is_not_drawn_from_the_levels_random() {
         return;
     }
     let mut resources = None;
-    let mut game = standing_game(&mut resources);
+    let mut fixture = standing_game(&mut resources);
+    let game = fixture.game_mut();
     game.spawn_item(
         ItemStack::new("minecraft:stone", 2),
         [8.5, 70.0, 8.5],
@@ -277,7 +281,8 @@ fn a_client_take_shrinks_an_item_and_removes_it_only_when_empty() {
 #[ignore = "daily"]
 fn a_burning_items_sound_is_not_drawn_from_the_levels_random() {
     let mut resources = None;
-    let mut game = standing_game(&mut resources);
+    let mut fixture = standing_game(&mut resources);
+    let game = fixture.game_mut();
     let lava = game
         .pack
         .assets
@@ -296,7 +301,7 @@ fn a_burning_items_sound_is_not_drawn_from_the_levels_random() {
     game.dropped[0].ticks = 9;
     let level = game.world.random.state();
     game.tick_items();
-    let (volume, pitch) = server_sound(&mut game, "minecraft:entity.generic.burn");
+    let (volume, pitch) = server_sound(game, "minecraft:entity.generic.burn");
     assert_eq!(volume, 0.4);
     // `2.0 + nextFloat * 0.4`.
     assert!((2.0..2.4).contains(&pitch), "pitch {pitch}");

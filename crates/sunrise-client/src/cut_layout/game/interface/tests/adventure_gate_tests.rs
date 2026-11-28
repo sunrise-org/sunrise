@@ -13,12 +13,13 @@ type Posted = (&'static str, [f64; 3], Option<Who>);
 /// A server's game with nobody playing.
 fn game<'a>(
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> sunrise_gameplay::game::ServerGame<'a> {
-    let mut game = server_game(resources);
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'a> {
+    let mut fixture = server_game(resources);
+    let game = fixture.game_mut();
     game.build_registries();
     game.set_allow_commands(true);
     game.player = None;
-    game
+    fixture
 }
 
 /// A client's game with nobody playing.
@@ -130,7 +131,8 @@ fn an_adventure_click_primes_tnt_only_with_a_can_break_that_names_it() {
         || {
             on_big_stack(|| {
                 let mut resources = None;
-                let mut game = game(&mut resources);
+                let mut fixture = game(&mut resources);
+                let game = fixture.game_mut();
                 assert!(
                     game.ui
                         .rules
@@ -150,7 +152,7 @@ fn an_adventure_click_primes_tnt_only_with_a_can_break_that_names_it() {
                 // No `can_break`: the block stays, the fuse is not lit and the flint and
                 // steel is not worn.
                 *game.held_mut() = Some(ItemStack::new("minecraft:flint_and_steel", 1));
-                let (consumed, events) = click(&mut game, pos);
+                let (consumed, events) = click(game, pos);
                 assert!(
                     consumed,
                     "TntBlock.useItemOn's SUCCESS still ends the click"
@@ -170,7 +172,7 @@ fn an_adventure_click_primes_tnt_only_with_a_can_break_that_names_it() {
                     "minecraft:can_break",
                     "minecraft:tnt",
                 ));
-                let events = click(&mut game, pos).1;
+                let events = click(game, pos).1;
                 assert_eq!(game.tnts.len(), 1);
                 assert_eq!(game.world.block(pos[0], pos[1], pos[2]), air);
                 assert_eq!(game.held().map(|s| s.damage), Some(1));

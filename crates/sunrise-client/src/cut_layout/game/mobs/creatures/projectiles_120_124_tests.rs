@@ -196,15 +196,16 @@ pub(crate) fn vec_bits(v: Vec3) -> [String; 3] {
 
 pub(crate) fn setup_game<'a>(
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> sunrise_gameplay::game::ServerGame<'a> {
-    let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'a> {
+    let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+    let game = fixture.game_mut();
     game.options.dedicated = None;
     let mut player =
         sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(4.5, 64.0, 17.5)).unwrap();
     player.client_loaded = true;
     game.player = Some(player);
     sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(
-        &mut game,
+        game,
         1,
         (413u128 << 96) | 1,
     );
@@ -265,7 +266,7 @@ pub(crate) fn setup_game<'a>(
     ] {
         let _ = game.run_command(command);
     }
-    game
+    fixture
 }
 
 pub(crate) fn clear_arena(game: &mut sunrise_gameplay::game::ServerGame<'_>, backstop_x: i32) {
@@ -392,12 +393,13 @@ fn witness_spectator_player_120() {
 pub(crate) fn run_witness_spectator_player_120() {
     let witness = load_witness();
     let mut resources = None;
-    let mut game = setup_game(&mut resources);
+    let mut fixture = setup_game(&mut resources);
+    let game = fixture.game_mut();
     let mut failures = Vec::new();
 
     for case in &witness.gap_120_spectator {
         let label = format!("120 {} x {}", case.mode, case.projectile);
-        clear_arena(&mut game, 8);
+        clear_arena(game, 8);
         game.world.random.set_seed(witness.level_seed);
         let mode = if case.mode == "spectator" {
             sunrise_command::args::GameMode::Spectator
@@ -523,12 +525,13 @@ fn witness_wind_charge_end_crystal_121() {
 pub(crate) fn run_witness_wind_charge_end_crystal_121() {
     let witness = load_witness();
     let mut resources = None;
-    let mut game = setup_game(&mut resources);
+    let mut fixture = setup_game(&mut resources);
+    let game = fixture.game_mut();
     let mut failures = Vec::new();
 
     for case in &witness.gap_121_wind_crystal {
         let label = format!("121 {}", case.case);
-        clear_arena(&mut game, 9);
+        clear_arena(game, 9);
         game.world.random.set_seed(witness.level_seed);
 
         assert!(game.run_command("summon minecraft:end_crystal 4.25 64.0 4.5 {}"));
@@ -632,12 +635,13 @@ fn witness_trident_enderman_dodge_122() {
 pub(crate) fn run_witness_trident_enderman_dodge_122() {
     let witness = load_witness();
     let mut resources = None;
-    let mut game = setup_game(&mut resources);
+    let mut fixture = setup_game(&mut resources);
+    let game = fixture.game_mut();
     let mut failures = Vec::new();
 
     for case in &witness.gap_122_trident_enderman {
         let label = format!("122 {}", case.case);
-        clear_arena(&mut game, 10);
+        clear_arena(game, 10);
         game.world.random.set_seed(witness.level_seed);
 
         let target_id = match case.case.as_str() {
@@ -672,7 +676,7 @@ pub(crate) fn run_witness_trident_enderman_dodge_122() {
         let cmd = if case.case == "trident_owned_enderman" {
             format!(
                 "summon minecraft:trident 1.5 65.0 4.5 {{Motion:[1.0d,0.0d,0.0d],Owner:{},LeftOwner:1b}}",
-                player_uuid_nbt(&game)
+                player_uuid_nbt(&*game)
             )
         } else {
             "summon minecraft:trident 1.5 65.0 4.5 {Motion:[1.0d,0.0d,0.0d]}".to_owned()
@@ -685,7 +689,7 @@ pub(crate) fn run_witness_trident_enderman_dodge_122() {
         });
 
         for exp in &case.ticks {
-            let (events, sounds) = step_recording(&mut game);
+            let (events, sounds) = step_recording(game);
             let t = game.tridents.iter().find(|t| t.id == tr_id);
             if t.is_some() != exp.proj_alive {
                 failures.push(format!(
@@ -801,7 +805,7 @@ pub(crate) fn run_witness_trident_enderman_dodge_122() {
         .iter()
         .find(|c| c.case == "trident_unowned_enderman")
         .unwrap();
-    clear_arena(&mut game, 10);
+    clear_arena(game, 10);
     game.world.random.set_seed(witness.level_seed);
     assert!(game.run_command("summon minecraft:enderman 3.5 64.0 4.5 {NoAI:1b,Silent:1b}"));
     let enderman_id = game.mobs.last().unwrap().id;
@@ -820,7 +824,7 @@ pub(crate) fn run_witness_trident_enderman_dodge_122() {
     let mob_tr_id = proj.id;
     game.creatures.projectiles.push(proj);
     for exp in &unowned.ticks {
-        let (events, sounds) = step_recording(&mut game);
+        let (events, sounds) = step_recording(game);
         let p = game
             .creatures
             .projectiles
@@ -908,7 +912,8 @@ fn witness_piercing_arrow_multihit_123() {
 pub(crate) fn run_witness_piercing_arrow_multihit_123() {
     let witness = load_witness();
     let mut resources = None;
-    let mut game = setup_game(&mut resources);
+    let mut fixture = setup_game(&mut resources);
+    let game = fixture.game_mut();
     let mut failures = Vec::new();
     let xbow = r#"{id:"minecraft:crossbow",count:1}"#;
 
@@ -919,7 +924,7 @@ pub(crate) fn run_witness_piercing_arrow_multihit_123() {
         } else {
             11
         };
-        clear_arena(&mut game, wall_x);
+        clear_arena(game, wall_x);
         game.world.random.set_seed(witness.level_seed);
 
         let mut tracked_mobs: Vec<(bool, u32)> = Vec::new();
@@ -997,7 +1002,7 @@ pub(crate) fn run_witness_piercing_arrow_multihit_123() {
             other => panic!("unexpected case {other}"),
         }
 
-        let owner = player_uuid_nbt(&game);
+        let owner = player_uuid_nbt(&*game);
         let arrow_cmd = match case.case.as_str() {
             "pierce_two_mobs_same_tick"
             | "pierce_two_phantoms_two_birds"
@@ -1024,7 +1029,7 @@ pub(crate) fn run_witness_piercing_arrow_multihit_123() {
         });
 
         for exp in &case.ticks {
-            let (events, sounds) = step_recording(&mut game);
+            let (events, sounds) = step_recording(game);
             let live = game.creatures.projectiles.iter().find(|p| p.id == arrow_id);
             if live.is_some() != exp.proj_alive {
                 failures.push(format!(
@@ -1097,7 +1102,7 @@ pub(crate) fn run_witness_piercing_arrow_multihit_123() {
             if target_err {
                 break;
             }
-            let two_birds = adv_done(&game, "minecraft:adventure/two_birds_one_arrow");
+            let two_birds = adv_done(&*game, "minecraft:adventure/two_birds_one_arrow");
             if two_birds != exp.two_birds_done {
                 failures.push(format!(
                     "{label} t={}: two_birds_one_arrow expected {} got {two_birds}",
@@ -1105,7 +1110,7 @@ pub(crate) fn run_witness_piercing_arrow_multihit_123() {
                 ));
                 break;
             }
-            let arbalistic = adv_done(&game, "minecraft:adventure/arbalistic");
+            let arbalistic = adv_done(&*game, "minecraft:adventure/arbalistic");
             if arbalistic != exp.arbalistic_done {
                 failures.push(format!(
                     "{label} t={}: arbalistic expected {} got {arbalistic}",
@@ -1516,9 +1521,10 @@ fn witness_review_round1_regressions() {
 pub(crate) fn run_witness_review_round1_regressions() {
     let witness = load_witness();
     let mut resources = None;
-    let mut game = setup_game(&mut resources);
+    let mut fixture = setup_game(&mut resources);
+    let game = fixture.game_mut();
     let mut failures = Vec::new();
-    let owner = player_uuid_nbt(&game);
+    let owner = player_uuid_nbt(&*game);
 
     for case in &witness.review_round1 {
         let label = format!("review {}", case.case);
@@ -1530,7 +1536,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
             "r12_pierce1_crit_three_zombies" => 11,
             _ => 10,
         };
-        clear_arena(&mut game, backstop_x);
+        clear_arena(game, backstop_x);
         game.world.random.set_seed(witness.level_seed);
 
         let mut tracked: BTreeMap<String, ReviewTracked> = BTreeMap::new();
@@ -1541,7 +1547,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "pig".into(),
                     ReviewTracked::Mob(summon_mob_seeded(
-                        &mut game,
+                        game,
                         "summon minecraft:pig 8.5 64.0 4.5 {NoAI:1b,Silent:1b}",
                         seed,
                     )),
@@ -1549,7 +1555,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "potion".into(),
                     ReviewTracked::Proj(summon_proj_seeded(
-                        &mut game,
+                        game,
                         r#"summon minecraft:splash_potion 1.5 64.3 4.5 {Motion:[1.0d,0.0d,0.0d],Item:{id:"minecraft:splash_potion",count:1,components:{"minecraft:potion_contents":{potion:"minecraft:harming"}}}}"#,
                         seed,
                     )),
@@ -1560,7 +1566,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "bottle".into(),
                     ReviewTracked::Proj(summon_proj_seeded(
-                        &mut game,
+                        game,
                         "summon minecraft:experience_bottle 1.5 64.3 4.5 {Motion:[1.0d,0.0d,0.0d]}",
                         seed,
                     )),
@@ -1578,7 +1584,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "potion".into(),
                     ReviewTracked::Proj(summon_proj_seeded(
-                        &mut game,
+                        game,
                         r#"summon minecraft:splash_potion 1.5 64.5 4.5 {Motion:[3.0d,0.0d,0.0d],Item:{id:"minecraft:splash_potion",count:1,components:{"minecraft:potion_contents":{potion:"minecraft:water"}}}}"#,
                         seed,
                     )),
@@ -1596,7 +1602,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "pig".into(),
                     ReviewTracked::Mob(summon_mob_seeded(
-                        &mut game,
+                        game,
                         "summon minecraft:pig 5.5 64.0 4.54 {NoAI:1b,Silent:1b,Health:10.0f}",
                         seed,
                     )),
@@ -1604,7 +1610,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "arrow1".into(),
                     ReviewTracked::Proj(summon_proj_seeded(
-                        &mut game,
+                        game,
                         "summon minecraft:arrow 1.5 64.5 4.96 {Motion:[2.5d,0.0d,0.0d],damage:2.0d}",
                         seed,
                     )),
@@ -1612,7 +1618,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "arrow2".into(),
                     ReviewTracked::Proj(summon_proj_seeded(
-                        &mut game,
+                        game,
                         "summon minecraft:arrow 1.5 64.5 4.96 {Motion:[2.5d,0.0d,0.0d],damage:2.0d}",
                         seed,
                     )),
@@ -1627,7 +1633,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "pig".into(),
                     ReviewTracked::Mob(summon_mob_seeded(
-                        &mut game,
+                        game,
                         "summon minecraft:pig 7.5 64.0 4.5 {NoAI:1b,Silent:1b,Health:10.0f}",
                         seed,
                     )),
@@ -1635,7 +1641,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "rocket".into(),
                     ReviewTracked::Rocket(summon_rocket_seeded(
-                        &mut game,
+                        game,
                         &format!(
                             "summon minecraft:firework_rocket 3.5 64.5 4.5 {{LifeTime:0,ShotAtAngle:1b,Motion:[0.0d,0.0d,0.0d],FireworksItem:{STAR_FIREWORK_ITEM}}}"
                         ),
@@ -1645,7 +1651,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "arrow".into(),
                     ReviewTracked::Proj(summon_proj_seeded(
-                        &mut game,
+                        game,
                         "summon minecraft:arrow 2.5 64.5 4.5 {Motion:[3.0d,0.0d,0.0d],damage:2.0d}",
                         seed,
                     )),
@@ -1669,7 +1675,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "arrow".into(),
                     ReviewTracked::Proj(summon_proj_seeded(
-                        &mut game,
+                        game,
                         "summon minecraft:arrow 1.5 65.0 4.5 {Motion:[9.5d,0.0d,0.0d],PierceLevel:2b,damage:2.0d}",
                         seed,
                     )),
@@ -1685,7 +1691,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                     tracked.insert(
                         "parrot".into(),
                         ReviewTracked::Mob(summon_mob_seeded(
-                            &mut game,
+                            game,
                             "summon minecraft:parrot 3.5 64.0 4.5 {NoAI:1b,Silent:1b,Health:6.0f}",
                             seed,
                         )),
@@ -1694,7 +1700,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                     tracked.insert(
                         "parrot".into(),
                         ReviewTracked::Mob(summon_mob_seeded(
-                            &mut game,
+                            game,
                             "summon minecraft:parrot 3.5 64.0 4.5 {NoAI:1b,Silent:1b,Health:6.0f}",
                             seed,
                         )),
@@ -1708,7 +1714,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "snowball".into(),
                     ReviewTracked::Proj(summon_proj_seeded(
-                        &mut game,
+                        game,
                         "summon minecraft:snowball 1.5 64.3 4.5 {Motion:[2.0d,0.0d,0.0d]}",
                         seed,
                     )),
@@ -1731,7 +1737,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "arrow".into(),
                     ReviewTracked::Proj(summon_proj_seeded(
-                        &mut game,
+                        game,
                         "summon minecraft:arrow 3.0 64.85 4.5 {Motion:[1.5d,0.0d,0.0d],damage:2.0d}",
                         seed,
                     )),
@@ -1741,7 +1747,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "fireball".into(),
                     ReviewTracked::Proj(summon_proj_seeded(
-                        &mut game,
+                        game,
                         "summon minecraft:fireball 3.5 65.0 4.5 {ExplosionPower:1b,acceleration_power:0.0d,Motion:[0.0d,0.0d,0.0d]}",
                         seed,
                     )),
@@ -1749,7 +1755,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "wind".into(),
                     ReviewTracked::Proj(summon_proj_seeded(
-                        &mut game,
+                        game,
                         &format!(
                             "summon minecraft:wind_charge 1.5 65.0 4.5 {{acceleration_power:0.0d,Motion:[1.0d,0.0d,0.0d],Owner:{owner},LeftOwner:1b}}"
                         ),
@@ -1761,7 +1767,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "bullet".into(),
                     ReviewTracked::Proj(summon_proj_seeded(
-                        &mut game,
+                        game,
                         "summon minecraft:shulker_bullet 3.5 65.0 4.5 {Motion:[0.0d,0.0d,0.0d]}",
                         seed,
                     )),
@@ -1769,7 +1775,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "arrow".into(),
                     ReviewTracked::Proj(summon_proj_seeded(
-                        &mut game,
+                        game,
                         "summon minecraft:arrow 1.5 65.0 4.5 {Motion:[1.0d,0.0d,0.0d],damage:2.0d}",
                         seed,
                     )),
@@ -1779,7 +1785,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "wind1".into(),
                     ReviewTracked::Proj(summon_proj_seeded(
-                        &mut game,
+                        game,
                         "summon minecraft:wind_charge 1.5 65.0 4.5 {acceleration_power:0.0d,Motion:[1.0d,0.0d,0.0d]}",
                         seed,
                     )),
@@ -1787,7 +1793,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "wind2".into(),
                     ReviewTracked::Proj(summon_proj_seeded(
-                        &mut game,
+                        game,
                         "summon minecraft:wind_charge 4.5 65.0 4.5 {acceleration_power:0.0d,Motion:[-1.0d,0.0d,0.0d]}",
                         seed,
                     )),
@@ -1797,7 +1803,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 assert!(game.run_command("summon minecraft:oak_boat 2.5 64.0 4.5 {}"));
                 let boat_id = game.boats.last().unwrap().id;
                 let copass_id = summon_mob_seeded(
-                    &mut game,
+                    game,
                     "summon minecraft:pig 2.5 64.0 4.5 {NoAI:1b,Silent:1b,Health:10.0f}",
                     seed,
                 );
@@ -1808,7 +1814,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                     true
                 ));
                 let outside_id = summon_mob_seeded(
-                    &mut game,
+                    game,
                     "summon minecraft:pig 6.5 64.0 4.5 {NoAI:1b,Silent:1b,Health:10.0f}",
                     seed,
                 );
@@ -1819,7 +1825,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "arrow".into(),
                     ReviewTracked::Proj(summon_proj_seeded(
-                        &mut game,
+                        game,
                         &format!(
                             "summon minecraft:arrow 2.5 64.8 4.5 {{Motion:[2.0d,0.0d,0.0d],damage:2.0d,Owner:{owner},LeftOwner:0b}}"
                         ),
@@ -1838,7 +1844,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "rocket".into(),
                     ReviewTracked::Rocket(summon_rocket_seeded(
-                        &mut game,
+                        game,
                         &format!(
                             "summon minecraft:firework_rocket 1.5 64.5 4.5 {{LifeTime:20,ShotAtAngle:1b,Motion:[0.5d,0.0d,0.0d],FireworksItem:{STAR_FIREWORK_ITEM}}}"
                         ),
@@ -1858,7 +1864,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "trident".into(),
                     ReviewTracked::Trident(summon_trident_seeded(
-                        &mut game,
+                        game,
                         "summon minecraft:trident 3.5 64.5 4.5 {Motion:[1.0d,0.0d,0.0d]}",
                         seed,
                     )),
@@ -1875,7 +1881,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "zombie".into(),
                     ReviewTracked::Mob(summon_mob_seeded(
-                        &mut game,
+                        game,
                         "summon minecraft:zombie 3.8 64.0 4.5 {NoAI:1b,Silent:1b,Health:20.0f}",
                         seed,
                     )),
@@ -1883,7 +1889,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "arrow".into(),
                     ReviewTracked::Proj(summon_proj_seeded(
-                        &mut game,
+                        game,
                         "summon minecraft:arrow 1.5 65.3 4.5 {Motion:[3.0d,0.0d,0.0d],damage:2.0d,PierceLevel:0b}",
                         seed,
                     )),
@@ -1898,7 +1904,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "pig".into(),
                     ReviewTracked::Mob(summon_mob_seeded(
-                        &mut game,
+                        game,
                         "summon minecraft:pig 2.5 64.0 4.5 {NoAI:1b,Silent:1b,Health:10.0f}",
                         seed,
                     )),
@@ -1906,7 +1912,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "arrow".into(),
                     ReviewTracked::Proj(summon_proj_seeded(
-                        &mut game,
+                        game,
                         "summon minecraft:arrow 1.5 64.5 4.5 {Motion:[3.0d,0.0d,0.0d],damage:2.0d,PierceLevel:2b}",
                         seed,
                     )),
@@ -1928,7 +1934,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "pig".into(),
                     ReviewTracked::Mob(summon_mob_seeded(
-                        &mut game,
+                        game,
                         "summon minecraft:pig 6.8 64.0 4.5 {NoAI:1b,Silent:1b,Health:10.0f}",
                         seed,
                     )),
@@ -1937,7 +1943,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                     tracked.insert(
                         "proj".into(),
                         ReviewTracked::Proj(summon_proj_seeded(
-                            &mut game,
+                            game,
                             &format!(
                                 "summon minecraft:arrow 1.5 64.5 4.5 {{Motion:[1.5d,0.0d,0.0d],damage:2.0d,Owner:{owner},LeftOwner:1b}}"
                             ),
@@ -1948,7 +1954,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                     tracked.insert(
                         "proj".into(),
                         ReviewTracked::Trident(summon_trident_seeded(
-                            &mut game,
+                            game,
                             &format!(
                                 "summon minecraft:trident 1.5 64.5 4.5 {{Motion:[1.5d,0.0d,0.0d],Owner:{owner},LeftOwner:1b}}"
                             ),
@@ -1962,7 +1968,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                     tracked.insert(
                         k.into(),
                         ReviewTracked::Mob(summon_mob_seeded(
-                            &mut game,
+                            game,
                             &format!(
                                 "summon minecraft:zombie {x} 64.0 4.5 {{NoAI:1b,Silent:1b,Health:20.0f}}"
                             ),
@@ -1973,7 +1979,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "arrow".into(),
                     ReviewTracked::Proj(summon_proj_seeded(
-                        &mut game,
+                        game,
                         "summon minecraft:arrow 1.5 64.5 4.5 {Motion:[4.0d,0.0d,0.0d],damage:2.0d,crit:1b,PierceLevel:1b}",
                         seed,
                     )),
@@ -1983,7 +1989,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "breeze".into(),
                     ReviewTracked::Mob(summon_mob_seeded(
-                        &mut game,
+                        game,
                         "summon minecraft:breeze 3.5 64.0 4.5 {NoAI:1b,Silent:1b}",
                         seed,
                     )),
@@ -1991,7 +1997,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "rocket".into(),
                     ReviewTracked::Rocket(summon_rocket_seeded(
-                        &mut game,
+                        game,
                         &format!(
                             "summon minecraft:firework_rocket 1.5 64.5 4.5 {{LifeTime:20,ShotAtAngle:1b,Motion:[1.0d,0.0d,0.0d],FireworksItem:{STAR_FIREWORK_ITEM}}}"
                         ),
@@ -2003,7 +2009,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "breeze".into(),
                     ReviewTracked::Mob(summon_mob_seeded(
-                        &mut game,
+                        game,
                         "summon minecraft:breeze 3.5 64.0 4.5 {NoAI:1b,Silent:1b}",
                         seed,
                     )),
@@ -2011,7 +2017,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "snowball".into(),
                     ReviewTracked::Proj(summon_proj_seeded(
-                        &mut game,
+                        game,
                         "summon minecraft:snowball 1.5 65.0 4.5 {Motion:[1.0d,0.0d,0.0d]}",
                         seed,
                     )),
@@ -2021,7 +2027,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "breeze".into(),
                     ReviewTracked::Mob(summon_mob_seeded(
-                        &mut game,
+                        game,
                         "summon minecraft:breeze 3.5 64.0 4.5 {NoAI:1b,Silent:1b}",
                         seed,
                     )),
@@ -2029,7 +2035,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "arrow".into(),
                     ReviewTracked::Proj(summon_proj_seeded(
-                        &mut game,
+                        game,
                         "summon minecraft:arrow 3.1 65.0 4.5 {Motion:[0.2d,0.0d,0.0d],NoGravity:1b}",
                         seed,
                     )),
@@ -2039,7 +2045,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "chicken".into(),
                     ReviewTracked::Mob(summon_mob_seeded(
-                        &mut game,
+                        game,
                         "summon minecraft:chicken 3.6 64.5 4.5 {NoAI:1b,Silent:1b,NoGravity:1b,Health:4.0f}",
                         seed,
                     )),
@@ -2052,7 +2058,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "trident".into(),
                     ReviewTracked::Trident(summon_trident_seeded(
-                        &mut game,
+                        game,
                         "summon minecraft:trident 1.5 65.0 4.5 {Motion:[3.0d,0.0d,0.0d]}",
                         seed,
                     )),
@@ -2071,7 +2077,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "trident".into(),
                     ReviewTracked::Trident(summon_trident_seeded(
-                        &mut game,
+                        game,
                         &format!(
                             r#"summon minecraft:trident 1.5 64.5 4.5 {{Motion:[1.0d,0.0d,0.0d],Owner:{owner},LeftOwner:1b,item:{{id:"minecraft:trident",count:1,components:{{"minecraft:enchantments":{{"minecraft:channeling":1}}}}}}}}"#
                         ),
@@ -2089,7 +2095,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "arrow".into(),
                     ReviewTracked::Proj(summon_proj_seeded(
-                        &mut game,
+                        game,
                         "summon minecraft:arrow 1.5 65.0 4.5 {Motion:[1.0d,0.0d,0.0d],Fire:100s}",
                         seed,
                     )),
@@ -2099,7 +2105,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "pig".into(),
                     ReviewTracked::Mob(summon_mob_seeded(
-                        &mut game,
+                        game,
                         "summon minecraft:pig 3.5 64.0 4.5 {NoAI:1b,Silent:1b,Health:20.0f}",
                         seed,
                     )),
@@ -2112,7 +2118,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "arrow".into(),
                     ReviewTracked::Proj(summon_proj_seeded(
-                        &mut game,
+                        game,
                         &format!(
                             r#"summon minecraft:arrow 3.5 65.5 4.5 {{Motion:[{vx},-1.0d,0.0d],damage:1.0d,weapon:{{id:"minecraft:bow",count:1,components:{{"minecraft:enchantments":{{"minecraft:punch":1}}}}}}}}"#
                         ),
@@ -2129,7 +2135,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "spit".into(),
                     ReviewTracked::Proj(summon_proj_seeded(
-                        &mut game,
+                        game,
                         "summon minecraft:llama_spit 1.5 65.0 4.5 {Motion:[1.0d,0.0d,0.0d]}",
                         seed,
                     )),
@@ -2137,7 +2143,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
             }
             "r19_owned_llama_spit_crystal" => {
                 let llama_id = summon_mob_seeded(
-                    &mut game,
+                    game,
                     "summon minecraft:llama 0.5 64.0 20.5 {NoAI:1b,NoGravity:1b,Silent:1b}",
                     seed,
                 );
@@ -2151,7 +2157,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "spit".into(),
                     ReviewTracked::Proj(summon_proj_seeded(
-                        &mut game,
+                        game,
                         &format!(
                             "summon minecraft:llama_spit 1.5 65.0 4.5 {{Motion:[1.0d,0.0d,0.0d],Owner:{llama_uuid},LeftOwner:1b}}"
                         ),
@@ -2168,7 +2174,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "bullet".into(),
                     ReviewTracked::Proj(summon_proj_seeded(
-                        &mut game,
+                        game,
                         "summon minecraft:shulker_bullet 1.5 65.0 4.5 {Motion:[1.0d,0.0d,0.0d]}",
                         seed,
                     )),
@@ -2185,7 +2191,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "arrow".into(),
                     ReviewTracked::Proj(summon_proj_seeded(
-                        &mut game,
+                        game,
                         &format!(
                             "summon minecraft:arrow 1.5 64.5 4.5 {{Motion:[1.0d,0.0d,0.0d],damage:2.0d,Owner:{owner},LeftOwner:1b}}"
                         ),
@@ -2204,7 +2210,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "fireball".into(),
                     ReviewTracked::Proj(summon_proj_seeded(
-                        &mut game,
+                        game,
                         &format!(
                             "summon minecraft:fireball 1.5 64.5 4.5 {{ExplosionPower:1b,acceleration_power:0.0d,Motion:[1.0d,0.0d,0.0d],Owner:{owner},LeftOwner:1b}}"
                         ),
@@ -2223,7 +2229,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "arrow".into(),
                     ReviewTracked::Proj(summon_proj_seeded(
-                        &mut game,
+                        game,
                         "summon minecraft:arrow 1.5 64.5 4.5 {Motion:[1.0d,0.0d,0.0d],Fire:100s}",
                         seed,
                     )),
@@ -2240,19 +2246,19 @@ pub(crate) fn run_witness_review_round1_regressions() {
             "r23_replacement_knot_drops_old_lead" => {
                 assert!(game.run_command("setblock 3 64 4 minecraft:oak_fence"));
                 let pig_a = summon_mob_seeded(
-                    &mut game,
+                    game,
                     "summon minecraft:pig 3.5 64.0 6.5 {NoAI:1b,Silent:1b,leash:[I;3,64,4]}",
                     seed,
                 );
                 game.tick_server(false).unwrap();
                 let arrow = summon_proj_seeded(
-                    &mut game,
+                    game,
                     "summon minecraft:arrow 1.5 64.6 4.5 {Motion:[2.0d,0.0d,0.0d]}",
                     seed,
                 );
                 game.tick_server(false).unwrap();
                 let pig_b = summon_mob_seeded(
-                    &mut game,
+                    game,
                     "summon minecraft:pig 3.5 64.0 2.5 {NoAI:1b,Silent:1b,leash:[I;3,64,4]}",
                     seed,
                 );
@@ -2269,7 +2275,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "rocket".into(),
                     ReviewTracked::Rocket(summon_rocket_seeded(
-                        &mut game,
+                        game,
                         &format!(
                             "summon minecraft:firework_rocket 2.5 64.3 4.5 {{LifeTime:20,ShotAtAngle:1b,Motion:[1.0d,0.0d,0.0d],FireworksItem:{STAR_FIREWORK_ITEM}}}"
                         ),
@@ -2282,7 +2288,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "rocket".into(),
                     ReviewTracked::Rocket(summon_rocket_seeded(
-                        &mut game,
+                        game,
                         &format!(
                             "summon minecraft:firework_rocket 2.5 64.5 4.5 {{LifeTime:20,ShotAtAngle:1b,Motion:[2.0d,0.0d,0.0d],FireworksItem:{PLAIN_FIREWORK_ITEM}}}"
                         ),
@@ -2300,7 +2306,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                     tracked.insert(
                         "pig".into(),
                         ReviewTracked::Mob(summon_mob_seeded(
-                            &mut game,
+                            game,
                             "summon minecraft:pig 5.5 64.0 5.5 {NoAI:1b,Silent:1b,Health:20.0f}",
                             seed,
                         )),
@@ -2309,7 +2315,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                     tracked.insert(
                         "pig".into(),
                         ReviewTracked::Mob(summon_mob_seeded(
-                            &mut game,
+                            game,
                             "summon minecraft:pig 5.5 64.0 5.5 {NoAI:1b,Silent:1b,Health:20.0f}",
                             seed,
                         )),
@@ -2323,7 +2329,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 tracked.insert(
                     "rocket".into(),
                     ReviewTracked::Rocket(summon_rocket_seeded(
-                        &mut game,
+                        game,
                         &format!(
                             "summon minecraft:firework_rocket 3.5 64.5 4.5 {{LifeTime:1,ShotAtAngle:1b,Motion:[0.0d,0.0d,0.0d],FireworksItem:{STAR_FIREWORK_ITEM}}}"
                         ),
@@ -2347,7 +2353,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                         tracked.insert(
                             "proj".into(),
                             ReviewTracked::Proj(summon_proj_seeded(
-                                &mut game,
+                                game,
                                 "summon minecraft:arrow 2.5 64.75 4.5 {Motion:[2.0d,0.0d,0.0d],HasBeenShot:1b}",
                                 seed,
                             )),
@@ -2357,7 +2363,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                         tracked.insert(
                             "proj".into(),
                             ReviewTracked::Trident(summon_trident_seeded(
-                                &mut game,
+                                game,
                                 "summon minecraft:trident 2.5 64.75 4.5 {Motion:[2.0d,0.0d,0.0d],HasBeenShot:1b}",
                                 seed,
                             )),
@@ -2367,7 +2373,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                         tracked.insert(
                             "proj".into(),
                             ReviewTracked::Proj(summon_proj_seeded(
-                                &mut game,
+                                game,
                                 "summon minecraft:snowball 2.5 64.75 4.5 {Motion:[2.0d,0.0d,0.0d],HasBeenShot:1b}",
                                 seed,
                             )),
@@ -2377,7 +2383,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                         tracked.insert(
                             "proj".into(),
                             ReviewTracked::Proj(summon_proj_seeded(
-                                &mut game,
+                                game,
                                 "summon minecraft:wind_charge 2.5 64.75 4.5 {acceleration_power:0.0d,Motion:[2.0d,0.0d,0.0d],HasBeenShot:1b}",
                                 seed,
                             )),
@@ -2387,7 +2393,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                         tracked.insert(
                             "proj".into(),
                             ReviewTracked::Proj(summon_proj_seeded(
-                                &mut game,
+                                game,
                                 "summon minecraft:small_fireball 2.5 64.75 4.5 {acceleration_power:0.0d,Motion:[2.0d,0.0d,0.0d],HasBeenShot:1b}",
                                 seed,
                             )),
@@ -2397,7 +2403,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                         tracked.insert(
                             "proj".into(),
                             ReviewTracked::Proj(summon_proj_seeded(
-                                &mut game,
+                                game,
                                 "summon minecraft:wither_skull 2.5 64.75 4.5 {acceleration_power:0.0d,Motion:[2.0d,0.0d,0.0d],HasBeenShot:1b}",
                                 seed,
                             )),
@@ -2407,7 +2413,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                         tracked.insert(
                             "proj".into(),
                             ReviewTracked::Proj(summon_proj_seeded(
-                                &mut game,
+                                game,
                                 r#"summon minecraft:splash_potion 2.5 64.75 4.5 {Motion:[2.0d,0.0d,0.0d],HasBeenShot:1b,Item:{id:"minecraft:splash_potion",count:1,components:{"minecraft:potion_contents":{potion:"minecraft:water"}}}}"#,
                                 seed,
                             )),
@@ -2417,7 +2423,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                         tracked.insert(
                             "proj".into(),
                             ReviewTracked::Rocket(summon_rocket_seeded(
-                                &mut game,
+                                game,
                                 &format!(
                                     "summon minecraft:firework_rocket 2.5 64.75 4.5 {{LifeTime:20,ShotAtAngle:1b,Motion:[2.0d,0.0d,0.0d],HasBeenShot:1b,FireworksItem:{PLAIN_FIREWORK_ITEM}}}"
                                 ),
@@ -2432,7 +2438,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
         }
 
         for exp in &case.ticks {
-            let (events, sounds) = step_recording(&mut game);
+            let (events, sounds) = step_recording(game);
             let pl_hp = game.player.as_ref().unwrap().health.health();
             if case.case == "r20_large_fireball_thorns_stand" {
                 if (exp.player_health < 20.0) != (pl_hp < 20.0) {
@@ -2502,7 +2508,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 let tr = *tracked
                     .get(k)
                     .unwrap_or_else(|| panic!("{label}: missing {k}"));
-                if !check_review_entity(&game, &label, exp.tick, k, tr, exp_e, &mut failures) {
+                if !check_review_entity(&*game, &label, exp.tick, k, tr, exp_e, &mut failures) {
                     entity_ok = false;
                     break;
                 }
@@ -2615,10 +2621,10 @@ pub(crate) fn run_witness_review_round1_regressions() {
         .iter()
         .find(|c| c.case == "r15_trident_singleton_box_entry")
         .unwrap();
-    clear_arena(&mut game, 10);
+    clear_arena(game, 10);
     game.world.random.set_seed(witness.level_seed);
     let _chicken = summon_mob_seeded(
-        &mut game,
+        game,
         "summon minecraft:chicken 3.6 64.5 4.5 {NoAI:1b,Silent:1b,NoGravity:1b,Health:4.0f}",
         witness.proj_seed,
     );
@@ -2631,13 +2637,13 @@ pub(crate) fn run_witness_review_round1_regressions() {
     let mob_tr_id = proj.id;
     game.creatures.projectiles.push(proj);
     for exp in &r15.ticks {
-        let (events, _) = step_recording(&mut game);
+        let (events, _) = step_recording(game);
         if let Err(msg) = land_positions_match(&events, &exp.game_events) {
             failures.push(format!("review r15_mob_trident t={}: {msg}", exp.tick));
             break;
         }
         if !check_review_entity(
-            &game,
+            &*game,
             "review r15_mob_trident",
             exp.tick,
             "crystal",
@@ -2645,7 +2651,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
             &exp.entities["crystal"],
             &mut failures,
         ) || !check_review_entity(
-            &game,
+            &*game,
             "review r15_mob_trident",
             exp.tick,
             "trident",

@@ -10,10 +10,11 @@ use {
 
 fn with_game(test: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>)) {
     let mut resources = None;
-    let mut g = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+    let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
+    let g = fixture.game_mut();
     g.options.dedicated = Some(Vec::new());
     g.world = World::new(g.res.facts().air, 1);
-    test(&mut g);
+    test(g);
 }
 
 /// One blow: a mob of `kind` holding `hand`, burning or not, its own random

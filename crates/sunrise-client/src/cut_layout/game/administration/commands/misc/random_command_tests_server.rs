@@ -6,7 +6,8 @@ use sunrise_gameplay::game::game_tests::tests::server_game;
 #[ignore = "daily"]
 fn a_blocks_roll_names_the_block_and_the_console_says_server() {
     let mut resources = None;
-    let mut game = server_game(&mut resources);
+    let mut fixture = server_game(&mut resources);
+    let game = fixture.game_mut();
     game.build_registries();
     game.set_allow_commands(true);
     assert!(game.run_command(
@@ -27,11 +28,11 @@ fn a_blocks_roll_names_the_block_and_the_console_says_server() {
         block: Some((0, 200, 0)),
         ..game.server_source()
     };
-    let named = roll(&mut game, block);
+    let named = roll(game, block);
     assert!(named.starts_with("Dice rolled "), "{named}");
     assert!(named.ends_with(" (from 1 to 2)"), "{named}");
     let console = game.server_source();
-    let named = roll(&mut game, console);
+    let named = roll(game, console);
     assert!(named.starts_with("Server rolled "), "{named}");
     assert!(named.ends_with(" (from 1 to 2)"), "{named}");
 }

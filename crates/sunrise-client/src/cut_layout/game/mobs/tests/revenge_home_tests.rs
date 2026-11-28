@@ -17,8 +17,9 @@ const CASES: [(&str, &str); 3] = [
 
 fn game<'a>(
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> sunrise_gameplay::game::ServerGame<'a> {
-    let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'a> {
+    let mut fixture = sunrise_gameplay::game::game_tests::tests::server_game(resources);
+    let game = fixture.game_mut();
     game.build_registries();
     game.set_allow_commands(true);
     for x in 0..9 {
@@ -61,7 +62,7 @@ fn game<'a>(
             assert!(game.run_command(&command), "{command}");
         }
     }
-    game
+    fixture
 }
 
 fn id(game: &sunrise_gameplay::game::ServerGame<'_>, n: usize) -> u32 {
@@ -82,10 +83,11 @@ fn step(game: &mut sunrise_gameplay::game::ServerGame<'_>, ticks: u32) {
 #[ignore = "daily"]
 fn a_zombie_takes_revenge_only_on_a_cow_inside_its_home() {
     let mut resources = None;
-    let mut game = game(&mut resources);
-    step(&mut game, 2);
+    let mut fixture = game(&mut resources);
+    let game = fixture.game_mut();
+    step(game, 2);
     for (i, (name, _)) in CASES.iter().enumerate() {
-        let (zombie, cow) = (id(&game, 2 * i + 1), id(&game, 2 * i + 2));
+        let (zombie, cow) = (id(&*game, 2 * i + 1), id(&*game, 2 * i + 2));
         let z = game.mobs.iter().find(|m| m.id == zombie).unwrap();
         assert_eq!(z.ai.target, None, "{name}: no target before the hit");
         assert!(!z.no_ai, "{name}: the zombie's AI runs");
@@ -110,10 +112,10 @@ fn a_zombie_takes_revenge_only_on_a_cow_inside_its_home() {
         );
         assert_eq!(z.health, 19.0, "{name}: the hit landed");
     }
-    step(&mut game, 20);
+    step(game, 20);
     let mut outcome = Vec::new();
     for (i, (name, _)) in CASES.iter().enumerate() {
-        let (zombie, cow) = (id(&game, 2 * i + 1), id(&game, 2 * i + 2));
+        let (zombie, cow) = (id(&*game, 2 * i + 1), id(&*game, 2 * i + 2));
         let z = game.mobs.iter().find(|m| m.id == zombie).unwrap();
         outcome.push((*name, z.ai.target == Some(Who::Mob(cow))));
     }
