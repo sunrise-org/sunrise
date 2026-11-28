@@ -42,14 +42,14 @@ fn pack_items(
         .collect();
     let (registry, _) = sunrise_world::level::data::load_registry_with_flags(root)?;
     let facts = sunrise_items::blocks::BlockFacts::load(root, &registry)?;
-    Ok(Items::load_registry(
+    Items::load_registry(
         root,
         &registry,
         &facts,
         &PackOverlay::new(&files),
         defaults,
         sunrise_items::items::LoadEntityTags::Prepared,
-    )?)
+    )
 }
 
 pub fn main() -> Result<()> {

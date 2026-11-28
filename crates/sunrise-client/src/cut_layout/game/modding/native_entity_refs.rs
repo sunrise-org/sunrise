@@ -2968,8 +2968,8 @@ pub(crate) mod tests {
     #[ignore = "daily"]
     fn level_reads_whether_a_supplied_state_suffocates_at_a_position() {
         use std::sync::Arc;
-        use sunrise_client::block_entity_anim::{Shulker, ShulkerStatus};
         use sunrise_client::chunk::Chunk;
+        use sunrise_level::shulker_box::{Shulker, ShulkerStatus};
         with_game(|game| {
             game.world
                 .chunks
@@ -3068,6 +3068,7 @@ pub(crate) mod tests {
     /// world's tables, which the server's state owns, through its host and inside a block
     /// callback's level. The side a motion tick lends a friction part keeps the game's own
     /// tables, and so does the client's host, whose state holds no world's packs yet.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_world_pack_decides_the_hosts_table_reads_on_its_side() {
