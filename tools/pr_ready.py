@@ -33,7 +33,6 @@ Progress, and the end of a failed check's output, go to stderr (--verbose: all o
 """
 
 import argparse
-import datetime
 import hashlib
 import json
 import os
@@ -445,15 +444,17 @@ CI_CLIPPY = "python3 tools/ci/check_warnings.py cargo clippy --keep-going --work
 CI_CLIPPY_SERVER = "python3 tools/ci/check_warnings.py cargo clippy --keep-going -p sunrise-client -p sunrise-game -p sunrise-mod-host --all-targets --locked --no-default-features"
 
 
-# CI installs the current stable each run (rustup toolchain install stable), and Rust ships one every six weeks
-# since 1.85.0 on 2025-02-20: so CI's version follows from the date, without the network.
-RUST_TRAIN = (85, datetime.date(2025, 2, 20))
+# CI installs the Rust pinned here through tools/ci/rustup_install.sh, not the current stable.
+RUST_PIN = ROOT / "tools/ci/rust-version"
 
 
-def ci_rust(today):
-    """The minor version of the stable Rust CI runs on this date."""
-    minor, released = RUST_TRAIN
-    return minor + (today - released).days // 42
+def ci_rust(pin=RUST_PIN):
+    """The Rust CI runs, as (major, minor, patch), read from its pin; None when the pin is missing or unreadable."""
+    try:
+        match = re.fullmatch(r"(\d+)\.(\d+)(?:\.(\d+))?", pin.read_text().strip())
+    except OSError:
+        return None
+    return tuple(int(part or 0) for part in match.groups()) if match else None
 
 
 def rust_version():
@@ -466,12 +467,13 @@ def rust_version():
     return tuple(int(part) for part in match.groups()) if match else None
 
 
-def old_rust(version, today):
-    """A warning when this Rust is older than CI's: an older clippy flags lints CI's no longer does."""
-    if version is None or version[:1] != (1,) or version[1] >= ci_rust(today):
+def old_rust(version, ci):
+    """A warning when this Rust is older than CI's pinned one: an older clippy flags lints CI's no longer does."""
+    if version is None or ci is None or version >= ci:
         return None
-    return (f"{'.'.join(map(str, version))} is older than CI's stable (1.{ci_rust(today)}): clippy may flag lints "
-            "CI doesn't, update with `rustup update`")
+    pinned = ".".join(map(str, ci))
+    return (f"{'.'.join(map(str, version))} is older than CI's pinned Rust ({pinned}, tools/ci/rust-version): clippy "
+            f"may flag lints CI doesn't, update with `rustup toolchain install {pinned}`")
 
 
 def mark_old_rust(steps, warning):
@@ -1007,7 +1009,7 @@ def main():
     lock.status, lock.detail = ("fail", problem) if problem else ("pass", "unchanged" if not any(
         p.endswith("Cargo.lock") for p in changed) else "changes with a Cargo.toml")
     run_checks(steps, args.host, args.verbose)
-    warning = old_rust(rust_version(), datetime.date.today()) if args.host == "local" else None
+    warning = old_rust(rust_version(), ci_rust()) if args.host == "local" else None
     if warning and any(step.name.endswith("clippy") and step.skip is None for step in steps):
         print(f"pr_ready: Rust {warning}", file=sys.stderr)
     mark_old_rust(steps, warning)
