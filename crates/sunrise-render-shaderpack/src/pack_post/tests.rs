@@ -48,6 +48,131 @@ fn shadow_cache_key_tracks_world_and_time_changes() {
     );
 }
 
+#[test]
+fn shadow_uniforms_hash_tracks_mod_frame_uniforms_and_previous_values() {
+    use std::hash::Hasher;
+
+    let hash_one = |uniforms: &[(Option<usize>, String, u32)],
+                    mod_uniforms: &[(usize, bool, u32)],
+                    frame_uniforms: &[crate::pack_uniforms::Value],
+                    mod_table: &ModUniformTable| {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        execution::hash_pass_uniforms(
+            "shadowcomp",
+            uniforms,
+            mod_uniforms,
+            frame_uniforms,
+            mod_table,
+            &mut hasher,
+        );
+        hasher.finish()
+    };
+
+    let decls = [
+        ModUniformDecl {
+            name: "uFloat".into(),
+            ty: ModUniformType::Float,
+            previous_name: Some("prevUFloat".into()),
+        },
+        ModUniformDecl {
+            name: "uInt".into(),
+            ty: ModUniformType::Int,
+            previous_name: None,
+        },
+        ModUniformDecl {
+            name: "uVec2".into(),
+            ty: ModUniformType::Vec2,
+            previous_name: None,
+        },
+        ModUniformDecl {
+            name: "uVec3".into(),
+            ty: ModUniformType::Vec3,
+            previous_name: None,
+        },
+        ModUniformDecl {
+            name: "uVec4".into(),
+            ty: ModUniformType::Vec4,
+            previous_name: None,
+        },
+        ModUniformDecl {
+            name: "uMat3".into(),
+            ty: ModUniformType::Mat3,
+            previous_name: None,
+        },
+        ModUniformDecl {
+            name: "uMat4".into(),
+            ty: ModUniformType::Mat4,
+            previous_name: None,
+        },
+    ];
+    let mut table = ModUniformTable::new(&decls);
+    table.advance_frame();
+
+    let all_mod = [
+        (0, false, 64),
+        (1, false, 68),
+        (2, false, 72),
+        (3, false, 80),
+        (4, false, 96),
+        (5, false, 112),
+        (6, false, 160),
+    ];
+    let baseline = hash_one(&[], &all_mod, &[], &table);
+
+    let variants = [
+        ("uFloat", ModUniformValue::Float(0.25)),
+        ("uFloat", ModUniformValue::Float(-0.0)),
+        ("uInt", ModUniformValue::Int(7)),
+        ("uVec2", ModUniformValue::Vec2([0.0, 1.0])),
+        ("uVec3", ModUniformValue::Vec3([0.0, 0.0, 1.0])),
+        ("uVec4", ModUniformValue::Vec4([0.0, 0.0, 0.0, 1.0])),
+        (
+            "uMat3",
+            ModUniformValue::Mat3([[0.0; 3], [0.0; 3], [0.0, 0.0, 2.0]]),
+        ),
+        (
+            "uMat4",
+            ModUniformValue::Mat4([[0.0; 4], [0.0; 4], [0.0; 4], [0.0, 0.0, 0.0, 3.0]]),
+        ),
+    ];
+    for (name, next) in variants {
+        let mut t = ModUniformTable::new(&decls);
+        assert!(t.set(name, next));
+        t.advance_frame();
+        assert_ne!(
+            hash_one(&[], &all_mod, &[], &t),
+            baseline,
+            "{name} = {next:?} must change the shadow uniform hash"
+        );
+    }
+
+    // Previous-frame alias tracking: frame 1 sets current = prev = 0.25; frame 2 updates current
+    // to 0.75 while prev stays 0.25; frame 3 advances prev to 0.75; frame 4 stays steady.
+    let mut hist = ModUniformTable::new(&decls);
+    let curr_only = [(0, false, 64)];
+    let prev_only = [(0, true, 64)];
+    assert!(hist.set("uFloat", ModUniformValue::Float(0.25)));
+    hist.advance_frame();
+    let curr_f1 = hash_one(&[], &curr_only, &[], &hist);
+    let prev_f1 = hash_one(&[], &prev_only, &[], &hist);
+
+    assert!(hist.set("uFloat", ModUniformValue::Float(0.75)));
+    hist.advance_frame();
+    let curr_f2 = hash_one(&[], &curr_only, &[], &hist);
+    let prev_f2 = hash_one(&[], &prev_only, &[], &hist);
+    assert_ne!(curr_f2, curr_f1, "current changed on frame 2");
+    assert_eq!(prev_f2, prev_f1, "previous stayed 0.25 on frame 2");
+
+    hist.advance_frame();
+    let curr_f3 = hash_one(&[], &curr_only, &[], &hist);
+    let prev_f3 = hash_one(&[], &prev_only, &[], &hist);
+    assert_eq!(curr_f3, curr_f2, "current stayed 0.75 on frame 3");
+    assert_ne!(prev_f3, prev_f2, "previous advanced to 0.75 on frame 3");
+
+    hist.advance_frame();
+    assert_eq!(hash_one(&[], &prev_only, &[], &hist), prev_f3);
+}
+
 /// Two textures with a sampler each become two textures sharing one sampler variable.
 #[test]
 fn samplers_of_a_kind_share_one_variable() {

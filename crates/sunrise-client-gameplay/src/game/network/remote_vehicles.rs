@@ -603,10 +603,7 @@ impl crate::game::ClientGame<'_> {
                 .carts
                 .iter()
                 .find(|c| c.id == id)
-                .map(|c| {
-                    c.position
-                        .add_vector(Vec3::new(0.0, super::minecarts::SEAT, 0.0))
-                })
+                .map(|c| sunrise_gameplay_common::game::minecarts::player_cart_seat(c.position))
         } else if let Some(at) =
             self.passenger_riding_position(id, None, None, &std::collections::HashMap::new())
         {

@@ -2,6 +2,7 @@
 //! none once the pack is dropped (`Renderer::keep_pack_sources`), as the game loads, drops and
 //! loads again a pack. The case runs in a process of its own (one event loop, its own resources).
 use super::native_entity_refs::tests::{run_fresh_cases, with_client_game};
+use super::shader_packs::settle_shader_pack;
 use crate::game::native_hooks::particle_count_tests::frame_scene;
 
 const NAME: &str =
@@ -41,10 +42,7 @@ fn terrain_sources_are_kept_only_while_a_pack_is_loaded() {
             return;
         }
         assert!(!renderer.keeps_pack_sources(), "no pack yet");
-        let kept_after = |game: &mut crate::game::ClientGame<'_>, frames: usize| {
-            for _ in 0..frames {
-                game.shader_pack_inputs(camera, camera, 0.0, &sky);
-            }
+        let keeps = |game: &crate::game::ClientGame<'_>| {
             game.client
                 .renderer
                 .0
@@ -52,16 +50,19 @@ fn terrain_sources_are_kept_only_while_a_pack_is_loaded() {
                 .unwrap()
                 .keeps_pack_sources()
         };
-        // The first frame turns the resource packs' material maps on and reloads them, the
-        // next loads the pack, and the one after meshes with its sources.
         game.client.settings.sunrise.shader_pack = pack.to_str().unwrap().to_owned();
-        assert!(kept_after(game, 3), "loaded");
+        settle_shader_pack(game, (0, None));
+        assert!(keeps(game), "loaded");
         assert!(game.client.streaming.shader_pack);
         // Dropped: the next frame unloads it, the one after meshes without sources.
         game.client.settings.sunrise.shader_pack = String::new();
-        assert!(!kept_after(game, 2), "dropped");
+        for _ in 0..2 {
+            game.shader_pack_inputs(camera, camera, 0.0, &sky);
+        }
+        assert!(!keeps(game), "dropped");
         assert!(!game.client.streaming.shader_pack);
         game.client.settings.sunrise.shader_pack = pack.to_str().unwrap().to_owned();
-        assert!(kept_after(game, 3), "loaded again");
+        settle_shader_pack(game, (0, None));
+        assert!(keeps(game), "loaded again");
     });
 }

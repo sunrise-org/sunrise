@@ -209,6 +209,11 @@ pub struct Creatures {
     pub seen_buf: Vec<Seen>,
     /// Per-tick scratch retained between creature ticks.
     pub event_buf: Vec<MobEvent>,
+    pub keep_buf: Vec<bool>,
+    pub seen_grid: sunrise_sim::mobs::seen_grid::SeenGrid,
+    pub seen_index: sunrise_level::fast_hash::FxHashMap<u32, u32>,
+    pub villager_slots_buf: Vec<u32>,
+    pub solid_slots_buf: Vec<u32>,
     pub pickable_projectile_targets: Vec<sunrise_sim::projectiles::TargetCandidate>,
     pub arrow_hit_scratch: sunrise_sim::entities::arrows::ArrowHitScratch,
     /// For each arrow an entity hit in this projectile tick, the projectiles

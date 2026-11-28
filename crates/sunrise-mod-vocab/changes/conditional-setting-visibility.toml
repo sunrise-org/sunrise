@@ -1,0 +1,3 @@
+ids = ["method:SettingsRegistrar::show_setting_when_choice", "type:SettingError.InvalidVisibility"]
+why = "Adds choice-dependent visibility to native mod settings pages. A mod registers its choice controller before the dependent setting and calls `show_setting_when_choice` after both registrations; the earlier-setting rule makes cycles impossible while hidden settings keep their persisted values."
+migrate = "Additive. Register each controller before the row it controls, then call `show_setting_when_choice(key, controller, choice)` after registering both. Missing keys return `UnknownSetting`; invalid references return `InvalidVisibility`."

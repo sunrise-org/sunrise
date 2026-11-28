@@ -287,14 +287,19 @@ impl crate::game::ServerGame<'_> {
             order.sort_unstable_by_key(|&slot| mobs[slot].join);
             order
         });
-        let mut keep = vec![true; original_len];
-        let mut grid =
-            sunrise_sim::mobs::seen_grid::SeenGrid::new(snapshot.iter().map(|s| s.bounds));
+        let mut keep = std::mem::take(&mut self.common.creatures.keep_buf);
+        keep.clear();
+        keep.resize(original_len, true);
+        let mut grid = std::mem::take(&mut self.common.creatures.seen_grid);
+        grid.rebuild(snapshot.iter().map(|s| s.bounds));
         // Snapshot slots stay stable when the owning list changes order.
         let mut positions: Vec<Option<usize>> = Vec::new();
-        let mut index = sunrise_level::fast_hash::FxHashMap::<u32, u32>::default();
-        let mut villager_slots = Vec::new();
-        let mut solid_slots = Vec::new();
+        let mut index = std::mem::take(&mut self.common.creatures.seen_index);
+        index.clear();
+        let mut villager_slots = std::mem::take(&mut self.common.creatures.villager_slots_buf);
+        villager_slots.clear();
+        let mut solid_slots = std::mem::take(&mut self.common.creatures.solid_slots_buf);
+        solid_slots.clear();
         for (i, s) in snapshot.iter().enumerate() {
             index.entry(s.id).or_insert(i as u32);
             if s.may_block_mobs() {
@@ -1547,8 +1552,7 @@ impl crate::game::ServerGame<'_> {
                         solid_slots.push(slot as u32);
                     }
                 }
-                grid =
-                    sunrise_sim::mobs::seen_grid::SeenGrid::new(snapshot.iter().map(|s| s.bounds));
+                grid.rebuild(snapshot.iter().map(|s| s.bounds));
             }
             if let Some(writes) = self.common.world.path_writes.as_mut() {
                 path_writes.append(writes);
@@ -1562,7 +1566,7 @@ impl crate::game::ServerGame<'_> {
         laps.lap("creature_loop");
         if dispatch_panic.is_none() && state.stand_result.is_ok() {
             if positions.is_empty() {
-                let mut flags = keep.into_iter();
+                let mut flags = keep.iter().copied();
                 retain_mob_rows(&mut mobs, &mut player_credit, |_| {
                     flags.next().unwrap_or(true)
                 });
@@ -1579,6 +1583,15 @@ impl crate::game::ServerGame<'_> {
                 sunrise_sim::mobs::apply_mob_pushes(m, &mut pushes);
             }
         }
+        keep.clear();
+        self.common.creatures.keep_buf = keep;
+        self.common.creatures.seen_grid = grid;
+        index.clear();
+        self.common.creatures.seen_index = index;
+        villager_slots.clear();
+        self.common.creatures.villager_slots_buf = villager_slots;
+        solid_slots.clear();
+        self.common.creatures.solid_slots_buf = solid_slots;
         sunrise_sim::mobs::living::section_writes::finish();
         drop(live_section_observer);
         // Keep the reusable write storage for the next pass; the live-row callback has already

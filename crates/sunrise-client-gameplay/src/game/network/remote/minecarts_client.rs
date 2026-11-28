@@ -145,7 +145,7 @@ mod tests {
         atomic::{AtomicUsize, Ordering},
     };
     use sunrise_gameplay_common::game::Screen;
-    use sunrise_gameplay_common::game::minecarts::{CartKind, Minecart, SEAT};
+    use sunrise_gameplay_common::game::minecarts::{CartKind, Minecart, player_cart_seat};
     use sunrise_protocol::connection::Pipe;
     use sunrise_sim::motion::PlayerMotion;
 
@@ -223,7 +223,11 @@ mod tests {
 
                 // A quarter of the way from the old cart position to its first queued step,
                 // plus the seat and the local player's interpolated eye height.
-                let expected = [18.0, (65.0 + SEAT) + 1.0, 28.0];
+                let expected = [
+                    18.0,
+                    player_cart_seat(Vec3::new(18.0, 65.0, 28.0)).y + 1.0,
+                    28.0,
+                ];
                 let (position, _, _, roll) = game.frame_camera(0.75).unwrap();
                 assert_eq!(position.to_array(), expected);
                 assert_eq!(roll, 0.0);

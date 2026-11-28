@@ -217,13 +217,27 @@ impl crate::game::ServerGame<'_> {
         self.seated_passenger_count(b.id) < b.max_passengers() && !b.under_water()
     }
     /// Where the player in boat `i` sits: in the middle alone, in front of a
-    /// mob.
+    /// mob, behind a player who got in first (`getPassengers().indexOf`).
     pub(in crate::game) fn server_player_boat_seat(&self, i: usize) -> Vec3 {
         let b = &self.common.entities.boats[i];
         let players = self.boat_players(b.id);
         // The seated list, with the rider counted before its own link exists.
-        let count = self.passenger_order(b.id).len() + usize::from(players == 0);
-        b.seat(0, count, false, PLAYER_RIDING_OFFSET, false)
+        let order = self.passenger_order(b.id);
+        let count = order.len() + usize::from(players == 0);
+        let own = self.riding_player().map(|(id, _)| id);
+        let index = order.iter().position(|&id| Some(id) == own).unwrap_or(0);
+        b.seat(index, count, false, PLAYER_RIDING_OFFSET, false)
+    }
+    /// `AbstractBoat.positionRider` for the acting player in boat `i`, at the mount and every tick
+    /// after it: its seat, and `clampRotation` keeping its look within 105 degrees of the boat. A
+    /// server player is not authoritative there, so the boat's own turn is not added.
+    pub(in crate::game) fn position_boat_player(&mut self, i: usize) -> Vec3 {
+        self.common.yaw = sunrise_level::camera_math::clamp_boat_rotation(
+            self.common.yaw,
+            self.common.boats[i].yaw,
+        )
+        .0;
+        self.player_boat_seat(i)
     }
     /// `getRootVehicle` of mob `j`: the mob or boat at the bottom of what it
     /// rides, None when it rides nothing.
@@ -705,6 +719,7 @@ impl VehicleMobs {
     }
 }
 
+use sunrise_gameplay_common::game::boats_common::BoatsCommonGameExt1 as _;
 use sunrise_gameplay_common::game::tables::GameItems as _;
 
 #[cfg(test)]
@@ -714,6 +729,7 @@ use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCo
 use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt6 as _;
 
 use sunrise_gameplay_common::game::passengers_common::PassengersCommonGameExt1 as _;
+use sunrise_gameplay_common::game::passengers_common::PassengersCommonGameExt2 as _;
 
 use sunrise_gameplay_common::game::player_identity::PlayerIdentityGameExt1 as _;
 

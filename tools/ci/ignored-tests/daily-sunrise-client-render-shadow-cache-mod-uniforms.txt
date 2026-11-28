@@ -1,0 +1,2 @@
+# Shadow cache tracks mod frame uniforms read by shadow passes and their compute stages (#6709).
+sunrise-client-render gfx::pack_post::mod_pack_binding_tests::shadow_cache_tracks_mod_frame_uniforms_without_shadow_mod_draws lib daily gpu

@@ -24,6 +24,18 @@ pub fn setting_category(mod_id: &str, key: &str) -> Option<&'static str> {
     })
 }
 
+/// The choice setting and option index that control whether `key` is shown on its mod page.
+pub fn setting_visibility(mod_id: &str, key: &str) -> Option<(&'static str, usize)> {
+    installed().and_then(|installed| {
+        installed
+            .keys
+            .setting_visibility
+            .iter()
+            .find(|(owner, k, _, _)| *owner == mod_id && k == key)
+            .map(|(_, _, controller, choice)| (controller.as_str(), *choice))
+    })
+}
+
 /// Mint an owner-bound [`SettingKey`](crate::SettingKey) during registration.
 pub fn setting_key(owner: &'static str, slot: usize) -> crate::SettingKey {
     crate::SettingKey { owner, slot }
@@ -129,6 +141,21 @@ pub trait SettingsRegistrar {
     /// Called from `Hooks::register`, after `register_setting` for the same key; a key
     /// the calling mod never registered, or an empty category, is refused.
     fn categorize_setting(&mut self, key: &str, category: &str) -> Result<(), crate::SettingError>;
+
+    /// Show the setting `key` on Options > Mods only when the calling mod's earlier choice
+    /// setting `controller` currently has the zero-based option `choice`. Register the controller
+    /// before `key`, then call this after both settings are registered. The controller must be a
+    /// choice and `choice` one of its options. The setting stays registered and its saved value is
+    /// retained while hidden. A later valid call replaces the condition; an invalid call leaves
+    /// the previous condition unchanged. Missing keys return `UnknownSetting`; self-reference,
+    /// a controller registered after the dependent setting, a non-choice controller, or an
+    /// out-of-range choice returns `InvalidVisibility`.
+    fn show_setting_when_choice(
+        &mut self,
+        key: &str,
+        controller: &str,
+        choice: usize,
+    ) -> Result<(), crate::SettingError>;
 
     /// Register the screen the Mods screen's Config button opens for the calling mod
     /// (NeoForge's `IConfigScreenFactory`, registered with `ModContainer.registerExtensionPoint`).

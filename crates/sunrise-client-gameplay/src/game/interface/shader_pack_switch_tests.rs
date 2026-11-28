@@ -3,6 +3,7 @@
 //! the frame after; and its `entity.properties` alone decides the id of an entity it lacks. Each
 //! case runs in a process of its own (one event loop, its own resources).
 use super::native_entity_refs::tests::{run_fresh_cases, with_client_game};
+use super::shader_packs::settle_shader_pack;
 use crate::game::native_hooks::particle_count_tests::frame_scene;
 
 const NAME: &str =
@@ -34,15 +35,11 @@ fn a_packs_separate_ao_reaches_the_terrain() {
     with_client_game(|game| {
         let _event_loop = frame_scene(game);
         game.client.settings.sunrise.shader_pack = pack.to_str().unwrap().to_owned();
-        let sky = sunrise_level::environment::Sky::default();
-        let camera = glam::DVec3::new(0.5, 65.5, 0.5);
-        // The first frame turns the resource packs' material maps on and reloads them; the
-        // next loads the pack.
-        for _ in 0..2 {
-            game.shader_pack_inputs(camera, camera, 0.0, &sky);
-        }
+        settle_shader_pack(game, (0, None));
         let ids = game.client.pack_ids.as_ref().expect("the pack loads");
         assert!(ids.separate_ao);
+        let sky = sunrise_level::environment::Sky::default();
+        let camera = glam::DVec3::new(0.5, 65.5, 0.5);
         game.shader_pack_inputs(camera, camera, 0.0, &sky);
         assert!(game.client.streaming.separate_ao);
     });
@@ -81,13 +78,7 @@ fn a_packs_missing_entity_id_follows_its_entity_file() {
     with_client_game(|game| {
         let _event_loop = frame_scene(game);
         game.client.settings.sunrise.shader_pack = pack.to_str().unwrap().to_owned();
-        let sky = sunrise_level::environment::Sky::default();
-        let camera = glam::DVec3::new(0.5, 65.5, 0.5);
-        // The first frame turns the resource packs' material maps on and reloads them; the
-        // next loads the pack.
-        for _ in 0..2 {
-            game.shader_pack_inputs(camera, camera, 0.0, &sky);
-        }
+        settle_shader_pack(game, (0, None));
         assert!(game.client.pack_ids.is_some(), "the pack loads");
         let id = |name| game.entity_part_span(0, name, false).unwrap().id;
         assert_eq!(id("minecraft:creeper"), unmapped);

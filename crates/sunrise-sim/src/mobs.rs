@@ -4833,10 +4833,27 @@ impl Mob {
         visible: bool,
     ) -> bool {
         let effect = sunrise_game_data::potions::namespaced(effect);
-        let mut incoming = crate::effects::EffectInstance::new(effect, ticks, amplifier);
-        incoming.ambient = ambient;
-        incoming.visible = visible;
+        // `new MobEffectInstance(effect, duration, amplifier, ambient, visible)`: the icon shows
+        // exactly when the particles do.
+        let incoming = crate::effects::EffectInstance::new(effect, ticks, amplifier)
+            .with_flags(ambient, visible);
         self.add_effect_instance(effect, incoming)
+    }
+
+    /// One of `extra.effects` as vanilla's `MobEffectInstance` (`getActiveEffects`): its ambient
+    /// and particle flags, without the hidden instances behind it.
+    pub fn active_effect(&self, stored: &StoredEffect) -> crate::effects::EffectInstance {
+        crate::effects::EffectInstance {
+            id: stored.id,
+            registry_index: stored.registry_index,
+            duration: stored.duration,
+            amplifier: stored.amplifier,
+            ambient: self.extra.ambient_effects.contains(&stored.id),
+            visible: !self.extra.hidden_effects.contains(&stored.id),
+            show_icon: stored.show_icon,
+            client_blend: (false, false),
+            hidden: None,
+        }
     }
 
     /// Apply an already resolved effect instance through the same update path as content input.
@@ -4850,20 +4867,7 @@ impl Mob {
         incoming.id = effect;
         let index = self.extra.effects.iter().position(|e| e.id == effect);
         let mut active = if let Some(i) = index {
-            let stored = &self.extra.effects[i];
-            let mut active = crate::effects::EffectInstance {
-                id: stored.id,
-                registry_index: stored.registry_index,
-                duration: stored.duration,
-                amplifier: stored.amplifier,
-                ambient: false,
-                visible: true,
-                show_icon: stored.show_icon,
-                client_blend: (false, false),
-                hidden: None,
-            };
-            active.ambient = self.extra.ambient_effects.contains(&effect);
-            active.visible = !self.extra.hidden_effects.contains(&effect);
+            let mut active = self.active_effect(&self.extra.effects[i]);
             if let Some(i) = self.extra.effect_chains.iter().position(|e| e.id == effect) {
                 active.hidden = Some(Box::new(self.extra.effect_chains.remove(i)));
             }
@@ -6519,9 +6523,13 @@ mod magic_absorb_tests {
                 None,
             );
         }
+        // Added without particles, so without its icon (the five-argument MobEffectInstance).
         assert_eq!(
             m.extra.effects,
-            vec![crate::mobs::StoredEffect::new("minecraft:speed", 3, 0)]
+            vec![crate::mobs::StoredEffect {
+                show_icon: false,
+                ..crate::mobs::StoredEffect::new("minecraft:speed", 3, 0)
+            }]
         );
         assert!(m.extra.ambient_effects.contains(&"minecraft:speed"));
         assert!(m.extra.hidden_effects.contains(&"minecraft:speed"));

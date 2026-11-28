@@ -859,7 +859,8 @@ impl Translated {
     }
 }
 
-/// A compute shader, expanded, translated and validated ([`translate_compute`]).
+/// A compute shader, expanded, translated and validated ([`translate_compute`],
+/// [`translate_compute_expanded`]).
 #[derive(Debug)]
 pub struct ComputeTranslated {
     pub module: naga::Module,
@@ -877,7 +878,8 @@ pub struct ComputeTranslated {
 
 /// One GLSL 450 compute shader under `inputs`, whose extra bindings are in
 /// [`Inputs::extra_set`] (a compute pipeline has one bind group, the mod's, so callers use set
-/// `0`). `layout(local_size_x = ..., local_size_y = ..., local_size_z = ...) in;` declares the
+/// `0`). Expands includes under `inputs.defines` and delegates to [`translate_compute_expanded`].
+/// `layout(local_size_x = ..., local_size_y = ..., local_size_z = ...) in;` declares the
 /// workgroup size; the caller checks it, [`ComputeTranslated::workgroup_storage_bytes`] and
 /// [`ComputeTranslated::uses_subgroup`] against the device's limits and features, as only it
 /// knows them. `in` and `out` variables are refused: a compute shader has no stage interface.
@@ -889,10 +891,32 @@ pub fn translate_compute(
     inputs: &Inputs,
     interface: InterfaceLimits,
 ) -> Result<ComputeTranslated, Vec<Error>> {
+    let expanded = expand_includes(text, file, dir, inputs.includes, Some(inputs.defines))
+        .map_err(|e| vec![Error::from(e).with_stage(ShaderStage::Compute)])?;
+    translate_compute_expanded(expanded, inputs, interface)
+}
+
+/// Translate and validate a GLSL 450 compute shader whose includes have already been expanded
+/// ([`Expanded`]).
+///
+/// The caller must produce `expanded` with [`expand_includes`] using the same ordered
+/// `Some(inputs.defines)` slice passed in `inputs`. Takes `expanded` by value and reuses it
+/// directly without reading [`Inputs::includes`] again, so callers that inspect or guard the
+/// expanded source before translation share a single include expansion with the translator.
+/// [`Inputs::defines`] is still passed to [`run_directives`] to expand macros in the rewritten
+/// shader body. Authored file, line and column locations carried by `expanded` are preserved on
+/// diagnostics where a source position is known (stage-level refusals such as binding overflow or
+/// a missing `main` report `expanded.file()` at line 0, column 0).
+///
+/// Extra bindings are placed in [`Inputs::extra_set`]; `in` and `out` variables are refused, and
+/// a refusal carries [`ShaderStage::Compute`].
+pub fn translate_compute_expanded(
+    mut expanded: Expanded,
+    inputs: &Inputs,
+    interface: InterfaceLimits,
+) -> Result<ComputeTranslated, Vec<Error>> {
     let stage = ShaderStage::Compute;
     let refused = |e: Error| vec![e.with_stage(stage)];
-    let mut expanded = expand_includes(text, file, dir, inputs.includes, Some(inputs.defines))
-        .map_err(|e| refused(e.into()))?;
     expanded.lines = glsl_fixups::fixups(expanded.lines);
     texel_fetches(&mut expanded.lines);
     let glue = Glue {
@@ -905,7 +929,8 @@ pub fn translate_compute(
         interface,
     };
     let mut names = Names::new(
-        other_binding_base(inputs).map_err(|message| refused(Error::new(file, 0, message)))?,
+        other_binding_base(inputs)
+            .map_err(|message| refused(Error::new(expanded.file(), 0, message)))?,
     );
     let code = rewrite(&expanded, stage, inputs, &glue, &mut names).map_err(refused)?;
     // The directives run on the rewritten stage, the program's defines first, as for the other
@@ -914,7 +939,7 @@ pub fn translate_compute(
     let (module, info) = compile(stage, &parsed, &names, &|_| false, interface)?;
     let Some(entry) = module.entry_points.first() else {
         return Err(refused(Error::new(
-            file,
+            expanded.file(),
             0,
             "the compute shader has no `main`",
         )));

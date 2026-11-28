@@ -9,8 +9,9 @@
 //! here with the rider's input (`ServerPlayer.getLastClientMoveIntent`).
 //! Sneaking gets out (`Player.rideTick`: `wantsToStopRiding`), and the client
 //! is teleported where the player lands (`ServerPlayer.dismountTo`).
-use super::{Dim, Keys, lan::LanHost, minecarts::SEAT};
+use super::{Dim, Keys, lan::LanHost};
 use sunrise_core::geometry::{Axis, Vec3};
+use sunrise_gameplay_common::game::minecarts::player_cart_seat;
 use sunrise_level::collisions::SceneCollisions;
 use sunrise_protocol::{
     packets::play::{self, Clientbound as C},
@@ -257,7 +258,7 @@ impl crate::game::ServerGame<'_> {
                     game.dismount(i);
                     return None;
                 }
-                let p = game.player_boat_seat(i);
+                let p = game.position_boat_player(i);
                 // AbstractBoat.positionRider's clampRotation sets the raw body yaw.
                 if let Some(player) = &mut game.common.player {
                     player.body_yaw = game.common.entities.boats[i].yaw;
@@ -362,7 +363,7 @@ impl crate::game::ServerGame<'_> {
                     .carts
                     .iter()
                     .find(|c| c.id == vehicle)
-                    .map(|c| (c.position, c.position.add_vector(Vec3::new(0.0, SEAT, 0.0))))
+                    .map(|c| (c.position, player_cart_seat(c.position)))
             })
             .or_else(|| {
                 self.common

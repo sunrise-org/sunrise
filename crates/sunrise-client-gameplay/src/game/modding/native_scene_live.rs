@@ -6,7 +6,7 @@
 //! prepared for drawing only as `DrawContext::entity` prepares them. Nothing of it reaches
 //! the client's level, its particle engine or its sounds. A scene of blocks alone never
 //! comes here.
-use super::native_scene::{SceneBlock, SceneQuad, face_shade, shaded};
+use super::native_scene::{SceneBlock, SceneQuad, face_shade, shaded, valid_scale};
 use glam::{DVec3, Quat, Vec3};
 use mod_api::{
     GuiEntity, GuiEntityError, SCENE_ANIMATE_PICKS, SCENE_CATCH_UP, SCENE_MAX_ANIMATING,
@@ -151,12 +151,15 @@ pub fn lives(scene: &Scene) -> bool {
         || scene.clock.is_some_and(|c| c.animate_blocks)
 }
 
-/// A living scene's input, checked before anything is kept or drawn: its clock.
+/// A living scene's structural input, checked before the scene table is borrowed or anything
+/// is budgeted, kept, or drawn: box, view (including positive finite `scale`), entity/particle
+/// caps, clock, and entity/particle placements and angles. Particle options and entity
+/// handles/types/data are validated next.
 pub fn check(rect: [f32; 4], scene: &Scene, view: SceneView) -> Result<SceneClock, SceneError> {
     let finite = rect.iter().chain(&view.center).all(|v| v.is_finite())
         && view.yaw.is_finite()
         && view.pitch.is_finite();
-    if !finite {
+    if !finite || !valid_scale(view.scale) {
         return Err(SceneError::BadView);
     }
     if scene.entities.len() > SCENE_MAX_ENTITIES {
@@ -200,11 +203,14 @@ fn entity_refusal(error: GuiEntityError, index: u32) -> SceneError {
 impl crate::game::ClientGame<'_> {
     /// `DrawContext::draw_scene`: `blocks` (`scene.blocks`, prepared) into `rect` seen as
     /// `view` says. A scene of blocks alone takes the block-only path before any state
-    /// work: no clock read, nothing kept. A living one is drawn with its entities and the
-    /// particles its clock ticks. Refused whole, nothing drawn and nothing kept, for input
-    /// that fails `check`, an entity `DrawContext::entity` refuses or a particle; past the
-    /// frame's animating budget the blocks and the scene's last state are drawn, its clock
-    /// does not advance, and the call returns `TooManyScenes`.
+    /// work: nothing kept (if `scene.clock` has a finite partial, it still supplies block
+    /// animation time). A living one is drawn with its entities and the particles its clock
+    /// ticks. Refused whole, before borrowing the scene table and with nothing drawn, budgeted,
+    /// or kept, for input that fails `check`, an unknown particle, or an invalid
+    /// `GuiEntity::Existing`; past the frame's animating budget the blocks and the scene's
+    /// last state are drawn, its clock does not advance, and the call returns `TooManyScenes`;
+    /// within the budget a fresh scene prepares its remaining entities once (reusing the
+    /// already-prepared `Existing` actors in their original slots) and refuses if one fails.
     pub fn native_draw_scene(
         &self,
         batch: &mut HudBatch,
@@ -290,7 +296,7 @@ impl crate::game::ClientGame<'_> {
         }
         let fresh = at.is_none_or(|i| !same(&scenes.live[i]) || clock.tick < scenes.live[i].tick);
         let i = if fresh {
-            let made = self.live_scene(blocks, scene, owner, clock, key)?;
+            let made = self.live_scene(blocks, scene, owner, clock, key, existing)?;
             match at {
                 Some(i) => {
                     scenes.live[i] = made;
@@ -307,13 +313,15 @@ impl crate::game::ClientGame<'_> {
                 }
             }
         } else {
-            at.unwrap_or_default()
+            let slot = at.unwrap_or_default();
+            let l = &mut scenes.live[slot];
+            for (index, mob) in existing {
+                l.mobs[index] = mob;
+            }
+            slot
         };
         let l = &mut scenes.live[i];
         l.frame = frame;
-        for (index, mob) in existing {
-            l.mobs[index] = mob;
-        }
         self.advance_live_scene(l, clock, &added);
         for (mob, e) in l.mobs.iter_mut().zip(&scene.entities) {
             pose(mob, e, clock);
@@ -375,8 +383,10 @@ impl crate::game::ClientGame<'_> {
     }
 
     /// A new kept scene: a level of `blocks`, an empty particle engine on the GUI atlas
-    /// held to `SCENE_MAX_PARTICLES`, and `scene`'s entities prepared as
-    /// `DrawContext::entity` prepares them (made for drawing only, nothing joins a level).
+    /// held to `SCENE_MAX_PARTICLES`, and `scene`'s entities prepared once — reusing the
+    /// already-prepared `Existing` actors from `existing` in their original slots and
+    /// preparing the remaining entries as `DrawContext::entity` prepares them (made for
+    /// drawing only, nothing joins a level).
     fn live_scene(
         &self,
         blocks: &[SceneBlock<'_>],
@@ -384,12 +394,19 @@ impl crate::game::ClientGame<'_> {
         owner: &'static str,
         clock: SceneClock,
         key: u64,
+        existing: Vec<(usize, Mob)>,
     ) -> Result<Live, SceneError> {
+        let mut prepared_existing = existing.into_iter().peekable();
         let mut mobs = Vec::with_capacity(scene.entities.len());
         for (index, e) in (0u32..).zip(&scene.entities) {
-            let mob = self
-                .prepare_gui_entity(&e.entity)
-                .map_err(|error| entity_refusal(error, index))?;
+            let mob = if let Some((_, mob)) =
+                prepared_existing.next_if(|&(slot, _)| slot == index as usize)
+            {
+                mob
+            } else {
+                self.prepare_gui_entity(&e.entity)
+                    .map_err(|error| entity_refusal(error, index))?
+            };
             mobs.push(mob);
         }
         let mut world = World::new(self.common.res.facts().air, 0);

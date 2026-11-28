@@ -1,7 +1,7 @@
 use std::sync::Mutex;
 use sunrise_core::nbt::Tag;
 use sunrise_gameplay_common::game::minecarts::{
-    Arc, CartKind, InteractTarget, Keys, Minecart, SEAT, Vec3,
+    Arc, CartKind, InteractTarget, Keys, Minecart, Vec3, player_cart_seat,
 };
 use sunrise_items::items::ItemStack;
 use sunrise_mod_runtime::attachments::{
@@ -295,7 +295,7 @@ fn a_bound_cart_commits_the_ridden_tick() {
         game.entities.carts.update(0, |cart| cart.in_water = true);
         game.player = Some(sunrise_sim::motion::PlayerMotion::new(
             game.motion,
-            Vec3::new(0.5, 70.0 + SEAT, 0.5),
+            player_cart_seat(Vec3::new(0.5, 70.0, 0.5)),
         ));
         game.riding = Some(71);
         assert!(game.tick_cart_riding(Keys::default()));

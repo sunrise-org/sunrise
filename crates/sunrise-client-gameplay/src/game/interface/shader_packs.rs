@@ -165,6 +165,42 @@ fn await_identity_scans() {
     });
 }
 
+/// The game's frames up to the loader, as `render_with_hooks` runs them: the frame follows the
+/// pick, then the loader runs.
+#[cfg(test)]
+pub(super) fn loader_frame(game: &mut crate::game::ClientGame<'_>) {
+    let sky = sunrise_level::environment::Sky::default();
+    let camera = glam::DVec3::new(0.5, 65.5, 0.5);
+    game.follow_frame();
+    game.shader_pack_inputs(camera, camera, 0.0, &sky);
+}
+
+/// Frames until the pick runs, installed for `wanted` (its dimension and served answer), with
+/// nothing building: a finished build counts only once a frame has taken and installed it.
+/// At most 60 s.
+#[cfg(test)]
+pub(super) fn settle_shader_pack(
+    game: &mut crate::game::ClientGame<'_>,
+    wanted: (i32, Option<Tonemap>),
+) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        loader_frame(game);
+        let renderer = game.client.renderer.0.as_ref().unwrap();
+        if !renderer.shader_pack_building()
+            && renderer.shader_pack_kind() == Some("iris")
+            && renderer.shader_pack_loaded_for() == Some(wanted)
+        {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the pack never settled"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
 /// Why pack `name` at `path` runs with Iris compatibility under the switch `mode` (decision D-8),
 /// for the log: On, or Auto and where the pack asks (`auto_identity`); `Some(None)`: it runs
 /// without. `None`: on Auto, its scan is still running (never with `wait`).

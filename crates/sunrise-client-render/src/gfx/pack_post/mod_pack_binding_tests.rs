@@ -1648,3 +1648,155 @@ fn mod_pack_indirect_draw_with_a_count_buffer_draws_only_the_counted_commands() 
         "command 1 is past the count of 1: {counted:?}"
     );
 }
+
+/// Issue #6709: when a pack's shadow pass (both `shadowcomp` and its attached compute stage) reads
+/// mod frame uniforms in a static scene with no mod shadow draws, changing those mod frame
+/// uniforms — including previous-frame aliases advancing — must invalidate the shadow cache and
+/// redraw the shadow map, while steady values truly skip the shadow pass (proved by a sentinel
+/// clear in `shadowcolor0` that only survives when the shadow pass does not redraw).
+#[test]
+#[ignore = "daily"]
+fn shadow_cache_tracks_mod_frame_uniforms_without_shadow_mod_draws() {
+    let _gpu_guard = crate::gfx::test_gpu::lock();
+    let gpu = Gpu::new().expect("graphics adapter required for shadow cache mod uniform test");
+    let files = [
+        ("shadowcomp.vsh", VERTEX),
+        (
+            "shadowcomp.fsh",
+            "#version 120\n/* RENDERTARGETS:0 */\n\
+             uniform float modScale;\n\
+             uniform float prevModScale;\n\
+             void main(){gl_FragData[0]=vec4(modScale,prevModScale,0.0,1.0);}\n",
+        ),
+        (
+            "shadowcomp.csh",
+            "#version 430\nlayout(local_size_x = 1, local_size_y = 1) in;\n\
+             const ivec3 workGroups = ivec3(1, 1, 1);\n\
+             layout(rgba16f) writeonly uniform image2D shadowcolorimg1;\n\
+             uniform float modComputeScale;\n\
+             void main(){imageStore(shadowcolorimg1,ivec2(0),vec4(modComputeScale,0.0,0.0,1.0));}\n",
+        ),
+        ("final.vsh", VERTEX),
+        (
+            "final.fsh",
+            "#version 330 compatibility\n\
+             /*\nconst int shadowcolor0Format = RGBA16F;\nconst int shadowcolor1Format = RGBA16F;\n*/\n\
+             const int shadowMapResolution = 4;\n\
+             uniform sampler2D shadowcolor0;\n\
+             uniform sampler2D shadowcolor1;\n\
+             void main(){\n\
+                 vec4 c0 = texelFetch(shadowcolor0, ivec2(0), 0);\n\
+                 vec4 c1 = texelFetch(shadowcolor1, ivec2(0), 0);\n\
+                 gl_FragColor = c0.b > 0.5 ? vec4(0.0, 0.0, 1.0, 1.0) : vec4(c0.r, c0.g, c1.r, 1.0);\n\
+             }\n",
+        ),
+    ]
+    .map(|(name, source)| (name.into(), source.into()))
+    .into();
+    let runtime = OwnedModPackRuntime {
+        depth_targets: Vec::new(),
+        uniforms: vec![
+            ModUniformDecl {
+                name: "modScale".into(),
+                ty: ModUniformType::Float,
+                previous_name: Some("prevModScale".into()),
+            },
+            ModUniformDecl {
+                name: "modComputeScale".into(),
+                ty: ModUniformType::Float,
+                previous_name: None,
+            },
+        ],
+        pipelines: Vec::new(),
+    };
+    let (mut post, color, depth) = load_with_mods(&gpu, files, Vec::new(), &runtime);
+    assert!(
+        post.shadow_targets.is_some() && !post.shadow_comp.is_empty(),
+        "shadow pass missing: {:?}",
+        post.notes
+    );
+    // Overwrite shadowcolor0 with a blue sentinel (`b = 1.0`, which `shadowcomp.fsh` never writes).
+    // A real cache hit skips `shadowcomp` so `final.fsh` reads `[0, 0, 255, 255]`; any redraw
+    // overwrites `shadowcolor0` with `b = 0.0`.
+    let paint_sentinel = |post: &PackPost| {
+        let view = post
+            .shadow_targets
+            .as_ref()
+            .expect("shadow targets")
+            .color(0, false)
+            .expect("shadowcolor0");
+        let mut enc = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        {
+            let _rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("shadow_cache_sentinel"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.0,
+                            g: 0.0,
+                            b: 1.0,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        }
+        gpu.queue.submit([enc.finish()]);
+    };
+
+    // Frame 1: modScale = 0.25 (prevModScale = 0.25), modComputeScale = 0.25 -> exact [64, 64, 64, 255].
+    assert!(post.set_mod_uniform("modScale", ModUniformValue::Float(0.25)));
+    assert!(post.set_mod_uniform("modComputeScale", ModUniformValue::Float(0.25)));
+    assert_eq!(
+        run_frame_and_sample(&gpu, &mut post, &color, &depth, true),
+        [64, 64, 64, 255]
+    );
+
+    // Frame 2: no mod uniform changes -> real shadow cache hit preserves the sentinel in shadowcolor0.
+    paint_sentinel(&post);
+    assert_eq!(
+        run_frame_and_sample(&gpu, &mut post, &color, &depth, true),
+        [0, 0, 255, 255],
+        "steady frame must hit the shadow cache and skip redrawing shadowcomp"
+    );
+
+    // Frame 3: changing modScale to 0.75 (191) while shadow slot has no mod draws must redraw over the sentinel.
+    assert!(post.set_mod_uniform("modScale", ModUniformValue::Float(0.75)));
+    assert_eq!(
+        run_frame_and_sample(&gpu, &mut post, &color, &depth, true),
+        [191, 64, 64, 255]
+    );
+
+    // Frame 4: current values stay 0.75/0.25, but prevModScale advances 0.25 -> 0.75 and must redraw.
+    paint_sentinel(&post);
+    assert_eq!(
+        run_frame_and_sample(&gpu, &mut post, &color, &depth, true),
+        [191, 191, 64, 255]
+    );
+
+    // Frame 5: changing only the attached compute stage's modComputeScale to 0.75 must redraw.
+    paint_sentinel(&post);
+    assert!(post.set_mod_uniform("modComputeScale", ModUniformValue::Float(0.75)));
+    assert_eq!(
+        run_frame_and_sample(&gpu, &mut post, &color, &depth, true),
+        [191, 191, 191, 255]
+    );
+
+    // Frame 6: steady values again hit the cache and preserve the sentinel.
+    paint_sentinel(&post);
+    assert_eq!(
+        run_frame_and_sample(&gpu, &mut post, &color, &depth, true),
+        [0, 0, 255, 255],
+        "steady frame after redraw must hit the shadow cache"
+    );
+}

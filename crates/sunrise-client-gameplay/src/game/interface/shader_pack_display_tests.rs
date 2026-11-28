@@ -2,7 +2,8 @@
 //! real offscreen renderer: the renderer fills them from the output each frame is drawn for.
 //! Each case runs in a process of its own (one event loop, its own resources and environment).
 use super::native_entity_refs::tests::with_client_game;
-use super::shader_pack_hdr_tests::{CASE, SERVED, curved, pack, pq16, settle};
+use super::shader_pack_hdr_tests::{CASE, SERVED, curved, pack, pq16};
+use super::shader_packs::settle_shader_pack as settle;
 use crate::game::native_hooks::particle_count_tests::frame_scene;
 use sunrise_client::gfx::ScreenshotRequest;
 use sunrise_gameplay_common::game::test_fixtures::run_fresh_cases_with_env;
