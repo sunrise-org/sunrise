@@ -101,10 +101,10 @@ impl crate::game::ClientGame<'_> {
                     self.options_key(KeyCode::Escape, None)?;
                 }
                 Screen::Playing => {
-                    self.client.pause_focus = None;
-                    self.set_screen(Screen::Paused);
-                    self.client.pause_menu = true;
-                    self.capture(false);
+                    self.set_screen_with(Screen::Paused, |game| game.client.pause_focus = None);
+                    if self.client.screen == Screen::Paused {
+                        self.client.pause_menu = true;
+                    }
                 }
                 Screen::Creative => {
                     self.pad_clear_focus();

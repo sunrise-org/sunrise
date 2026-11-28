@@ -338,7 +338,7 @@ impl crate::game::ClientGame<'_> {
     /// and the mod `owner`'s own screen when one answered `ModScreen`.
     pub(in crate::game) fn apply_screen(&mut self, screen: Screen, owner: Option<&str>) {
         self.client.pointer_grab_request.set(None);
-        if self.client.screen_grab {
+        if screen == Screen::Playing && self.client.screen_grab {
             self.capture(false);
         }
         // `before` may already have closed it. Overlays that keep Inventory
@@ -377,8 +377,15 @@ impl crate::game::ClientGame<'_> {
             self.set_mapping_held("key.attack", false);
             self.set_mapping_held("key.use", false);
             self.set_client_mining(None);
-            self.capture(false);
         }
+        // Gui.setScreen releases the mouse for a screen and grabs it only
+        // for the world, not for a title or overlay backed by Playing.
+        self.capture(
+            screen == Screen::Playing
+                && self.client.title.0.is_none()
+                && !self.screen_over_playing()
+                && !self.remote_screen_up(),
+        );
         self.commit_screen_transition();
     }
     /// Runs close cleanup for any screen or overlay being replaced by
