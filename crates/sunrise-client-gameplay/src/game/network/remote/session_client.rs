@@ -35,6 +35,8 @@ impl crate::game::ClientGame<'_> {
         before_pack_cleanup: impl FnOnce(&mut crate::game::server_packs::ServerPackState),
     ) -> Result<()> {
         self.finish_perf();
+        // The last world's camera goes with the session: frames without a level extract none.
+        self.client.native_camera_frame = None;
         // The one boundary every network session passes when it closes here: the player leaving,
         // or this client ending it with a reason (a raw disconnect closed it already, with the
         // connection's or the server's).

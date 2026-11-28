@@ -129,6 +129,10 @@ pub mod debug_options;
 #[path = "modding/debug_renderer_tests.rs"]
 pub(in crate::game) mod debug_renderer_tests;
 #[cfg(feature = "client")]
+#[cfg(test)]
+#[path = "native_hooks/camera_read_tests.rs"]
+mod camera_read_tests;
+#[cfg(feature = "client")]
 #[path = "interface/debug_renderers.rs"]
 pub(in crate::game) mod debug_renderers;
 #[cfg(feature = "client")]

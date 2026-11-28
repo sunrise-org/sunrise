@@ -1,0 +1,3 @@
+# #6731: the camera read after leaving a world (prepared client resources).
+sunrise-client-gameplay game::client_side::camera_read_tests::leaving_a_server_leaves_no_camera_behind lib daily resources
+sunrise-client-gameplay game::client_side::camera_read_tests::no_level_reads_no_camera lib daily resources

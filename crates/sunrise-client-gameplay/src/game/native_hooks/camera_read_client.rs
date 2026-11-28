@@ -19,7 +19,10 @@ impl crate::game::ClientGame<'_> {
     }
     /// The most recently extracted world frame's camera, if one exists.
     /// During GUI rendering this is the current frame, including bob/spin and FOV.
+    /// None when no level is loaded: a loading or title frame after leaving a world extracts
+    /// no camera, so it never shows the last world's (#6731).
     pub(in crate::game) fn camera(&self) -> Option<mod_api::Camera> {
+        self.common.player.as_ref()?;
         self.client.native_camera_frame.clone()
     }
     /// The entity the view follows (`Minecraft.getCameraEntity`): the entity a server attached
