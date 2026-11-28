@@ -1,0 +1,3 @@
+ids = ["type:MenuOpening", "handle:MenuRef::opening", "handle:PlayerRef::open_menu"]
+why = "A typed play payload can identify one opening even after the same window id is reused. The server resolves the token only against the sending player's live, valid non-inventory menu, and refuses spectators. Older clients still read the old opening layout and receive no token."
+migrate = "For menu edits sent through a registered typed play payload, include `menu.opening(host)` when present. In the server handler, resolve it with `context.player()?.open_menu(host, opening)` using the server host from the context, and ignore a refused edit."

@@ -303,13 +303,27 @@ means a non-provider, cancelled open, unconnected/wrong-level player or an activ
 action. `Err(BlockEntityError::Stale)` means the entity
 does not resolve. It never opens a replacement through an old handle.
 
+## Sending edits to an open menu
+
+Include the `MenuOpening` from `menu.opening(host)` in your own
+[typed play payload](../client/networking.md#typed-payloads). No token is available for the
+player inventory or on a connection without menu-extra revision 3. The token identifies one
+opening, not just a reusable window id.
+
+In the server handler, use the payload context's sending player and call
+`player.open_menu(host, opening)` before editing that menu's backing block entity. If it returns
+`None`, discard the edit. The server checks that the opening still matches, the player is not
+spectating, and the menu is still valid. This is separate from `container_menu`, which reads the
+current menu without admitting an edit. Send the payload before calling `menu.close(host)` if a
+screen submits an edit on close.
+
 ## Blockless status menus
 
 To open a content mod menu type with no block (from an item, an entity or a command),
 call `player.open_mod_menu(host, request)` with a `ModMenuOpen` request (NeoForge's
-`openMenu(provider, extraDataWriter)`). `menu` is the type's `MenuKey`. `extra`, at most
-1,048,555 bytes (vanilla's 1 MiB clientbound custom payload limit minus the 21-byte
-envelope header), is one-time context. Decode `open.extra` in the registered client screen factory.
+`openMenu(provider, extraDataWriter)`). `menu` is the type's `MenuKey`. `extra` is one-time
+context that fits within vanilla's clientbound custom payload limit after the negotiated envelope.
+Decode `open.extra` in the registered client screen factory.
 It is an empty slice when no payload matched this opening. Reusing a window id does not reuse
 its previous context. Keep owned decoded values if the screen needs them later; the bytes are
 borrowed only during construction. `pos` is an optional hint offered to the factory and later

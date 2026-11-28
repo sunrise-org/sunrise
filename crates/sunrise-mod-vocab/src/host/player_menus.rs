@@ -17,6 +17,10 @@ pub trait PlayerMenusBackend {
     /// contents. On a client, refuses stale players and unsupported menu layouts.
     fn player_container_menu(&self, player: PlayerRef) -> Option<MenuRef>;
     /// Side: server.
+    /// The server implementation of [`PlayerRef::open_menu`].
+    #[manual_handle]
+    fn player_open_menu(&self, player: PlayerRef, opening: MenuOpening) -> Option<MenuRef>;
+    /// Side: server.
     /// The player's container counter (`ServerPlayer.containerCounter`): the window id the
     /// last menu opened for them took, 0 until one opens. Every menu the server opens for
     /// them advances it first, as vanilla's `nextContainerCounter` does, to `counter % 100 + 1`
@@ -73,8 +77,9 @@ pub trait PlayerMenusBackendMut {
     /// Opens content mod menu type `menu` for a connected player from anywhere, with no
     /// block (`ServerPlayer.openMenu(provider, extraDataWriter)`): an item's use, an entity,
     /// a command. The menu replaces the one they had open. Its container slots show empty
-    /// and their clicks reach `menu_clicked`. `extra` (at most 1,048,555 bytes, fitting within
-    /// vanilla's 1 MiB clientbound custom payload limit) is available only during construction in
+    /// and their clicks reach `menu_clicked`. `extra` fits within vanilla's 1 MiB
+    /// clientbound custom payload limit after the negotiated envelope (at most 29 bytes)
+    /// and is available only during construction in
     /// [`crate::MenuScreenOpen::extra`]. `pos`, when given, is offered to the factory and
     /// available later through `screen_pos`. `data` has exactly the menu type's `data_slots`
     /// signed `i32` values. The negotiated blockless payload sends indices `0..=u16::MAX` after
@@ -169,4 +174,15 @@ pub trait PlayerMenusClientBackendMut {
         pos: [i32; 3],
         inputs: &mod_api::item::menu::AnvilUpdateInputs<'_>,
     ) -> Option<mod_api::item::menu::AnvilUpdateEdits>;
+}
+
+impl PlayerRef {
+    /// Resolve an opening token against this player's open supported menu on the server.
+    /// Returns `None` if the opening is no longer current, the player is a spectator,
+    /// the menu has been removed, or its authoritative `stillValid` check fails.
+    /// In a typed play payload handler, call this on the context's sending player
+    /// before applying the edit. A refused token does not close the menu.
+    pub fn open_menu(self, host: &dyn ServerHost, opening: MenuOpening) -> Option<MenuRef> {
+        host.backend()?.open().player_open_menu(self, opening)
+    }
 }

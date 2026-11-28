@@ -275,9 +275,6 @@ impl crate::game::ServerGame<'_> {
         if kind.owned_slots.is_some() && kind.crafting.is_some() {
             return Err(OpenMenuError::OwnedSlotsWithCrafting);
         }
-        if extra.len() > menu_extra::MAX_DATA {
-            return Err(OpenMenuError::TooLarge);
-        }
         if data.len() != kind.data_slots {
             return Err(OpenMenuError::DataCountMismatch);
         }
@@ -289,6 +286,9 @@ impl crate::game::ServerGame<'_> {
             .online_player_record(player)
             .filter(|g| !g.dead && !g.disconnect_pending)
             .ok_or(OpenMenuError::PlayerUnavailable)?;
+        if extra.len() > menu_extra::max_data(guest.sender.menu_extra_rev) {
+            return Err(OpenMenuError::TooLarge);
+        }
         let revision = if !data.is_empty() || !kind.player_inventory || kind.slots == 0 {
             menu_extra::LIVE_DATA_REVISION
         } else {
@@ -351,6 +351,9 @@ impl crate::game::ServerGame<'_> {
             .online_player_record(player)
             .filter(|g| g.conn == conn && !g.dead && !g.disconnect_pending)
             .ok_or(OpenMenuError::PlayerUnavailable)?;
+        if extra.len() > menu_extra::max_data(guest.sender.menu_extra_rev) {
+            return Err(OpenMenuError::TooLarge);
+        }
         let revision = if !data.is_empty() || !kind.player_inventory || kind.slots == 0 {
             menu_extra::LIVE_DATA_REVISION
         } else {

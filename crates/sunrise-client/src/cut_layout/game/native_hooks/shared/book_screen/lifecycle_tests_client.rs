@@ -752,6 +752,7 @@ fn a_registered_recipe_book_screen_opens_for_a_blockless_menu() {
                         window: 7,
                         pos: None,
                         data: Vec::new(),
+                        opening: None,
                     }),
                 ));
                 let screen = game
@@ -818,11 +819,15 @@ fn a_reopened_window_uses_only_its_new_screen_instance() {
                                 marker: i32| {
                         game.handle_packet(C::CustomPayload(CustomPayload {
                             channel: CHANNEL.into(),
-                            data: menu_extra::encode(&menu_extra::Message {
-                                window: 23,
-                                pos: None,
-                                data: marker.to_be_bytes().to_vec(),
-                            })
+                            data: menu_extra::encode(
+                                &menu_extra::Message {
+                                    window: 23,
+                                    pos: None,
+                                    data: marker.to_be_bytes().to_vec(),
+                                    opening: None,
+                                },
+                                LIVE_DATA_REVISION,
+                            )
                             .unwrap(),
                         }))
                         .unwrap();

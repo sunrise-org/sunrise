@@ -139,11 +139,15 @@ fn server_close_keeps_shown_native_screen_alive_for_closing_and_veto() {
                                         game,
                                         C::CustomPayload(CustomPayload {
                                             channel: CHANNEL.into(),
-                                            data: menu_extra::encode(&Message {
-                                                window,
-                                                pos: Some(POS),
-                                                data: Vec::new(),
-                                            })
+                                            data: menu_extra::encode(
+                                                &Message {
+                                                    window,
+                                                    pos: Some(POS),
+                                                    data: Vec::new(),
+                                                    opening: None,
+                                                },
+                                                1,
+                                            )
                                             .unwrap(),
                                         }),
                                     );

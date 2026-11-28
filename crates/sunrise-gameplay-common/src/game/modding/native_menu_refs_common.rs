@@ -26,6 +26,10 @@ pub trait NativeMenuRefsCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
         self.side_player_container_menu(player)
     }
 
+    fn menu_opening(&self, menu: MenuRef) -> Option<mod_api::MenuOpening> {
+        self.side_menu_opening(menu)
+    }
+
     /// Registry menu type (`AbstractContainerMenu.getType`); outer None means unavailable.
     fn menu_kind(&self, menu: MenuRef) -> Option<Option<String>> {
         self.side_menu_kind(menu)

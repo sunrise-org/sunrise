@@ -563,6 +563,12 @@ pub mod game {
             generation,
         }
     }
+    pub fn menu_opening(window: i32, opening: u64) -> MenuOpening {
+        MenuOpening { window, opening }
+    }
+    pub fn menu_ref_from_opening(player: PlayerRef, opening: MenuOpening) -> MenuRef {
+        menu_ref(player, opening.window, opening.opening)
+    }
     /// A player handle the game names.
     pub fn player_ref(entity: EntityRef, uuid: u128) -> PlayerRef {
         PlayerRef { entity, uuid }

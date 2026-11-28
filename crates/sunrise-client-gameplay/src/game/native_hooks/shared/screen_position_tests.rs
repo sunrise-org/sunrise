@@ -149,11 +149,15 @@ fn screen_extra_data_borrows_only_the_open_windows_bytes() {
                 let receive = |game: &mut crate::game::ClientGame<'_>, window, bytes: &[u8]| {
                     game.handle_packet(C::CustomPayload(CustomPayload {
                         channel: CHANNEL.into(),
-                        data: menu_extra::encode(&Message {
-                            window,
-                            pos: None,
-                            data: bytes.to_vec(),
-                        })
+                        data: menu_extra::encode(
+                            &Message {
+                                window,
+                                pos: None,
+                                data: bytes.to_vec(),
+                                opening: None,
+                            },
+                            LIVE_DATA_REVISION,
+                        )
                         .unwrap(),
                     }))
                     .unwrap();

@@ -552,6 +552,7 @@ pub(in crate::game) const TICK_DECODE_WAIT: Duration = Duration::from_millis(250
 pub struct ClientMenu {
     pub(in crate::game) current: Option<(i32, String)>,
     pub generation: u64,
+    pub(in crate::game) opening: Option<u64>,
 }
 
 impl ClientMenu {
@@ -561,6 +562,7 @@ impl ClientMenu {
             .checked_add(1)
             .expect("menu generation exhausted");
         self.current = current;
+        self.opening = None;
     }
 
     pub fn as_ref(&self) -> Option<&(i32, String)> {

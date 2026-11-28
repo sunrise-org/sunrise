@@ -1446,8 +1446,8 @@ pub enum OpenMenuError {
     /// The player is stale, dead, disconnecting, has no supported client, or their turn
     /// is unavailable for the open veto. Also returned by a host without a game.
     PlayerUnavailable,
-    /// The extra data exceeds the 1,048,555-byte limit (vanilla's 1 MiB clientbound
-    /// custom payload limit minus the 21-byte envelope header).
+    /// The extra data exceeds the negotiated budget (vanilla's 1 MiB clientbound
+    /// custom payload limit minus the revision-specific envelope header).
     TooLarge,
     /// The title could not cross to the game.
     Title(crate::text::TextFormError),

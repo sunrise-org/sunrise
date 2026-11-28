@@ -324,6 +324,10 @@ pub trait ModapiModdingSideGameExt<'__sg>: crate::game::SideGame<'__sg> {
         <Self::State as SideOps>::side_menu_carried(self, menu)
     }
 
+    fn side_menu_opening(&self, menu: MenuRef) -> Option<mod_api::MenuOpening> {
+        <Self::State as SideOps>::side_menu_opening(self, menu)
+    }
+
     fn side_menu_kind(&self, menu: MenuRef) -> Option<Option<String>> {
         <Self::State as SideOps>::side_menu_kind(self, menu)
     }
@@ -624,6 +628,7 @@ pub trait SideOps: Sized {
     fn side_living_use_ticks(game: &Self::Game<'_>, living: LivingRef) -> Option<Option<u32>>;
     fn side_living_used_item_hand(game: &Self::Game<'_>, living: LivingRef) -> Option<Hand>;
     fn side_menu_carried(game: &Self::Game<'_>, menu: MenuRef) -> Option<Option<ItemStack>>;
+    fn side_menu_opening(game: &Self::Game<'_>, menu: MenuRef) -> Option<mod_api::MenuOpening>;
     fn side_menu_kind(game: &Self::Game<'_>, menu: MenuRef) -> Option<Option<String>>;
     fn side_menu_slot(
         game: &Self::Game<'_>,

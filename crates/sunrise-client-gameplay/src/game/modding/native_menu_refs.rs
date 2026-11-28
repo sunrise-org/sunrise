@@ -245,6 +245,22 @@ impl ClientGame<'_> {
         ))
     }
 
+    pub(in crate::game) fn client_menu_opening(
+        &self,
+        menu: MenuRef,
+    ) -> Option<mod_api::MenuOpening> {
+        self.native_client_menu_name(menu)?;
+        let remote = self.client.remote.as_ref()?;
+        let window = menu.fields().window;
+        if window == 0
+            || remote.registries.menu_extra_revision
+                < sunrise_protocol::menu_extra::OPENING_REVISION
+        {
+            return None;
+        }
+        Some(menu_opening(window, remote.menu.opening?))
+    }
+
     pub(in crate::game) fn client_menu_kind(&self, menu: MenuRef) -> Option<Option<String>> {
         let name = self.native_client_menu_name(menu)?;
         Some(

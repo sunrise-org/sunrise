@@ -31,7 +31,7 @@ fn every_registered_engine_codec_refuses_a_hostile_oversized_body() {
             protocol::connection_groups::Section::decode(body).is_err()
         }),
         ("sunrise:menu_extra", |body| {
-            protocol::menu_extra::decode(body).is_err()
+            protocol::menu_extra::decode(body, protocol::menu_extra::REVISION).is_err()
         }),
         ("sunrise:anvil_cost", |body| {
             protocol::anvil_cost::decode(body).is_err()

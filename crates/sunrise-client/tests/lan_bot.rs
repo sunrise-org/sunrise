@@ -1222,8 +1222,7 @@ fn guests_see_each_other_and_the_world_entities() {
 /// A menu opened with extra data (a mod menu type's, NeoForge's `openMenu`
 /// with an extra-data writer) reaches the client as a `sunrise:menu_extra`
 /// payload naming the window and the block, right before that window's
-/// `OpenScreen`; a menu without it sends no payload. The server always sends
-/// the current `sunrise:menu_extra` wire layout.
+/// `OpenScreen`; for this peer without revision 3, a stock menu sends no payload.
 #[test]
 #[ignore = "daily"]
 fn menu_extra_data_comes_right_before_its_menu() {
@@ -1256,7 +1255,7 @@ fn menu_extra_data_comes_right_before_its_menu() {
         loop {
             match bot.recv_play()? {
                 C::CustomPayload(p) if p.channel == menu_extra::CHANNEL => {
-                    let message = menu_extra::decode(&p.data).map_err(|e| e.to_string())?;
+                    let message = menu_extra::decode(&p.data, 1).map_err(|e| e.to_string())?;
                     extras.push((message, true));
                 }
                 C::OpenScreen(p) => return Ok((bot, extras, p.container)),
@@ -1300,6 +1299,7 @@ fn menu_extra_data_comes_right_before_its_menu() {
                 window,
                 pos: Some([3, 70, -5]),
                 data: vec![7, 0, 255],
+                opening: None,
             },
             true
         )],

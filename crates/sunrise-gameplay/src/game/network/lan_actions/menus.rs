@@ -220,109 +220,112 @@ impl crate::game::ServerGame<'_> {
         let previous_window = self.server.lan.as_ref().and_then(|host| {
             super::super::native_menus::open_menu_of(host, conn).map(|(window, ..)| window)
         });
-        self.guest_replace_menu_then(conn, false, |game| {
-            // `createMenu` of an admitted open: `unpackLootTable(player)` with the opener's own
-            // state (their luck, `THIS_ENTITY` and advancements), then the menu reads the slots.
-            if loot {
-                let roll = |game: &mut Self| {
-                    let player = game.native_acting_player();
-                    game.unpack_loot(sunrise_gameplay_common::game::container_loot_level::LootTarget::Block(pos), player);
-                };
-                if game.server.lan_acting == Some(conn) {
-                    roll(game);
-                } else if game.as_guest(conn, roll).is_none() {
-                    return Err(MenuOpen::Refused);
-                }
-            }
-            let Some(items) = game.server
-                .lan
-                .as_ref()
-                .and_then(|host| host.hub.guest(conn))
-                .and_then(|g| slots.read(&game.common.world, g))
-            else {
-                return Err(MenuOpen::Refused);
-            };
-            // A mod menu type's block tells the client where it is, with what its
-            // mod writes (`openMenu` with an extra-data writer); a stock menu
-            // sends nothing more.
-            let extra = match slots {
-                Slots::Block(k) if game.common.mod_menu_at(k).is_some() => {
-                    let mut data = None;
-                    game.native_menu_extra_data(uuid, menu, &block, [k.0, k.1, k.2], &mut data);
-                    let data = data.unwrap_or_default();
-                    if data.len() > sunrise_protocol::menu_extra::MAX_DATA {
-                        log::error!(
-                            "Sunrise: {block}'s menu ({menu}) extra data ({} bytes) exceeds {} bytes; refusing open",
-                            data.len(),
-                            sunrise_protocol::menu_extra::MAX_DATA
+        self.guest_replace_menu_then(
+            conn,
+            false,
+            |game| {
+                // `createMenu` of an admitted open: `unpackLootTable(player)` with the opener's own
+                // state (their luck, `THIS_ENTITY` and advancements), then the menu reads the slots.
+                if loot {
+                    let roll = |game: &mut Self| {
+                        let player = game.native_acting_player();
+                        game.unpack_loot(
+                            sunrise_gameplay_common::game::container_loot_level::LootTarget::Block(
+                                pos,
+                            ),
+                            player,
                         );
-                        if let Some(container) = previous_window
-                            && let Some(host) = game.server.lan.as_mut()
-                            && super::super::native_menus::open_menu_of(host, conn).is_none()
-                        {
-                            host.hub
-                                .send_to(conn, &C::ContainerClose(play::ContainerClose { container }));
-                        }
+                    };
+                    if game.server.lan_acting == Some(conn) {
+                        roll(game);
+                    } else if game.as_guest(conn, roll).is_none() {
                         return Err(MenuOpen::Refused);
                     }
-                    Some(data)
                 }
-                _ => None,
-            };
-            if game.common.world.block_entities.generation(&pos) != generation {
-                if let Some(container) = previous_window
-                    && let Some(host) = game.server.lan.as_mut()
-                    && super::super::native_menus::open_menu_of(host, conn).is_none()
-                {
-                    host.hub
-                        .send_to(conn, &C::ContainerClose(play::ContainerClose { container }));
-                }
-                return Err(MenuOpen::Stale);
-            }
-            let Some(gi) = game.guest_index(conn) else {
-                return Err(MenuOpen::Refused);
-            };
-            // Park the opener's window-0 cursor and build the first contents from
-            // their inventory, even when an open through BlockEntityRef runs in their turn.
-            let Some(menu_generation) = game.with_own_record(gi, |host, _, world| {
-                if host
-                    .hub
-                    .open_menu_window(world, conn, menu, title, Some(pos), slots, items, extra)
-                    .is_none()
-                {
+                let Some(items) = game
+                    .server
+                    .lan
+                    .as_ref()
+                    .and_then(|host| host.hub.guest(conn))
+                    .and_then(|g| slots.read(&game.common.world, g))
+                else {
+                    return Err(MenuOpen::Refused);
+                };
+                // A mod menu type's block tells the client where it is, with what its
+                // mod writes (`openMenu` with an extra-data writer); a stock menu
+                // sends nothing more.
+                let extra = match slots {
+                    Slots::Block(k) if game.common.mod_menu_at(k).is_some() => {
+                        let mut data = None;
+                        game.native_menu_extra_data(uuid, menu, &block, [k.0, k.1, k.2], &mut data);
+                        Some(data.unwrap_or_default())
+                    }
+                    _ => None,
+                };
+                if game.common.world.block_entities.generation(&pos) != generation {
                     if let Some(container) = previous_window
+                        && let Some(host) = game.server.lan.as_mut()
                         && super::super::native_menus::open_menu_of(host, conn).is_none()
                     {
                         host.hub
                             .send_to(conn, &C::ContainerClose(play::ContainerClose { container }));
                     }
-                    return None;
+                    return Err(MenuOpen::Stale);
                 }
-                host.hub.guests.update(gi, |g| {
-                    let open = g.menu.as_mut().expect("the window was just installed");
-                    open.opener_block = Some(block.into_boxed_str());
-                });
-                Some(host.hub.guest(conn)?.menu_generation)
-            }) else {
-                return Err(MenuOpen::Refused);
-            };
-            Ok(menu_generation)
-        }, |game, result| {
-            let menu_generation = match result {
-                Ok(generation) => generation,
-                Err(refused) => return refused,
-            };
-            // ChestMenu and ShulkerBoxMenu own startOpen, including an active ender chest.
-            let partner = game.common.chest_other_half(pos);
-            game.guest_container_opener(conn, pos, partner, true);
-            // The game-event listener can close or replace the installed menu.
-            if game.server.lan.as_ref().and_then(|host| host.hub.guest(conn))
-                .is_some_and(|guest| guest.menu.is_some() && guest.menu_generation == menu_generation)
-            {
-                game.player_menu_opening(conn);
-            }
-            MenuOpen::Opened
-        })
+                let Some(gi) = game.guest_index(conn) else {
+                    return Err(MenuOpen::Refused);
+                };
+                // Park the opener's window-0 cursor and build the first contents from
+                // their inventory, even when an open through BlockEntityRef runs in their turn.
+                let Some(menu_generation) = game.with_own_record(gi, |host, _, world| {
+                    if host
+                        .hub
+                        .open_menu_window(world, conn, menu, title, Some(pos), slots, items, extra)
+                        .is_none()
+                    {
+                        if let Some(container) = previous_window
+                            && super::super::native_menus::open_menu_of(host, conn).is_none()
+                        {
+                            host.hub.send_to(
+                                conn,
+                                &C::ContainerClose(play::ContainerClose { container }),
+                            );
+                        }
+                        return None;
+                    }
+                    host.hub.guests.update(gi, |g| {
+                        let open = g.menu.as_mut().expect("the window was just installed");
+                        open.opener_block = Some(block.into_boxed_str());
+                    });
+                    Some(host.hub.guest(conn)?.menu_generation)
+                }) else {
+                    return Err(MenuOpen::Refused);
+                };
+                Ok(menu_generation)
+            },
+            |game, result| {
+                let menu_generation = match result {
+                    Ok(generation) => generation,
+                    Err(refused) => return refused,
+                };
+                // ChestMenu and ShulkerBoxMenu own startOpen, including an active ender chest.
+                let partner = game.common.chest_other_half(pos);
+                game.guest_container_opener(conn, pos, partner, true);
+                // The game-event listener can close or replace the installed menu.
+                if game
+                    .server
+                    .lan
+                    .as_ref()
+                    .and_then(|host| host.hub.guest(conn))
+                    .is_some_and(|guest| {
+                        guest.menu.is_some() && guest.menu_generation == menu_generation
+                    })
+                {
+                    game.player_menu_opening(conn);
+                }
+                MenuOpen::Opened
+            },
+        )
     }
 
     /// `ContainerEntity.interactWithContainerVehicle` for a guest: the menu

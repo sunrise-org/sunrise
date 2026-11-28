@@ -1,6 +1,17 @@
 //! Moved here from the game so mods can name it.
 #[allow(unused_imports)]
 use crate::*;
+/// An opaque token for one opening of a menu, even if the window id is reused.
+/// Obtain it from [`crate::MenuRef::opening`] and send it in a typed play payload.
+/// It identifies an opening, not a permission to act: the server checks it against
+/// the sending player's live menu with [`crate::PlayerRef::open_menu`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, sunrise_mod_api_macros::Wire)]
+// exhaustive: private fields keep the opening opaque.
+pub struct MenuOpening {
+    pub(crate) window: i32,
+    pub(crate) opening: u64,
+}
+
 /// One click on the local player's open menu, submitted with `MenuRef::click`.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]

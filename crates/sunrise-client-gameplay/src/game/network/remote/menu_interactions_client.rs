@@ -463,10 +463,15 @@ impl crate::game::ClientGame<'_> {
             .as_mut()
             .and_then(|r| r.menu_extra.take())
             .filter(|e| e.window == p.container);
+        let opening = extra.as_ref().and_then(|e| e.opening);
+        let mod_type = sunrise_level::containers::mod_menu_type(&menu);
+        // An opening-only payload for a stock menu is not factory context.
+        let extra = extra.filter(|e| {
+            e.opening.is_none() || mod_type.is_some() || e.pos.is_some() || !e.data.is_empty()
+        });
         let target = extra
             .as_ref()
-            .map_or(target, |e| e.pos.map(|p| (p[0], p[1], p[2])));
-        let mod_type = sunrise_level::containers::mod_menu_type(&menu);
+            .map_or(target, |e| e.pos.map(|[x, y, z]| (x, y, z)));
         // MenuScreens.create looks up the constructor before touching the active window.
         if mod_type.is_some() && !mod_api::__private::has_menu_screen_factory(&menu) {
             log::warn!("no screen factory for menu {menu}");
@@ -587,6 +592,9 @@ impl crate::game::ClientGame<'_> {
         };
         let title = menu_title(&p.title);
         self.remote_set_menu(Some((p.container, menu.clone())), Some(title));
+        if let Some(remote) = self.client.remote.as_mut() {
+            remote.menu.opening = opening;
+        }
         self.common.craft_size = if menu == "minecraft:crafting" { 3 } else { 2 };
         self.common.container = None;
         if let Some(entity) = entity {

@@ -10,11 +10,12 @@ impl crate::game::ClientGame<'_> {
         &mut self,
         data: &[u8],
     ) -> sunrise_gameplay_common::game::Result<()> {
-        match sunrise_protocol::menu_extra::decode(data) {
+        let Some(remote) = self.client.remote.as_mut() else {
+            return Ok(());
+        };
+        match sunrise_protocol::menu_extra::decode(data, remote.registries.menu_extra_revision) {
             Ok(extra) => {
-                if let Some(r) = self.client.remote.as_mut() {
-                    r.menu_extra = Some(extra);
-                }
+                remote.menu_extra = Some(extra);
                 Ok(())
             }
             Err(e) => {

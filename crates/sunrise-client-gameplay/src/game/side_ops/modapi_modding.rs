@@ -318,6 +318,9 @@ impl SideOps for crate::game::client_side::ClientState {
     fn side_menu_carried(game: &Self::Game<'_>, menu: MenuRef) -> Option<Option<ItemStack>> {
         game.client_menu_carried(menu)
     }
+    fn side_menu_opening(game: &Self::Game<'_>, menu: MenuRef) -> Option<mod_api::MenuOpening> {
+        game.client_menu_opening(menu)
+    }
     fn side_menu_kind(game: &Self::Game<'_>, menu: MenuRef) -> Option<Option<String>> {
         game.client_menu_kind(menu)
     }

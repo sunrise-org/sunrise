@@ -208,6 +208,7 @@ fn handle_records_have_declared_field_bytes() {
         },
         (level, [7i32, -8, 9], 83u64),
     );
+    fields(crate::__private::game::menu_opening(7, 91), (7i32, 91u64));
     fields(ModelRef::from_parts(31, 7).unwrap(), (31u64, 7u32));
     fields(
         crate::BakedModelKey::from_parts(43, 11).unwrap(),

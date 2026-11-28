@@ -115,6 +115,30 @@ impl crate::game::ServerGame<'_> {
         Some(menu)
     }
 
+    pub(in crate::game) fn server_menu_opening(
+        &self,
+        menu: MenuRef,
+    ) -> Option<mod_api::MenuOpening> {
+        let guest = self.native_menu_guest(menu)?;
+        let open = guest.menu.as_ref().filter(|open| !open.removed)?;
+        (guest.sender.menu_extra_rev >= sunrise_protocol::menu_extra::OPENING_REVISION)
+            .then(|| menu_opening(open.window, guest.menu_generation))
+    }
+
+    pub(in crate::game) fn player_open_menu(
+        &self,
+        player: PlayerRef,
+        opening: mod_api::MenuOpening,
+    ) -> Option<MenuRef> {
+        let menu = menu_ref_from_opening(player, opening);
+        let guest = self.native_menu_guest(menu)?;
+        guest.menu.as_ref().filter(|open| !open.removed)?;
+        (guest.sender.menu_extra_rev >= sunrise_protocol::menu_extra::OPENING_REVISION
+            && !self.live_guest_view(guest).spectator
+            && self.guest_menu_still_valid(guest.conn))
+        .then_some(menu)
+    }
+
     /// Container id (0 for the player's inventory menu).
     pub(in crate::game) fn menu_container_id(&self, menu: MenuRef) -> Option<i32> {
         self.native_menu_guest(menu)?;
