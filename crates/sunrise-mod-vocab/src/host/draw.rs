@@ -550,8 +550,11 @@ pub trait BlockEntityDrawContext {
     /// children. A mob's model is built in the model's own frame (+y down,
     /// its front towards -z, its feet 24 texels down): in `render_living_pre`,
     /// `draw.scale([1.0, -1.0, -1.0])` then `draw.translate([0.0, -1.501,
-    /// 0.0])` first, as `LivingEntityRenderer` does. False for an unknown
-    /// sprite. API @API:model_layers@.
+    /// 0.0])` first, as `LivingEntityRenderer` does. Each face shades by its
+    /// polygon's `normal` turned by the pose (`ModelPart.compile`,
+    /// `PoseStack.Pose.transformNormal`), not by its winding: a rigid or uniformly
+    /// scaled pose keeps the normal's length, any other normalizes it. False for
+    /// an unknown sprite. API @API:model_layers@.
     fn model_part(&mut self, part: &ModelPart, sprite: &str, tint: u32) -> bool {
         unimplemented!("BlockEntityDrawContext::draw_model_part")
     }

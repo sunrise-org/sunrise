@@ -1290,14 +1290,32 @@ impl<'v> BlockEntityDraw<'v> {
         tint: u32,
         light: u32,
     ) {
+        self.emit_quad_facing(corners, uv, sprite, tint, light, None);
+    }
+
+    /// [`Self::emit_quad`] with the face's own normal, already turned by the pose
+    /// ([`ModelNormals::turn`]), when the caller supplies one (`ModelPolygon.normal`): it is used
+    /// as given, its length and a zero included. Without one, the normal comes from the corners'
+    /// winding.
+    fn emit_quad_facing(
+        &mut self,
+        corners: [[f32; 3]; 4],
+        uv: [[f32; 2]; 4],
+        sprite: Rect,
+        tint: u32,
+        light: u32,
+        facing: Option<Vec3>,
+    ) {
         let pose = self.pose();
         let at = corners.map(|c| pose.transform_point3(Vec3::from_array(c)));
-        let normal = (at[1] - at[0]).cross(at[2] - at[0]).normalize_or_zero();
-        let normal = if normal == Vec3::ZERO {
-            (at[2] - at[1]).cross(at[3] - at[1]).normalize_or(Vec3::Y)
-        } else {
-            normal
-        };
+        let normal = facing.unwrap_or_else(|| {
+            let normal = (at[1] - at[0]).cross(at[2] - at[0]).normalize_or_zero();
+            if normal == Vec3::ZERO {
+                (at[2] - at[1]).cross(at[3] - at[1]).normalize_or(Vec3::Y)
+            } else {
+                normal
+            }
+        });
         // A turning part is shaded where it turns to (`place_geometry` turns the
         // normal, the shader shades it, as `draw_block`'s faces are); a part
         // standing still keeps its shading in its colour. Its light is fixed
@@ -2741,11 +2759,23 @@ fn draw_model_part(draw: &mut BlockEntityDraw, part: &ModelPart, sprite: Rect, t
     }
     draw.push();
     draw.apply(part_transform(part));
+    // `ModelPart.translateAndRotate` on the normal stack too, where the draw keeps one (the
+    // first-person hand): the part's turn and scale; `pop` restores it with the pose.
+    if let Some(normals) = &mut draw.normal_pose {
+        normals.rotate(glam::Mat3::from_quat(part_rotation(part)));
+        normals.scale(Vec3::new(part.x_scale, part.y_scale, part.z_scale));
+    }
     if !part.skip_draw {
+        // `ModelPart.compile`'s normal pose, once for the part: the tracked one where the draw
+        // keeps one, else the one the part's pose gives.
+        let normals = draw
+            .normal_pose()
+            .unwrap_or_else(|| ModelNormals::new(draw.pose()));
         for polygon in &part.polygons {
             let corners = polygon.vertices.map(|v| v.pos.map(|c| c / 16.0));
             let uv = polygon.vertices.map(|v| [v.u, v.v]);
-            draw.emit_quad(corners, uv, sprite, tint, draw.light);
+            let normal = normals.turn(polygon.normal);
+            draw.emit_quad_facing(corners, uv, sprite, tint, draw.light, Some(normal));
         }
     }
     for (_, child) in part.children() {
@@ -2756,15 +2786,15 @@ fn draw_model_part(draw: &mut BlockEntityDraw, part: &ModelPart, sprite: Rect, t
 
 /// `ModelPart.translateAndRotate`: to the part's place in blocks, turned
 /// about z, then y, then x (`rotationZYX`), then scaled.
+/// The part's own turn (`ModelPart.translateAndRotate`: z, then y, then x).
+fn part_rotation(part: &ModelPart) -> Quat {
+    Quat::from_euler(glam::EulerRot::ZYX, part.z_rot, part.y_rot, part.x_rot)
+}
+
 fn part_transform(part: &ModelPart) -> Mat4 {
     let mut m = Mat4::from_translation(Vec3::new(part.x, part.y, part.z) / 16.0);
     if part.x_rot != 0.0 || part.y_rot != 0.0 || part.z_rot != 0.0 {
-        m *= Mat4::from_quat(Quat::from_euler(
-            glam::EulerRot::ZYX,
-            part.z_rot,
-            part.y_rot,
-            part.x_rot,
-        ));
+        m *= Mat4::from_quat(part_rotation(part));
     }
     if part.x_scale != 1.0 || part.y_scale != 1.0 || part.z_scale != 1.0 {
         m *= Mat4::from_scale(Vec3::new(part.x_scale, part.y_scale, part.z_scale));
@@ -4412,6 +4442,56 @@ pub mod tests {
         d.scale([2.0, 2.0, 2.0]);
         let p = d.pose().transform_point3(Vec3::ONE);
         assert_eq!(p, Vec3::new(12.0, 4.0, 2.0));
+    }
+
+    #[cfg(test)]
+    /// #6414: `draw_model_part` shades a polygon by its own normal, turned by the pose, as
+    /// `ModelPart.compile` does: one whose normal opposes its winding shades as that normal
+    /// faces, a part turned half about x turns it back, and a rigid pose keeps the normal's
+    /// supplied length. The expected colours are fixed values, not the draw's own helpers.
+    #[test]
+    fn a_model_part_shades_by_its_polygons_normal() {
+        use mod_api::{CubeListBuilder, LayerDefinition, MeshDefinition, PartPose};
+        use sunrise_core::geometry::Direction as Face;
+        let tint = 0xFF_FFFF;
+        let model = |x_rot: f32, normal: Option<[f32; 3]>| {
+            let mut mesh = MeshDefinition::new();
+            let root = mesh.root();
+            mesh.add_or_replace_child(
+                root,
+                "lid",
+                CubeListBuilder::create().add_box_faces([0.0; 3], [16.0; 3], &[Face::Up]),
+                PartPose::offset_and_rotation(0.0, 0.0, 0.0, x_rot, 0.0, 0.0),
+            );
+            let mut model = LayerDefinition::create(mesh, 64, 64).bake_root();
+            if let Some(normal) = normal {
+                let lid = model.children_mut().next().unwrap().1;
+                for polygon in &mut lid.polygons {
+                    polygon.normal = normal;
+                }
+            }
+            model
+        };
+        let color = |model: &ModelPart| {
+            let mut d = draw();
+            draw_model_part(&mut d, model, sprite(), tint);
+            let out = d.into_vertices();
+            assert_eq!(out.len(), 4);
+            assert!(out.iter().all(|v| v.color == out[0].color));
+            out[0].color
+        };
+        // The face's own up normal: the full brightness of an up face.
+        assert_eq!(color(&model(0.0, None)), 0xFFFF_FFFF);
+        // The same face with a normal pointing down shades as a bottom face, not as its winding.
+        assert_eq!(color(&model(0.0, Some([0.0, -1.0, 0.0]))), 0xFF66_6666);
+        // Turned half about x, the downward normal points up again.
+        assert_eq!(
+            color(&model(std::f32::consts::PI, Some([0.0, -1.0, 0.0]))),
+            0xFFFF_FFFF
+        );
+        // A trusted (rigid) pose keeps the supplied length: a quarter-length up normal shades
+        // dimmer than a unit one, as vanilla's `transformNormal` leaves it unnormalized.
+        assert_eq!(color(&model(0.0, Some([0.0, 0.25, 0.0]))), 0xFFA3_A3A3);
     }
 
     #[cfg(test)]

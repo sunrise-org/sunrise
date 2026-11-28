@@ -114,6 +114,11 @@ retains the definitions, not the suppliers. Call
 resulting `ModelPart` tree for posing and drawing. Baking again and reloading
 resources reuse the definition.
 
+`BlockEntityDrawContext::model_part` shades each face by its polygon's `normal` turned by
+the posed part, as vanilla's `ModelPart.compile` does, not by the order of its corners. Under a
+rigid or uniformly scaled pose the normal keeps the length you gave it, so a shorter normal shades
+dimmer; a non-uniform scale normalizes it.
+
 ## Worn humanoid equipment
 
 An item attaches one `ClientItemExtensions` Part in

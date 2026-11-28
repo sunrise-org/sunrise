@@ -12,12 +12,7 @@ pub struct Polygon {
 }
 impl Polygon {
     pub(crate) fn vertex_normal(&self, pose: ModelNormals) -> [i8; 4] {
-        let n = pose.matrix * glam::Vec3::from_array(self.normal);
-        let n = if pose.trusted {
-            n
-        } else {
-            n.normalize_or_zero()
-        };
+        let n = pose.turn(self.normal);
         let packed = n.to_array().map(|v| (v.clamp(-1.0, 1.0) * 127.0) as i8);
         let w = if self.cull_back {
             crate::mesher::SHADED_CULL_W
@@ -52,6 +47,17 @@ impl ModelNormals {
                 m.inverse().transpose()
             },
             trusted: uniform,
+        }
+    }
+    /// `normal` turned by this pose, as `PoseStack.Pose.transformNormal` turns a polygon's for
+    /// `ModelPart.compile`: a trusted (rigid or uniformly scaled) pose keeps the supplied
+    /// length, a zero included; an untrusted one normalizes the result.
+    pub fn turn(&self, normal: [f32; 3]) -> glam::Vec3 {
+        let n = self.matrix * glam::Vec3::from_array(normal);
+        if self.trusted {
+            n
+        } else {
+            n.normalize_or_zero()
         }
     }
     /// A rigid root pose: its linear part already transforms normals.
