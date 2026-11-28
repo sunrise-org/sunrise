@@ -766,6 +766,9 @@ impl crate::game::ClientGame<'_> {
             && self.common.player.is_some()
         {
             self.close_dialogs();
+            // A stock container screen under it closes nothing here, as vanilla's
+            // `AbstractContainerScreen.removed()` sends nothing: its menu goes with the
+            // player that `handleRespawn` replaces (#6603).
             self.set_screen(Screen::Dead);
             self.client.chat_ui.death_time = 0;
             self.client.chat_ui.death_confirm = None;

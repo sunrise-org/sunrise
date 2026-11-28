@@ -1,0 +1,2 @@
+# #6603: the death screen over a stock chest sends no close, and the menu is gone at respawn (prepared client resources).
+sunrise-client cut_layout::game::client_side::remote_client::tests::client_close_tests::death_over_a_stock_chest_sends_no_close_and_the_menu_is_gone_at_respawn lib daily resources

@@ -525,3 +525,91 @@ fn server_close_runs_sign_and_inventory_removal_without_echo() {
         },
     );
 }
+
+/// #6603: the death screen replacing a stock chest (`Gui.setScreen` runs the chest screen's
+/// `removed()`, which sends nothing), with chat over the chest or not. Vanilla sends no
+/// `ServerboundContainerClose`, and the chest's menu is gone once `handleRespawn` makes the new
+/// `LocalPlayer` (its `containerMenu` is its own inventory): the respawned player's inventory key
+/// opens the inventory, not the dead player's chest.
+#[test]
+#[ignore = "daily"]
+fn death_over_a_stock_chest_sends_no_close_and_the_menu_is_gone_at_respawn() {
+    isolated(
+        "cut_layout::game::client_side::remote_client::tests::client_close_tests::death_over_a_stock_chest_sends_no_close_and_the_menu_is_gone_at_respawn",
+        || {
+            with_client_game(|game| {
+                let mut reader = logged_in(game);
+                let open_chest = chest(game);
+                for chat_over_it in [false, true] {
+                    deliver(game, open_chest.clone());
+                    assert_eq!(game.client.screen, Screen::Inventory);
+                    assert_eq!(game.remote_menu().0, 12);
+                    if chat_over_it {
+                        game.begin_chat_screen("", false);
+                        assert_eq!(game.client.screen, Screen::Chat);
+                    }
+                    deliver(
+                        game,
+                        C::SetHealth(play::SetHealth {
+                            health: 0.0,
+                            food: 20,
+                            saturation: 5.0,
+                        }),
+                    );
+                    assert_eq!(
+                        game.client.screen,
+                        Screen::Dead,
+                        "chat over it: {chat_over_it}"
+                    );
+                    assert!(
+                        !sent(&mut reader)
+                            .iter()
+                            .any(|packet| matches!(packet, S::ContainerClose(_))),
+                        "death sends no close, chat over it: {chat_over_it}"
+                    );
+                    deliver(
+                        game,
+                        C::Respawn(play::Respawn {
+                            spawn: play::SpawnInfo {
+                                dimension_type: 0,
+                                dimension: "minecraft:overworld".into(),
+                                seed: 1,
+                                game_type: 0,
+                                previous_game_type: None,
+                                debug: false,
+                                flat: false,
+                                last_death: None,
+                                portal_cooldown: 0,
+                                sea_level: 63,
+                            },
+                            keep: 0,
+                        }),
+                    );
+                    deliver(
+                        game,
+                        C::PlayerPosition(play::PlayerPosition {
+                            teleport: 2,
+                            position: [0.5, 65.0, 0.5],
+                            delta: [0.0; 3],
+                            yaw: 0.0,
+                            pitch: 0.0,
+                            relatives: 0,
+                        }),
+                    );
+                    assert_eq!(
+                        game.remote_menu().0,
+                        0,
+                        "the new player has no chest, chat over it: {chat_over_it}"
+                    );
+                    assert_ne!(game.client.screen, Screen::Inventory);
+                    assert!(
+                        !sent(&mut reader)
+                            .iter()
+                            .any(|packet| matches!(packet, S::ContainerClose(_))),
+                        "respawn sends no close, chat over it: {chat_over_it}"
+                    );
+                }
+            });
+        },
+    );
+}
