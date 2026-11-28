@@ -59,6 +59,41 @@ impl OptionsUi {
             return std::sync::Arc::clone(layout);
         }
         let (widgets, top, bottom, content) = self.layout(s, w, h);
+        // A live mod setting write can hide a Config row while this page is already
+        // open. Only native setting controls need pruning here; search and other
+        // Options focus is managed by their own screen.
+        let native_setting_focus = matches!(self.page(), Page::NativeMod(_))
+            && self.focus.as_ref().is_some_and(|focus| {
+                matches!(
+                    focus,
+                    FocusId::Slider(Opt::ModSetting(..)) | FocusId::Act(Act::NativeSetting(..))
+                )
+            });
+        if native_setting_focus
+            && self.focus.as_ref().is_some_and(|focus| {
+                !widgets
+                    .iter()
+                    .enumerate()
+                    .any(|(i, widget)| matches_focus(focus, i, widget))
+            })
+        {
+            self.focus = None;
+            self.focus_from_keyboard = false;
+            self.can_change_value = false;
+        }
+        if matches!(self.page(), Page::NativeMod(_))
+            && self.dragging.is_some_and(|opt| {
+                matches!(opt, Opt::ModSetting(..))
+                &&
+            !widgets.iter().any(
+                |widget| matches!(&widget.kind, WKind::Slider { opt: found, .. } if *found == opt),
+            )
+            })
+        {
+            self.dragging = None;
+            self.slider_value = None;
+            self.can_change_value = false;
+        }
         // `layout` clamps the scroll; key the settled value.
         let key = (w, h, self.rev, self.scroll.to_bits());
         let layout = std::sync::Arc::new(OptionsLayout {

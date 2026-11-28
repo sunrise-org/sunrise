@@ -66,6 +66,9 @@ pub struct Parts {
     /// Categories by owner and setting key (`Registrar::categorize_setting`), one entry per
     /// setting: a later call replaces the earlier category.
     pub(crate) setting_categories: Vec<(&'static str, String, String)>,
+    /// Choice-dependent visibility by owner and setting key (`Registrar::show_setting_when_choice`),
+    /// one entry per setting: a later call replaces the earlier condition.
+    pub(crate) setting_visibility: Vec<(&'static str, String, String, usize)>,
     /// Config screen factories by owner, at most one each (`Registrar::register_config_screen`).
     pub(crate) config_screens: Vec<crate::parts::settings::ConfigScreenRegistration>,
     /// Block parts, and block entity parts as the block parts they also are.

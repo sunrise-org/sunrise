@@ -2483,7 +2483,7 @@ impl OptionsUi {
             Page::Font => "options.font.title",
             Page::Packs => "resourcePack.title",
             Page::Mods => "sunrise.pages.mods",
-            Page::NativeMod(_) => "Mod Settings",
+            Page::NativeMod(_) => "sunrise.mods.settings",
             Page::Added(i) => pages::title(i),
             Page::ShaderOptions => "sunrise.pages.shader_options",
             Page::PackOptions => "sunrise.pack.options.title",
@@ -2564,6 +2564,22 @@ impl OptionsUi {
         };
         let mut category: Option<&str> = None;
         for (j, setting) in page.settings.iter().enumerate() {
+            if let Some(visibility) = &setting.visible_when {
+                let visible = page
+                    .settings
+                    .iter()
+                    .find(|controller| controller.key == visibility.choice_setting)
+                    .is_some_and(|controller| {
+                        matches!(
+                            &controller.value,
+                            crate::mod_list::NativeSettingValue::Choice { index, .. }
+                                if *index == visibility.choice_index
+                        )
+                    });
+                if !visible {
+                    continue;
+                }
+            }
             if setting.category.as_deref() != category {
                 category = setting.category.as_deref();
                 if let Some(category) = category {
@@ -5316,6 +5332,7 @@ mod tests {
                     tooltip: None,
                     value: crate::mod_list::NativeSettingValue::Toggle(true),
                     category: None,
+                    visible_when: None,
                 }],
                 ..Default::default()
             }),
@@ -5367,6 +5384,7 @@ mod tests {
             label: key.into(),
             tooltip: None,
             category: category.map(str::to_owned),
+            visible_when: None,
             value,
         };
         s.mods.installed.push(crate::mod_list::Installed {
@@ -5491,6 +5509,160 @@ mod tests {
     }
 
     #[test]
+    fn a_mod_page_shows_only_matching_conditional_settings() {
+        use crate::mod_list::{NativeSetting, NativeSettingValue as V, SettingVisibility};
+        let mut s = Settings::default();
+        let ui = OptionsUi::default();
+        let mode = NativeSetting {
+            key: "zoom_mode".into(),
+            label: "zoom.mode".into(),
+            tooltip: None,
+            category: None,
+            visible_when: None,
+            value: V::Choice {
+                options: vec!["zoom.key".into(), "zoom.spyglass".into()],
+                index: 0,
+            },
+        };
+        let magnification = NativeSetting {
+            key: "magnification".into(),
+            label: "zoom.magnification".into(),
+            tooltip: None,
+            category: None,
+            visible_when: Some(SettingVisibility {
+                choice_setting: "zoom_mode".into(),
+                choice_index: 1,
+            }),
+            value: V::Range {
+                min: 2.0,
+                max: 10.0,
+                step: 1.0,
+                value: 5.0,
+            },
+        };
+        s.mods.installed.push(crate::mod_list::Installed {
+            id: "native".into(),
+            title: "Native 1.0".into(),
+            description: String::new(),
+            problem: None,
+            dev: false,
+            native: Some(crate::mod_list::NativePage {
+                settings: vec![mode.clone(), magnification],
+                ..Default::default()
+            }),
+        });
+
+        let has_setting = |ui: &OptionsUi, s: &Settings, index| {
+            ui.native_rows(s, 0).iter().any(|row| {
+                matches!(row, Row::Buttons(widget, _) if matches!(widget.kind, WKind::Slider { opt: Opt::ModSetting(0, j), .. } if j == index))
+            })
+        };
+        assert!(
+            !has_setting(&ui, &s, 1),
+            "reopened mode hides saved scale row"
+        );
+        assert!(matches!(
+            &s.mods.installed[0].native.as_ref().unwrap().settings[1].value,
+            V::Range { value: 5.0, .. }
+        ));
+
+        s.mods.installed[0].native.as_mut().unwrap().settings[0]
+            .value
+            .click();
+        assert!(has_setting(&ui, &s, 1));
+        assert!(matches!(
+            &s.mods.installed[0].native.as_ref().unwrap().settings[1].value,
+            V::Range { value: 5.0, .. }
+        ));
+        s.mods.installed[0].native.as_mut().unwrap().settings[0]
+            .value
+            .click();
+        assert!(!has_setting(&ui, &s, 1));
+    }
+
+    #[test]
+    fn hiding_a_mod_setting_drops_its_keyboard_focus_and_slider_drag() {
+        use crate::mod_list::{NativeSetting, NativeSettingValue as V, SettingVisibility};
+
+        let mut settings = Settings::default();
+        settings.mods.installed.push(crate::mod_list::Installed {
+            id: "native".into(),
+            title: "Native".into(),
+            description: String::new(),
+            problem: None,
+            dev: false,
+            native: Some(crate::mod_list::NativePage {
+                settings: vec![
+                    NativeSetting {
+                        key: "mode".into(),
+                        label: "mode".into(),
+                        tooltip: None,
+                        category: None,
+                        visible_when: None,
+                        value: V::Choice {
+                            options: vec!["a".into(), "b".into()],
+                            index: 0,
+                        },
+                    },
+                    NativeSetting {
+                        key: "scale".into(),
+                        label: "scale".into(),
+                        tooltip: None,
+                        category: None,
+                        visible_when: Some(SettingVisibility {
+                            choice_setting: "mode".into(),
+                            choice_index: 0,
+                        }),
+                        value: V::Range {
+                            min: 0.0,
+                            max: 2.0,
+                            step: 0.5,
+                            value: 1.0,
+                        },
+                    },
+                ],
+                ..Default::default()
+            }),
+        });
+
+        let mut ui = OptionsUi::default();
+        ui.show(Page::NativeMod(0));
+        let scale = Opt::ModSetting(0, 1);
+        ui.focus = Some(FocusId::Slider(scale));
+        ui.focus_from_keyboard = true;
+        ui.can_change_value = true;
+        ui.dragging = Some(scale);
+        ui.slider_value = Some((scale, 0.75, std::time::Instant::now()));
+
+        settings.mods.installed[0].native.as_mut().unwrap().settings[0]
+            .value
+            .click();
+        ui.layout_changed();
+        let _ = ui.built_layout(&settings, 480.0, 270.0);
+
+        assert_eq!(ui.focus, None);
+        assert!(!ui.focus_from_keyboard);
+        assert_eq!(ui.dragging, None);
+        assert_eq!(ui.slider_value, None);
+        assert!(!ui.can_change_value);
+    }
+
+    #[test]
+    fn rebuilding_video_layout_keeps_separately_drawn_search_focus() {
+        let settings = Settings::default();
+        let mut ui = OptionsUi::default();
+        ui.show(Page::Video);
+        ui.focus = Some(FocusId::Search);
+        ui.focus_from_keyboard = true;
+        ui.layout_changed();
+
+        let _ = ui.built_layout(&settings, 480.0, 270.0);
+
+        assert_eq!(ui.focus, Some(FocusId::Search));
+        assert!(ui.focus_from_keyboard);
+    }
+
+    #[test]
     fn an_uncategorized_mod_page_has_no_headings() {
         use crate::mod_list::{NativeSetting, NativeSettingValue as V};
         let mut s = Settings::default();
@@ -5500,6 +5672,7 @@ mod tests {
             label: key.into(),
             tooltip: None,
             category: None,
+            visible_when: None,
             value,
         };
         s.mods.installed.push(crate::mod_list::Installed {
@@ -5547,6 +5720,7 @@ mod tests {
             label: name.into(),
             tooltip: Some(key.into()),
             category: None,
+            visible_when: None,
             value,
         };
         s.mods.installed.push(crate::mod_list::Installed {
@@ -6278,6 +6452,7 @@ mod tests {
                     tooltip: None,
                     value: crate::mod_list::NativeSettingValue::Toggle(true),
                     category: None,
+                    visible_when: None,
                 }],
                 own_screen: false,
             }),

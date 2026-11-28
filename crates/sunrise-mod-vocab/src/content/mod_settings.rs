@@ -159,6 +159,14 @@ pub enum SettingError {
     Duplicate(String),
     /// No setting with this key is registered by the calling mod.
     UnknownSetting(String),
+    /// A conditional setting row refers to itself, a later-registered setting, a non-choice
+    /// controller, or a choice option outside the controller's registered options.
+    InvalidVisibility {
+        /// The setting row whose visibility condition is invalid.
+        setting: String,
+        /// The choice setting controlling the row's visibility.
+        controller: String,
+    },
     /// The label, the category, or an option of a choice is empty.
     EmptyLabel,
     /// A choice has no options, or its default is not one of them.
@@ -181,6 +189,13 @@ impl std::fmt::Display for SettingError {
             Self::UnknownSetting(key) => {
                 write!(f, "no setting {key:?} is registered by this mod")
             }
+            Self::InvalidVisibility {
+                setting,
+                controller,
+            } => write!(
+                f,
+                "setting {setting:?} cannot be shown conditionally by choice setting {controller:?}"
+            ),
             Self::EmptyLabel => f.write_str("a setting's label or option is empty"),
             Self::InvalidChoice => f.write_str("a choice needs options and a default among them"),
             Self::EmptyRange => f.write_str("a range needs finite bounds with min below max"),
