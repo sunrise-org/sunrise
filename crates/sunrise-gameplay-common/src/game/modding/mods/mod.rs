@@ -626,7 +626,7 @@ pub fn native_declared() -> std::borrow::Cow<'static, NativeDeclared> {
                 |batch, item| batch.items.push(item),
             );
         });
-        crate::game::native_hooks::native_creative_tabs(&context, &mut |listen| {
+        crate::game::native_hooks::base::native_creative_tabs(&context, &mut |listen| {
             declared.stage(
                 listen,
                 |answer| {
