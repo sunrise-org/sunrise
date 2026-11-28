@@ -47,7 +47,8 @@ pub use lang::Lang;
 pub use macros::{MC_VERSION, Macros, RENDER_STAGES, render_stage};
 pub use options::{
     PackOption, apply as apply_options, choose as choose_option, chosen_file, chosen_text, options,
-    parse_chosen, properties_macros, read_properties, switches_on, value_options, with_options,
+    options_from_sources, parse_chosen, properties_from_sources, properties_macros,
+    read_properties, switches_on, value_options, with_options,
 };
 pub use pack::{Pack, PackError};
 pub use post::{
@@ -55,10 +56,11 @@ pub use post::{
     Factor, GameInputs, Group, ImageSize, Indirect, ModPackProgram, ModPackProgramRequest,
 };
 pub use post::{
-    Post, PostProgram, STARS_BLEND, ShadowCulling, SkySwitches, TRANSLUCENT_BLEND,
-    dimension_folder, dimension_folder_named, load_post,
+    ComputeStageAttempt, LoaderRefusal, Post, PostProgram, STARS_BLEND, ShadowCulling, SkySwitches,
+    TRANSLUCENT_BLEND, dimension_folder, dimension_folder_named, load_post, load_post_with_sizes,
+    post_program_fallback_chains, post_program_supported, program_enabled_from_sources,
 };
-pub use preprocess::{Diagnostic, Origin, Preprocessed, preprocess};
+pub use preprocess::{Diagnostic, Origin, Preprocessed, include_targets, preprocess};
 pub use properties::{Entry, Note, Properties, Tonemap};
 pub use screens::{Item as ScreenItem, Screens};
 pub use textures::{

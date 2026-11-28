@@ -162,8 +162,7 @@ NOT_READS = {
     # shader_fuzz's `..` path parts, in the packs it writes and reads, beside its own seed pack.
     "sunrise-render-shaderpack": {"crates"},
     # Server init uses the filename as a checkout-root sentinel; only sunrise-prepare reads its contents.
-    "sunrise-server": {"research-lock.json"},
-    # Paths inside a staged game source or a test's scratch folder, never this checkout's files.
+    "sunrise-server": {"research-lock.json"},    # Paths inside a staged game source or a test's scratch folder, never this checkout's files.
     "sunrise-native-build": {
         "Cargo.lock", "crates/sunrise-client/Cargo.toml", "crates/sunrise-client/build.rs", "crates/sunrise-client/src",
         "crates/sunrise-client/src/native_main.rs.template", "crates/sunrise-core/src", "crates/sunrise-core/src/storage.rs",
@@ -276,6 +275,24 @@ ROOT_FILES = {"native-hooks.json", "research-lock.json", "Cargo.lock"}
 ROOT_JOIN = re.compile(r"^/?(\.\./?)+$")
 
 
+def source_literals(text):
+    """String literals that can name files, ignoring parent markers used as path syntax."""
+    literals = set()
+    for match in LITERAL.finditer(text):
+        literal = match.group(1)
+        if literal == "..":
+            before = text[:match.start()]
+            after = text[match.end():]
+            # A path-component comparison or match arm describes validation logic, not a path
+            # read. Keep constructor arguments such as .join("..") in the scan.
+            if (re.search(r"(?:==|!=)\s*$", before)
+                    or re.match(r"\s*(?:==|!=|=>)", after)
+                    or re.search(r"\bmatches!\([^)]*,\s*$", before)):
+                continue
+        literals.add(literal)
+    return literals
+
+
 def reads(workspace):
     """{package: {path: where}}: tracked paths outside the package that its sources name as string literals.
 
@@ -293,7 +310,7 @@ def reads(workspace):
         manifest = "CARGO_MANIFEST_DIR" in text
         for name in owners:
             home = workspace.home[name]
-            for literal in set(LITERAL.findall(text)):
+            for literal in source_literals(text):
                 stripped = literal.strip("/")
                 if re.search(r"[\s{}]|://", literal):
                     continue

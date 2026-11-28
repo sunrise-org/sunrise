@@ -3,7 +3,17 @@ import subprocess
 import unittest
 from unittest import mock
 
-from tools.ci.test_scope import NOT_READS, READERS, SCANNED, Workspace, cargo_metadata, flags, reads, under
+from tools.ci.test_scope import (
+    NOT_READS,
+    READERS,
+    SCANNED,
+    Workspace,
+    cargo_metadata,
+    flags,
+    reads,
+    source_literals,
+    under,
+)
 
 
 def package(name, folder, *dependencies, source=None):
@@ -86,6 +96,15 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(flags({"b", "a"}), "packages=-p a -p b")
         self.assertEqual(flags(None), "packages=")
         self.assertEqual(flags(set()), "packages=")
+
+
+class SourceLiteralTests(unittest.TestCase):
+    def test_parent_component_checks_are_not_reads_but_parent_joins_are(self):
+        self.assertNotIn(
+            "..", source_literals('match part { ".." => reject(), _ => accept() }')
+        )
+        self.assertNotIn("..", source_literals('if part != ".." { reject(); }'))
+        self.assertIn("..", source_literals('Path::new(root).join("..")'))
 
 
 class ModApiGenDiscoveryTests(unittest.TestCase):

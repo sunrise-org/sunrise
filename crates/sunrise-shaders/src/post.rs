@@ -10,7 +10,8 @@
 //! - A program that fails to translate is reported and treated as missing (2.5).
 //! - Terrain draws with the first program of its fallback chain that loads (2.3).
 
-use std::collections::BTreeSet;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::config::{self, Config};
 use crate::custom::Custom;
@@ -237,6 +238,63 @@ const GROUPS: [(Group, &str); 6] = [
     (Group::Composite, "composite"),
     (Group::Final, "final"),
 ];
+
+/// The loader's ordered `gbuffers` fallback chains, including the optional one-program slots.
+/// Tools that predict which pack program the loader will try use this list instead of rebuilding
+/// the chains from filenames. Shadow chains are included; callers gate them on the shadow pass.
+pub fn post_program_fallback_chains() -> &'static [&'static [&'static str]] {
+    static CHAINS: &[&[&str]] = &[
+        &WATER,
+        &TERRAIN,
+        &TERRAIN_SOLID,
+        &TERRAIN_CUTOUT,
+        &LINES,
+        &SKY,
+        &SKY_TEXTURED,
+        &ENTITIES,
+        &BLOCK,
+        &CLOUDS,
+        &HAND,
+        &HAND_WATER,
+        &WEATHER,
+        &ENTITIES_TRANSLUCENT,
+        &BEACON_BEAM,
+        &PARTICLES,
+        &["gbuffers_damagedblock"],
+        &["gbuffers_block_translucent"],
+        &["gbuffers_particles_translucent"],
+        &["shadow"],
+        &["shadow_water", "shadow"],
+        &["shadow_entities", "shadow"],
+        &["shadow_block", "shadow"],
+    ];
+    CHAINS
+}
+
+/// Whether the post and gbuffers loader has a path that can consider `name`.
+///
+/// Shader fuzzing uses this to avoid treating arbitrary stage pairs as programs Sunrise should
+/// load. Keep the gbuffers names tied to the fallback chains below.
+pub fn post_program_supported(name: &str) -> bool {
+    let numbered = |base: &str| {
+        name.strip_prefix(base)
+            .and_then(|suffix| suffix.parse::<u8>().ok())
+            .is_some_and(|number| {
+                (1..=99).contains(&number) && number.to_string() == name[base.len()..]
+            })
+    };
+    GROUPS.iter().any(|(group, base)| {
+        if *group == Group::Final {
+            name == *base
+        } else {
+            name == *base || numbered(base)
+        }
+    }) || name == "shadowcomp"
+        || numbered("shadowcomp")
+        || post_program_fallback_chains()
+            .iter()
+            .any(|chain| chain.contains(&name))
+}
 
 /// The stars' blend: added to the sky, their own alpha replacing the buffer's, as vanilla draws
 /// them (`RenderPipelines.STARS`, `BlendFunction.OVERLAY`). Iris 1.11.7 drew them so with a probe
@@ -545,11 +603,35 @@ pub enum ShadowCulling {
     Reversed,
 }
 
+/// A program or compute stage the loader found but could not load.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LoaderRefusal {
+    /// A named render program was rejected.
+    Program(String),
+    /// A compute shader file was rejected.
+    ComputeStage(String),
+}
+
+/// The identity of an enabled compute stage dispatched by the loader.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ComputeStageAttempt {
+    /// The render program that dispatched the compute stages (`composite`).
+    pub owner: String,
+    /// The compute stage's logical name (`composite_a`).
+    pub name: String,
+    /// The stage path in the pack (`world0/composite_a.csh`).
+    pub path: String,
+}
+
 #[derive(Clone)]
 pub struct Post {
     /// The folder the programs came from: `""` for `shaders` itself, else `world0`...
     pub folder: String,
     pub programs: Vec<PostProgram>,
+    /// Typed records for loader rejections; `notes` retains its human-readable messages.
+    pub loader_refusals: Vec<LoaderRefusal>,
+    /// Enabled compute stages the loader attempted to dispatch, whether or not they translated.
+    pub compute_stage_attempts: Vec<ComputeStageAttempt>,
     /// The flips of the virtual `deferred_pre` and `composite_pre` (6.1.6).
     pub deferred_pre: Vec<(u32, bool)>,
     pub composite_pre: Vec<(u32, bool)>,
@@ -880,10 +962,36 @@ pub fn load_post(
     macros: &Macros,
     inputs: &GameInputs,
 ) -> Post {
+    load_post_inner(pack, folder, properties, macros, inputs, false).0
+}
+
+/// Loads a post-processing pack and returns the preprocessed byte size of every stage in its
+/// active shader folder, including stages belonging to disabled or skipped programs. This audit
+/// mode is for tools; the ordinary game loader does not collect sizes or preprocess extra stages.
+pub fn load_post_with_sizes(
+    pack: &Pack,
+    folder: &str,
+    properties: &Properties,
+    macros: &Macros,
+    inputs: &GameInputs,
+) -> (Post, BTreeMap<String, usize>) {
+    load_post_inner(pack, folder, properties, macros, inputs, true)
+}
+
+fn load_post_inner(
+    pack: &Pack,
+    folder: &str,
+    properties: &Properties,
+    macros: &Macros,
+    inputs: &GameInputs,
+    audit_sizes: bool,
+) -> (Post, BTreeMap<String, usize>) {
     let limits = inputs.interface_limits;
     let mut post = Post {
         folder: folder.to_owned(),
         programs: Vec::new(),
+        loader_refusals: Vec::new(),
+        compute_stage_attempts: Vec::new(),
         deferred_pre: flips(properties, "deferred_pre"),
         composite_pre: flips(properties, "composite_pre"),
         terrain: None,
@@ -1000,7 +1108,9 @@ pub fn load_post(
         switches: crate::switches_on(pack),
         options,
         geometry: None,
-        limits: inputs.interface_limits,
+        audit_sizes,
+        stage_sizes: RefCell::new(BTreeMap::new()),
+        limits,
         indirect,
         post: &mut post,
     };
@@ -1340,7 +1450,29 @@ pub fn load_post(
         [&inputs.terrain_geometry, &inputs.entity_geometry].map(Option::as_ref),
         &inputs.mod_programs,
     );
-    post
+    if audit_sizes {
+        let unprocessed: Vec<String> = loader
+            .pack
+            .list(folder)
+            .into_iter()
+            .filter(|file| {
+                file.rsplit_once('.').is_some_and(|(_, extension)| {
+                    ["vsh", "fsh", "gsh", "csh", "tcs", "tes"].contains(&extension)
+                })
+            })
+            .map(|file| match folder {
+                "" => file,
+                folder => format!("{folder}/{file}"),
+            })
+            .filter(|file| !loader.stage_sizes.borrow().contains_key(file))
+            .collect();
+        for file in unprocessed {
+            let _ = loader.preprocess(&file);
+        }
+    }
+    let stage_sizes = std::mem::take(&mut *loader.stage_sizes.borrow_mut());
+    drop(loader);
+    (post, stage_sizes)
 }
 
 /// Whether the shadow pass runs (2.5) and, when it does, its programs: `shadow_solid` and
@@ -1562,6 +1694,8 @@ struct Loader<'a> {
     options: Macros,
     /// The game's geometry read vertex by vertex, while loading shadow programs.
     geometry: Option<crate::GeometryInputs>,
+    audit_sizes: bool,
+    stage_sizes: RefCell<BTreeMap<String, usize>>,
     /// The device's stage interface limits ([`GameInputs::interface_limits`]).
     limits: naga::front::glsl::InterfaceLimits,
     /// `indirect.<pass>` values by pass, as `properties` holds them.
@@ -1646,6 +1780,17 @@ impl Loader<'_> {
         }
         let tessellated = self.pack.exists(&path("tcs")) || self.pack.exists(&path("tes"));
         if tessellated {
+            if self.audit_sizes {
+                for ext in ["tcs", "tes"] {
+                    let stage = path(ext);
+                    if self.pack.exists(&stage) {
+                        let _ = self.preprocess(&stage);
+                    }
+                }
+            }
+            self.post
+                .loader_refusals
+                .push(LoaderRefusal::Program(name.clone()));
             self.post.notes.push(format!(
                 "{name}: uses a tessellation stage (unsupported); skipped"
             ));
@@ -1653,6 +1798,9 @@ impl Loader<'_> {
         }
         if self.pack.exists(&path("gsh")) {
             let Some(inputs) = self.geometry.clone() else {
+                self.post
+                    .loader_refusals
+                    .push(LoaderRefusal::Program(name.clone()));
                 self.post.notes.push(format!(
                     "{name}: uses a geometry stage (supported for the shadow pass's terrain and entities only); skipped"
                 ));
@@ -1662,26 +1810,37 @@ impl Loader<'_> {
         }
         let vertex = self.preprocess(&vsh);
         let fragment = self.preprocess(&fsh);
-        let notes = &mut self.post.notes;
         let problems: Vec<String> = [&vertex, &fragment]
             .iter()
             .flat_map(|pp| diagnostics(pp))
             .collect();
         if !problems.is_empty() {
-            notes.extend(problems);
-            notes.push(format!("{name}: skipped"));
+            self.post
+                .loader_refusals
+                .push(LoaderRefusal::Program(name.clone()));
+            self.post.notes.extend(problems);
+            self.post.notes.push(format!("{name}: skipped"));
             return None;
         }
-        notes.extend([&vertex, &fragment].iter().flat_map(|pp| warnings(pp)));
+        self.post
+            .notes
+            .extend([&vertex, &fragment].iter().flat_map(|pp| warnings(pp)));
         let program = match translate(&vertex, &fragment) {
             Ok(p) => p,
             Err(errors) => {
-                notes.extend(errors.iter().map(ToString::to_string));
-                notes.push(format!("{name}: skipped"));
+                self.post
+                    .loader_refusals
+                    .push(LoaderRefusal::Program(name.clone()));
+                self.post
+                    .notes
+                    .extend(errors.iter().map(ToString::to_string));
+                self.post.notes.push(format!("{name}: skipped"));
                 return None;
             }
         };
-        notes.extend(program.notes.iter().map(ToString::to_string));
+        self.post
+            .notes
+            .extend(program.notes.iter().map(ToString::to_string));
         self.post.config.read_vertex(&vertex);
         self.post.config.read(&fragment);
         let mut buffers =
@@ -1761,46 +1920,58 @@ impl Loader<'_> {
     /// (GLSL lets a write-only image omit it) get the one `image.*` gives them.
     fn preprocess(&self, path: &str) -> Preprocessed {
         let pp = preprocess(self.pack, path, self.macros);
-        if self.post.images.is_empty() || !pp.code().contains("image") {
-            return pp;
-        }
-        let source: Vec<&str> = pp.code().split('\n').collect();
-        let lines: Vec<String> = source
-            .iter()
-            .enumerate()
-            .map(|(n, &line)| {
-                // A qualifier on the line before (`layout(r32ui)` then `uniform uimage3D v;`).
-                let qualified = line.contains("layout")
-                    || source[..n]
+        let pp = if self.post.images.is_empty() || !pp.code().contains("image") {
+            pp
+        } else {
+            let source: Vec<&str> = pp.code().split('\n').collect();
+            let lines: Vec<String> = source
+                .iter()
+                .enumerate()
+                .map(|(n, &line)| {
+                    // A qualifier on the line before (`layout(r32ui)` then `uniform uimage3D v;`).
+                    let qualified = line.contains("layout")
+                        || source[..n]
+                            .iter()
+                            .rev()
+                            .find(|l| !l.trim().is_empty())
+                            .is_some_and(|l| {
+                                l.trim_start().starts_with("layout") && !l.contains(';')
+                            });
+                    let words: Vec<&str> = line
+                        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                        .collect();
+                    let image = self
+                        .post
+                        .images
                         .iter()
-                        .rev()
-                        .find(|l| !l.trim().is_empty())
-                        .is_some_and(|l| l.trim_start().starts_with("layout") && !l.contains(';'));
-                let words: Vec<&str> = line
-                    .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-                    .collect();
-                let image = self
-                    .post
-                    .images
-                    .iter()
-                    .find(|i| words.contains(&i.name.as_str()));
-                match image {
-                    Some(i)
-                        if words.contains(&"uniform")
-                            && !qualified
-                            && words.iter().any(|w| {
-                                ["image1D", "image2D", "image3D"]
-                                    .iter()
-                                    .any(|d| w.ends_with(d))
-                            }) =>
-                    {
-                        format!("layout({}) {line}", i.qualifier)
+                        .find(|i| words.contains(&i.name.as_str()));
+                    match image {
+                        Some(i)
+                            if words.contains(&"uniform")
+                                && !qualified
+                                && words.iter().any(|w| {
+                                    ["image1D", "image2D", "image3D"]
+                                        .iter()
+                                        .any(|d| w.ends_with(d))
+                                }) =>
+                        {
+                            format!("layout({}) {line}", i.qualifier)
+                        }
+                        _ => line.to_owned(),
                     }
-                    _ => line.to_owned(),
-                }
-            })
-            .collect();
-        pp.with_code(lines.join("\n"))
+                })
+                .collect();
+            pp.with_code(lines.join("\n"))
+        };
+        if self.audit_sizes {
+            let size = pp.code().len();
+            self.stage_sizes
+                .borrow_mut()
+                .entry(path.to_owned())
+                .and_modify(|seen| *seen = (*seen).max(size))
+                .or_insert(size);
+        }
+        pp
     }
 
     /// A program with a geometry stage, folded into its vertex stage. A refusal notes the
@@ -1815,26 +1986,35 @@ impl Loader<'_> {
         inputs: &crate::GeometryInputs,
     ) -> Option<PostProgram> {
         let stages = [vsh, gsh, fsh].map(|p| self.preprocess(p));
-        let notes = &mut self.post.notes;
         let problems: Vec<String> = stages.iter().flat_map(diagnostics).collect();
         if !problems.is_empty() {
-            notes.extend(problems);
-            notes.push(format!("{name}: skipped"));
+            self.post
+                .loader_refusals
+                .push(LoaderRefusal::Program(name.clone()));
+            self.post.notes.extend(problems);
+            self.post.notes.push(format!("{name}: skipped"));
             return None;
         }
         // Conditions read as false, as the other programs' (`load`).
-        notes.extend(stages.iter().flat_map(warnings));
+        self.post.notes.extend(stages.iter().flat_map(warnings));
         let [vertex, geometry, fragment] = &stages;
         let (program, triangles) =
             match crate::translate_geometry(vertex, geometry, fragment, inputs, self.limits) {
                 Ok(p) => p,
                 Err(errors) => {
-                    notes.extend(errors.iter().map(ToString::to_string));
-                    notes.push(format!("{name}: skipped"));
+                    self.post
+                        .loader_refusals
+                        .push(LoaderRefusal::Program(name.clone()));
+                    self.post
+                        .notes
+                        .extend(errors.iter().map(ToString::to_string));
+                    self.post.notes.push(format!("{name}: skipped"));
                     return None;
                 }
             };
-        notes.extend(program.notes.iter().map(ToString::to_string));
+        self.post
+            .notes
+            .extend(program.notes.iter().map(ToString::to_string));
         self.post.config.read_vertex(vertex);
         self.post.config.read(fragment);
         let mut buffers =
@@ -1874,6 +2054,7 @@ impl Loader<'_> {
     /// The compute programs of composite-style program `name` that are on and translate.
     /// Translation refusals are noted with their authored position and stage when known.
     fn compute(&mut self, name: &str) -> Vec<(String, ComputeProgram)> {
+        let owner = name.to_owned();
         let mut out = Vec::new();
         let names =
             std::iter::once(name.to_owned()).chain(('a'..='z').map(|c| format!("{name}_{c}")));
@@ -1893,16 +2074,23 @@ impl Loader<'_> {
             {
                 continue;
             }
+            self.post.compute_stage_attempts.push(ComputeStageAttempt {
+                owner: owner.clone(),
+                name: name.clone(),
+                path: path.clone(),
+            });
             let pp = self.preprocess(&path);
             let problems = diagnostics(&pp);
-            let notes = &mut self.post.notes;
             if !problems.is_empty() {
-                notes.extend(problems);
-                notes.push(format!("{name}: skipped"));
+                self.post
+                    .loader_refusals
+                    .push(LoaderRefusal::ComputeStage(path.clone()));
+                self.post.notes.extend(problems);
+                self.post.notes.push(format!("{name}: skipped"));
                 continue;
             }
             // Conditions read as false, as the other programs' (`load`).
-            notes.extend(warnings(&pp));
+            self.post.notes.extend(warnings(&pp));
             let indirect = match self.indirect.get(name.as_str()) {
                 None => None,
                 Some(value) => match self
@@ -1912,20 +2100,30 @@ impl Loader<'_> {
                 {
                     Ok(indirect) => Some(indirect),
                     Err(why) => {
-                        notes.push(format!("`indirect.{name}`: {why}"));
-                        notes.push(format!("{name}: skipped"));
+                        self.post
+                            .loader_refusals
+                            .push(LoaderRefusal::ComputeStage(path.clone()));
+                        self.post.notes.push(format!("`indirect.{name}`: {why}"));
+                        self.post.notes.push(format!("{name}: skipped"));
                         continue;
                     }
                 },
             };
             match crate::translate::translate_compute_with(&pp, indirect) {
                 Ok(program) => {
-                    notes.extend(program.notes.iter().map(ToString::to_string));
+                    self.post
+                        .notes
+                        .extend(program.notes.iter().map(ToString::to_string));
                     out.push((name, program));
                 }
                 Err(errors) => {
-                    notes.extend(errors.iter().map(ToString::to_string));
-                    notes.push(format!("{name}: skipped"));
+                    self.post
+                        .loader_refusals
+                        .push(LoaderRefusal::ComputeStage(path.clone()));
+                    self.post
+                        .notes
+                        .extend(errors.iter().map(ToString::to_string));
+                    self.post.notes.push(format!("{name}: skipped"));
                 }
             }
         }
@@ -1987,6 +2185,22 @@ fn enabled(
         }
     }
     eval_condition(&condition, macros).ok() != Some(0)
+}
+
+/// Whether the real loader would consider `name` enabled using this candidate's source options.
+/// The fuzzer uses this when recomputing expected programs after mutations; its in-memory files
+/// are decoded the same way `Pack::read_text` decodes the loader's inputs.
+pub fn program_enabled_from_sources(
+    properties_text: &str,
+    folder: &str,
+    name: &str,
+    files: &BTreeMap<String, String>,
+    macros: &Macros,
+) -> bool {
+    let options = crate::options::options_from_sources(files, macros);
+    let properties = crate::options::properties_with_macros(properties_text, &options);
+    let switches = crate::options::switches_on_from_sources(files);
+    enabled(&properties, folder, name, &options, &switches)
 }
 
 /// `blend.<program>`: `Some(None)` for `off`, `Some(factors)`, or `None` when absent or not
@@ -2077,6 +2291,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn fuzzer_program_support_matches_loader_dispatch_names() {
+        for name in [
+            "setup",
+            "setup99",
+            "composite1",
+            "final",
+            "shadowcomp",
+            "shadowcomp4",
+            "gbuffers_terrain",
+            "gbuffers_particles_translucent",
+            "shadow_entities",
+        ] {
+            assert!(post_program_supported(name), "{name}");
+        }
+        for name in ["extra", "composite0", "composite100", "composite01"] {
+            assert!(!post_program_supported(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn fuzzer_program_enable_uses_the_candidate_pack_options() {
+        let mut files = BTreeMap::from([(
+            "options.glsl".to_owned(),
+            "#define DISABLE_FINAL // [true false]\n#ifdef DISABLE_FINAL\n#endif\n".to_owned(),
+        )]);
+        let properties = "program.final.enabled = !DISABLE_FINAL\n";
+        let mut macros = Macros::standard();
+        macros.define_renderer(4);
+        assert!(!program_enabled_from_sources(
+            properties, "", "final", &files, &macros
+        ));
+
+        files.insert(
+            "options.glsl".to_owned(),
+            "//#define DISABLE_FINAL // [true false]\n#ifdef DISABLE_FINAL\n#endif\n".to_owned(),
+        );
+        assert!(program_enabled_from_sources(
+            properties, "", "final", &files, &macros
+        ));
+    }
+
+    #[test]
     fn unsupported_defaults_are_notes_without_skipping_render_or_compute() {
         let pack = Pack::from_zip_bytes(
             "original-default-control",
@@ -2113,6 +2369,171 @@ mod tests {
             !post.notes.iter().any(|n| n.contains("skipped")),
             "{:?}",
             post.notes
+        );
+    }
+
+    #[test]
+    fn size_audit_uses_loader_preprocessing_and_includes_tessellation_stages() {
+        let vertex = "#version 430\nvoid main() { gl_Position = vec4(0.0); }";
+        let pack = Pack::from_zip_bytes(
+            "size-audit",
+            crate::pack::tests::zip(&[
+                ("shaders/composite.vsh", vertex),
+                ("shaders/composite.fsh", "#version 430\nout vec4 color; void main() { color = vec4(1.0); }"),
+                ("shaders/composite.tcs", "#version 430\n// tessellation control"),
+                ("shaders/composite.tes", "#version 430\n// tessellation evaluation"),
+                ("shaders/composite1.vsh", vertex),
+                ("shaders/composite1.fsh", "#version 430\nvoid main() {}"),
+                ("shaders/final.vsh", vertex),
+                ("shaders/final.fsh", "#version 430\n#include \"lib/common.glsl\"\nvoid main() { gl_FragColor = FZ_AUDIT; }"),
+                ("shaders/lib/common.glsl", "#define FZ_AUDIT vec4(1.0, 0.0, 0.0, 1.0)\n"),
+            ]),
+        )
+        .unwrap();
+        let properties =
+            Properties::parse("program.composite1.enabled = false", &Macros::standard());
+        let (post, sizes) = load_post_with_sizes(
+            &pack,
+            "",
+            &properties,
+            &Macros::standard(),
+            &GameInputs::default(),
+        );
+        assert!(
+            post.notes
+                .iter()
+                .any(|note| note.contains("composite: uses a tessellation stage"))
+        );
+        for file in [
+            "composite.vsh",
+            "composite.fsh",
+            "composite.tcs",
+            "composite.tes",
+            "composite1.vsh",
+            "composite1.fsh",
+        ] {
+            assert!(sizes.contains_key(file), "missing {file}: {sizes:?}");
+        }
+        assert!(
+            !post
+                .programs
+                .iter()
+                .any(|program| program.name == "composite1")
+        );
+        let raw_size = pack.read("final.fsh").unwrap().len();
+        assert!(
+            sizes["final.fsh"] > 50 && sizes["final.fsh"] < raw_size,
+            "{sizes:?}"
+        );
+    }
+
+    #[test]
+    fn size_audit_counts_image_qualifiers_added_at_the_limit() {
+        // The preprocessed fixture and its expected image-qualified form are independent
+        // translated inputs: the limit and audited byte count must not come from preprocess().
+        const BEFORE_IMAGE_QUALIFIER: &str =
+            "\nlayout(local_size_x = 1) in;\nwriteonly uniform uimage3D voxels;\nvoid main() {}\n";
+        const AFTER_IMAGE_QUALIFIER: &str = "\nlayout(local_size_x = 1) in;\nlayout(r32ui) writeonly uniform uimage3D voxels;\nvoid main() {}\n";
+        const LIMIT: usize = 80;
+        const EXPECTED_BYTES: usize = 94;
+        assert_eq!(BEFORE_IMAGE_QUALIFIER.len(), LIMIT);
+        assert_eq!(AFTER_IMAGE_QUALIFIER.len(), EXPECTED_BYTES);
+
+        let source = "#version 430\nlayout(local_size_x = 1) in;\n\
+                      writeonly uniform uimage3D voxels;\nvoid main() {}\n";
+        let pack = Pack::from_zip_bytes(
+            "image-size-audit",
+            crate::pack::tests::zip(&[("shaders/composite99.csh", source)]),
+        )
+        .unwrap();
+        let path = "composite99.csh";
+        let properties = Properties::parse(
+            "image.voxels = none RED_INTEGER R32UI UNSIGNED_INT false false 4 4 4\n\
+             program.composite99.enabled = false\n",
+            &Macros::standard(),
+        );
+        let (_, sizes) = load_post_with_sizes(
+            &pack,
+            "",
+            &properties,
+            &Macros::standard(),
+            &GameInputs::default(),
+        );
+
+        assert_eq!(
+            sizes[path], EXPECTED_BYTES,
+            "the added qualifier pushes the stage across its pre-rewrite size limit"
+        );
+        assert!(sizes[path] > LIMIT, "{sizes:?}");
+    }
+
+    #[test]
+    fn loader_records_typed_program_and_compute_stage_outcomes() {
+        let vertex = "#version 430\nvoid main() { gl_Position = vec4(0.0); }";
+        let fragment = "#version 430\nout vec4 color; void main() { color = vec4(1.0); }";
+        let pack = Pack::from_zip_bytes(
+            "typed-loader-outcomes",
+            crate::pack::tests::zip(&[
+                ("shaders/composite.vsh", vertex),
+                ("shaders/composite.fsh", fragment),
+                (
+                    "shaders/composite.tcs",
+                    "#version 430\n// unsupported tessellation",
+                ),
+                ("shaders/composite1.vsh", vertex),
+                ("shaders/composite1.fsh", fragment),
+                (
+                    "shaders/composite1_a.csh",
+                    "#version 430\n#include \\\"missing.glsl\\\"\n\
+                     layout(local_size_x = 1) in; void main() {}",
+                ),
+                (
+                    "shaders/composite1_b.csh",
+                    "#version 430\nlayout(local_size_x = 1) in; void main() {}",
+                ),
+            ]),
+        )
+        .unwrap();
+        let post = load_post(
+            &pack,
+            "",
+            &Properties::default(),
+            &Macros::standard(),
+            &GameInputs::default(),
+        );
+
+        assert!(
+            post.loader_refusals
+                .contains(&LoaderRefusal::Program("composite".to_owned()))
+        );
+        assert!(
+            post.loader_refusals
+                .contains(&LoaderRefusal::ComputeStage("composite1_a.csh".to_owned()))
+        );
+        assert_eq!(
+            post.compute_stage_attempts,
+            [
+                ComputeStageAttempt {
+                    owner: "composite1".to_owned(),
+                    name: "composite1_a".to_owned(),
+                    path: "composite1_a.csh".to_owned(),
+                },
+                ComputeStageAttempt {
+                    owner: "composite1".to_owned(),
+                    name: "composite1_b".to_owned(),
+                    path: "composite1_b.csh".to_owned(),
+                },
+            ]
+        );
+        assert!(
+            post.notes.iter().any(|note| {
+                note == "composite: uses a tessellation stage (unsupported); skipped"
+            })
+        );
+        assert!(
+            post.notes
+                .iter()
+                .any(|note| note == "composite1_a: skipped")
         );
     }
 

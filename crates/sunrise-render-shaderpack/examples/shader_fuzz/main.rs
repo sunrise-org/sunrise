@@ -9,32 +9,25 @@
 //!                 [--size-limit MIB] [--shrink-seconds N] [--work-dir DIR] [--seed-pack DIR]
 //!
 //! Every case keeps these invariants: no panic; done within `--time-limit`; within
-//! `--memory-limit` (the worker's allocator refuses past it, which aborts it); every stage file
-//! of the dimension's folder within `--size-limit` once preprocessed; every program that loads validates in naga; every
-//! note names its subject, and a program the unmutated case loaded is loaded or named; the same
-//! case loads the same twice.
+//! Every case checks candidate-specific loader results: no panic; within `--time-limit` and
+//! `--memory-limit`; active-folder stages within `--size-limit`; loaded modules validate in naga;
+//! diagnostics have grounded subjects; typed refusals explain only their exact program or stage;
+//! candidate program and compute-stage expectations follow active loader inputs and identities;
+//! options, images and includes use the pack parsers. The same case loads identically twice.
 //!
-//! The run (this process) only lists the corpus: names and paths. Each of `--jobs` case
-//! processes (this binary, `case`) opens and reads the packs of its cases, makes them and
-//! shrinks them, within `--memory-limit`, so a pack that exhausts it or hangs costs its case,
-//! reported as that case's failure. A case process loads each candidate in its own eval
-//! worker (this binary, `worker`), so a hang or an abort of the translator costs one load. A
-//! failure is grouped by invariant, first failing step and detail; each group's smallest case
-//! is shrunk while the same failure stays, written as a pack folder under `<work-dir>/groups/`,
-//! and listed in `<work-dir>/report.json` with the arguments that replay its smallest case
-//! (`replay_args`), beside the cases run and skipped (each skipped one is printed with why) and
-//! how each case process ended. `--budget` alone generates cases until it ends, `--count` alone
-//! that many, both until the first is reached, neither 200. Exits 1 when any case fails, or
-//! when no case ran. `--seed-pack` replaces the committed seed pack
-//! (`examples/shader_fuzz/seeds`).
-
+//! The run process only lists corpus names and paths. Case processes open and read packs, make
+//! cases and shrink failures within `--memory-limit`; each candidate is evaluated in its own
+//! bounded worker. Reports include replay arguments, skipped cases and worker outcomes. `--budget`
+//! alone runs until it ends, `--count` alone runs that many, both stop at the first limit, and
+//! neither defaults to 200. Exits 1 on a failure or when no case ran. `--seed-pack` replaces the
+//! committed seed pack (`examples/shader_fuzz/seeds`).
 mod cases;
 mod check;
 mod process;
 mod shrink;
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -46,7 +39,7 @@ use cases::{Case, CaseId, Entry};
 use check::{Failure, Outcome, Request};
 use process::Process;
 use shrink::{Budget, Evaluate, Files, Found, Info};
-
+use sunrise_shaders::Macros;
 /// The system allocator, counting: past `LIMIT` bytes in use an allocation fails, and the
 /// process aborts with Rust's "memory allocation of N bytes failed".
 struct Counting;
@@ -349,7 +342,13 @@ impl Evaluate for InProcess {
 }
 
 fn request_value(r: &Request) -> serde_json::Value {
-    serde_json::json!({"dim": r.dim, "flat": r.flat, "expect": r.expect, "size_limit": r.size_limit})
+    serde_json::json!({
+        "dim": r.dim,
+        "flat": r.flat,
+        "expect": r.expect,
+        "expect_compute": r.expect_compute,
+        "size_limit": r.size_limit,
+    })
 }
 
 fn strings(v: &serde_json::Value) -> Vec<String> {
@@ -365,6 +364,7 @@ fn parse_request(v: &serde_json::Value) -> Request {
         dim: v["dim"].as_u64().unwrap_or(0) as usize,
         flat: v["flat"].as_bool().unwrap_or(true),
         expect: strings(&v["expect"]),
+        expect_compute: strings(&v["expect_compute"]),
         size_limit: v["size_limit"].as_u64().unwrap_or(u64::MAX) as usize,
     }
 }
@@ -375,8 +375,13 @@ fn outcome_json(o: &Outcome) -> String {
         .iter()
         .map(|f| [&f.invariant, &f.detail])
         .collect();
-    serde_json::json!({"failures": failures, "loaded": o.loaded, "shadow_pass": o.shadow_pass})
-        .to_string()
+    serde_json::json!({
+        "failures": failures,
+        "loaded": o.loaded,
+        "compute_loaded": o.compute_loaded,
+        "shadow_pass": o.shadow_pass
+    })
+    .to_string()
 }
 
 fn parse_outcome(line: &str) -> Option<Outcome> {
@@ -392,6 +397,7 @@ fn parse_outcome(line: &str) -> Option<Outcome> {
     Some(Outcome {
         failures,
         loaded: strings(&v["loaded"]),
+        compute_loaded: strings(&v["compute_loaded"]),
         shadow_pass: v["shadow_pass"].as_bool()?,
     })
 }
@@ -543,30 +549,345 @@ impl Evaluate for Worker {
     }
 }
 
-/// The programs that must load or be named in `case` with `files`: those the unmutated case
-/// loaded whose own stage files are the only ones changed. A `program.` key in the properties
-/// can turn a program off without a note, by design: then none.
-fn expect(case: &Case, base: &Outcome, files: &Files) -> Vec<String> {
-    let properties = case
-        .files
-        .get("shaders.properties")
-        .map(|b| String::from_utf8_lossy(b).into_owned())
-        .unwrap_or_default();
-    if properties.contains("program.") {
-        return Vec::new();
-    }
-    // Of the files the programs read, and the root `.properties` files: a step that renames a
-    // name runs through every source file of the pack, which holds the other programs' too.
-    let touched: Vec<&String> = case
-        .files
+fn reaches(
+    files: &Files,
+    folder: &str,
+    program: &str,
+    target: &str,
+    previous_sources: &BTreeMap<String, String>,
+    candidate_sources: &BTreeMap<String, String>,
+) -> bool {
+    let mut pending: Vec<String> = files
         .keys()
-        .filter(|p| case.reach.contains(*p) || (!p.contains('/') && p.ends_with(".properties")))
-        .filter(|p| files.get(*p) != case.files.get(*p))
-        .collect();
-    base.loaded
-        .iter()
-        .filter(|name| touched.iter().all(|t| case.owns(name, t)))
+        .filter(|path| cases::owns_in(folder, program, path))
         .cloned()
+        .collect();
+    let mut seen = BTreeSet::new();
+    while let Some(path) = pending.pop() {
+        if path == target {
+            return true;
+        }
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+        if let Some(source) = candidate_sources
+            .get(&path)
+            .or_else(|| previous_sources.get(&path))
+        {
+            pending.extend(cases::includes(&path, source));
+        }
+    }
+    false
+}
+
+fn program_enabled(sources: &BTreeMap<String, String>, folder: &str, program: &str) -> bool {
+    let properties = sources.get("shaders.properties").map_or("", String::as_str);
+    let mut macros = Macros::standard();
+    macros.define_renderer(4);
+    sunrise_shaders::program_enabled_from_sources(properties, folder, program, sources, &macros)
+}
+
+fn source_texts(files: &Files) -> BTreeMap<String, String> {
+    cases::source_texts(files)
+}
+
+#[cfg(test)]
+fn effective_properties(files: &Files) -> sunrise_shaders::Properties {
+    let sources = source_texts(files);
+    effective_properties_from_sources(&sources)
+}
+
+fn effective_properties_from_sources(
+    sources: &BTreeMap<String, String>,
+) -> sunrise_shaders::Properties {
+    let text = sources.get("shaders.properties").map_or("", String::as_str);
+    let mut macros = Macros::standard();
+    macros.define_renderer(4);
+    sunrise_shaders::properties_from_sources(text, sources, &macros)
+}
+
+fn effective_option_macros_from_sources(sources: &BTreeMap<String, String>) -> Macros {
+    let mut macros = Macros::standard();
+    macros.define_renderer(4);
+    sunrise_shaders::options_from_sources(sources, &macros)
+}
+
+fn image_settings(properties: &sunrise_shaders::Properties) -> Vec<(String, String)> {
+    properties
+        .entries
+        .iter()
+        .filter(|entry| entry.key.starts_with("image."))
+        .map(|entry| (entry.key.clone(), entry.value.clone()))
+        .collect()
+}
+
+/// Expected refusals are based on this candidate's active folder, loader-recognized stage files,
+/// and effective enabled state. Comments and unrelated properties do not suppress checks.
+struct CandidateInputs {
+    folder: String,
+    sources: BTreeMap<String, String>,
+    properties: sunrise_shaders::Properties,
+    option_macros: Macros,
+    shadow_pass: bool,
+}
+
+impl CandidateInputs {
+    fn new(dim: usize, files: &Files) -> Self {
+        let folder = cases::active_folder(dim, files);
+        let sources = source_texts(files);
+        let properties = effective_properties_from_sources(&sources);
+        let option_macros = effective_option_macros_from_sources(&sources);
+        let mut inputs = Self {
+            folder,
+            sources,
+            properties,
+            option_macros,
+            shadow_pass: false,
+        };
+        inputs.shadow_pass = inputs.shadow_pass_from(files);
+        inputs
+    }
+
+    fn program_enabled(&self, name: &str) -> bool {
+        program_enabled(&self.sources, &self.folder, name)
+    }
+
+    /// The loader decides this from compiled sampler interfaces. Predict it from reachable
+    /// non-shadow shader inputs, while honoring the loader's explicit override.
+    fn shadow_pass_from(&self, files: &Files) -> bool {
+        match self.properties.get("shadow.enabled").map(str::trim) {
+            Some("true") => return true,
+            Some("false") => return false,
+            _ => {}
+        }
+
+        let mut programs = cases::programs_in_sources(&self.folder, files, &self.sources, false);
+        programs.extend(
+            cases::compute_stages_in_sources(&self.folder, files, &self.sources, false)
+                .into_iter()
+                .map(|stage| cases::compute_stage_owner(&stage).to_owned()),
+        );
+        programs.sort();
+        programs.dedup();
+
+        let features = self
+            .properties
+            .get("iris.features.required")
+            .into_iter()
+            .chain(self.properties.get("iris.features.optional"));
+        programs.iter().any(|program| {
+            let mut pending: Vec<String> = files
+                .keys()
+                .filter(|path| cases::owns_in(&self.folder, program, path))
+                .cloned()
+                .collect();
+            let mut seen = BTreeSet::new();
+            while let Some(path) = pending.pop() {
+                if !seen.insert(path.clone()) {
+                    continue;
+                }
+                let Some(source) = self.sources.get(&path) else {
+                    continue;
+                };
+                if source_reads_shadow_sampler(source, features.clone()) {
+                    return true;
+                }
+                pending.extend(cases::includes(&path, source));
+            }
+            false
+        })
+    }
+}
+
+fn source_reads_shadow_sampler<'a>(source: &str, features: impl Iterator<Item = &'a str>) -> bool {
+    let higher_shadowcolor = features
+        .flat_map(str::split_whitespace)
+        .any(|feature| feature.eq_ignore_ascii_case("HIGHER_SHADOWCOLOR"));
+    let mut code = String::with_capacity(source.len());
+    let mut chars = source.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '/' && chars.peek() == Some(&'/') {
+            chars.next();
+            for ch in chars.by_ref() {
+                if ch == '\n' {
+                    code.push('\n');
+                    break;
+                }
+            }
+        } else if ch == '/' && chars.peek() == Some(&'*') {
+            chars.next();
+            while let Some(ch) = chars.next() {
+                if ch == '*' && chars.peek() == Some(&'/') {
+                    chars.next();
+                    break;
+                }
+                if ch == '\n' {
+                    code.push('\n');
+                }
+            }
+        } else {
+            code.push(ch);
+        }
+    }
+    code.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+        .any(|name| {
+            matches!(
+                name,
+                "shadow"
+                    | "watershadow"
+                    | "shadowtex0"
+                    | "shadowtex1"
+                    | "shadowtex0HW"
+                    | "shadowtex1HW"
+                    | "shadowcolor"
+                    | "shadowcolor0"
+                    | "shadowcolor1"
+            ) || (higher_shadowcolor
+                && name.strip_prefix("shadowcolor").is_some_and(|suffix| {
+                    suffix
+                        .parse::<u8>()
+                        .is_ok_and(|number| (2..=7).contains(&number))
+                }))
+        })
+}
+
+fn expectations(case: &Case, base: &Outcome, files: &Files) -> (Vec<String>, Vec<String>) {
+    let previous = CandidateInputs::new(case.dim, &case.files);
+    let candidate = CandidateInputs::new(case.dim, files);
+    (
+        expect_with_inputs(case, base, files, &previous, &candidate),
+        expect_compute_with_inputs(case, base, files, &previous, &candidate),
+    )
+}
+
+#[cfg(test)]
+fn expect(case: &Case, base: &Outcome, files: &Files) -> Vec<String> {
+    expectations(case, base, files).0
+}
+
+fn expect_with_inputs(
+    case: &Case,
+    base: &Outcome,
+    files: &Files,
+    previous: &CandidateInputs,
+    candidate: &CandidateInputs,
+) -> Vec<String> {
+    let previous_dispatch = cases::programs_in_sources(
+        &previous.folder,
+        &case.files,
+        &previous.sources,
+        previous.shadow_pass,
+    );
+    let active = cases::programs_in_sources(
+        &candidate.folder,
+        files,
+        &candidate.sources,
+        candidate.shadow_pass,
+    );
+    let mut paths: BTreeSet<String> = case.files.keys().chain(files.keys()).cloned().collect();
+    paths.retain(|path| case.files.get(path) != files.get(path));
+    let options_changed = previous.option_macros != candidate.option_macros;
+    let image_settings_changed =
+        image_settings(&previous.properties) != image_settings(&candidate.properties);
+    active
+        .into_iter()
+        .filter(|name| {
+            !cases::setup_program(name)
+                && files.contains_key(&cases::in_folder(&candidate.folder, &format!("{name}.vsh")))
+                && files.contains_key(&cases::in_folder(&candidate.folder, &format!("{name}.fsh")))
+        })
+        .filter(|name| {
+            let enabled_before = previous.program_enabled(name);
+            let enabled_after = candidate.program_enabled(name);
+            let enabled_transition = !enabled_before && enabled_after;
+            let newly_active = candidate.folder != previous.folder
+                || !previous_dispatch.contains(name)
+                || enabled_transition;
+            if !newly_active && !base.loaded.contains(name) {
+                return false;
+            }
+            if !enabled_after {
+                return false;
+            }
+            candidate.folder != previous.folder
+                || enabled_transition
+                || options_changed
+                || image_settings_changed
+                || paths.iter().any(|path| {
+                    reaches(
+                        files,
+                        &candidate.folder,
+                        name,
+                        path,
+                        &previous.sources,
+                        &candidate.sources,
+                    )
+                })
+        })
+        .collect()
+}
+
+/// Candidate compute stages selected by source files, loader enable expressions and the same
+/// option macros as the real loader. Stage names remain distinct even when one owner has siblings.
+#[cfg(test)]
+fn expect_compute(case: &Case, base: &Outcome, files: &Files) -> Vec<String> {
+    expectations(case, base, files).1
+}
+
+fn expect_compute_with_inputs(
+    case: &Case,
+    base: &Outcome,
+    files: &Files,
+    previous: &CandidateInputs,
+    candidate: &CandidateInputs,
+) -> Vec<String> {
+    let previous_stages = cases::compute_stages_in_sources(
+        &previous.folder,
+        &case.files,
+        &previous.sources,
+        previous.shadow_pass,
+    );
+    let active = cases::compute_stages_in_sources(
+        &candidate.folder,
+        files,
+        &candidate.sources,
+        candidate.shadow_pass,
+    );
+    let mut paths: BTreeSet<String> = case.files.keys().chain(files.keys()).cloned().collect();
+    paths.retain(|path| case.files.get(path) != files.get(path));
+    let options_changed = previous.option_macros != candidate.option_macros;
+    let image_settings_changed =
+        image_settings(&previous.properties) != image_settings(&candidate.properties);
+    active
+        .into_iter()
+        .filter(|stage| {
+            let owner = cases::compute_stage_owner(stage);
+            let enabled_before = previous.program_enabled(stage);
+            let enabled_after = candidate.program_enabled(stage);
+            let enabled_transition = !enabled_before && enabled_after;
+            let newly_active = candidate.folder != previous.folder
+                || !previous_stages.contains(stage)
+                || enabled_transition;
+            if !newly_active && !base.compute_loaded.contains(stage) {
+                return false;
+            }
+            candidate.folder != previous.folder
+                || newly_active
+                || options_changed
+                || image_settings_changed
+                || previous.properties.get(&format!("indirect.{stage}"))
+                    != candidate.properties.get(&format!("indirect.{stage}"))
+                || paths.iter().any(|path| {
+                    reaches(
+                        files,
+                        &candidate.folder,
+                        owner,
+                        path,
+                        &previous.sources,
+                        &candidate.sources,
+                    )
+                })
+        })
         .collect()
 }
 
@@ -590,11 +911,12 @@ impl<E: Evaluate> Runner<E> {
         }
     }
 
-    fn request(&self, case: &Case, expect: Vec<String>) -> Request {
+    fn request(&self, case: &Case, expect: Vec<String>, expect_compute: Vec<String>) -> Request {
         Request {
             dim: case.dim,
             flat: case.flat,
             expect,
+            expect_compute,
             size_limit: self.size_limit,
         }
     }
@@ -605,24 +927,46 @@ impl<E: Evaluate> Runner<E> {
         let base = match self.bases.get(&key) {
             Some(base) => base.clone(),
             None => {
-                let base = self.ev.eval(&case.files, &self.request(case, Vec::new()));
+                let baseline_request = self.request(case, Vec::new(), Vec::new());
+                let base = self.ev.eval(&case.files, &baseline_request);
                 self.bases.insert(key, base.clone());
                 base
             }
         };
         let files = case.materialize();
-        let request = self.request(case, expect(case, &base, &files));
+        let (expected_programs, expected_compute) = expectations(case, &base, &files);
+        let request = self.request(case, expected_programs, expected_compute);
         let outcome = self.ev.eval(&files, &request);
         let info = Info::of(case, &files);
+        let size_limit = self.size_limit;
         outcome
             .failures
             .into_iter()
-            .map(|failure| Found {
-                id,
-                case: info.clone(),
-                step: shrink::first_step(&mut self.ev, case, &request, &failure.signature()),
-                request: request.clone(),
-                failure,
+            .map(|failure| {
+                let signature = failure.signature();
+                let step = shrink::first_step_with(
+                    &mut self.ev,
+                    case,
+                    &signature,
+                    |candidate, candidate_files| {
+                        let (expect, expect_compute) =
+                            expectations(candidate, &base, candidate_files);
+                        Request {
+                            dim: candidate.dim,
+                            flat: candidate.flat,
+                            expect,
+                            expect_compute,
+                            size_limit,
+                        }
+                    },
+                );
+                Found {
+                    id,
+                    case: info.clone(),
+                    step,
+                    request: request.clone(),
+                    failure,
+                }
             })
             .collect()
     }
@@ -705,12 +1049,28 @@ impl<E: Evaluate> Cases for Local<'_, E> {
             until: Instant::now() + seconds,
         };
         let signature = found.failure.signature();
-        let shrunk = shrink::shrink(
+        let baseline_request = Request {
+            expect: Vec::new(),
+            expect_compute: Vec::new(),
+            ..found.request.clone()
+        };
+        let base = self.runner.ev.eval(&case.files, &baseline_request);
+        let size_limit = self.runner.size_limit;
+        let shrunk = shrink::shrink_with(
             &mut self.runner.ev,
             &case,
-            &found.request,
             &signature,
             budget,
+            |candidate, files| {
+                let (expect, expect_compute) = expectations(candidate, &base, files);
+                Request {
+                    dim: candidate.dim,
+                    flat: candidate.flat,
+                    expect,
+                    expect_compute,
+                    size_limit,
+                }
+            },
         );
         stage(dir, &shrunk.files);
         Some(Summary::of(&shrunk))
@@ -855,6 +1215,7 @@ impl<'a> Remote<'a> {
                 dim: case.dim.unwrap_or(0),
                 flat: case.flat.unwrap_or(true),
                 expect: Vec::new(),
+                expect_compute: Vec::new(),
                 size_limit: self.o.size_limit,
             },
             case,
@@ -1309,6 +1670,7 @@ mod tests {
                 dim: 0,
                 flat: true,
                 expect: together.programs.clone(),
+                expect_compute: Vec::new(),
                 size_limit: 16 << 20,
             },
         );
@@ -1613,12 +1975,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// The render-driving outputs of a load: every program's modules, interfaces and settings,
-    /// the notes, and the pack's textures, buffer sizes, buffer objects, images, custom
-    /// uniforms, buffer formats and shadow pass. (`Custom` itself holds hash maps, whose `Debug`
-    /// order is not the same twice.)
-    fn outputs(post: &sunrise_shaders::Post) -> Vec<String> {
-        let seen = check::observe(post);
+    /// The render-driving outputs captured by the fuzzer's current loader path.
+    fn outputs(seen: &check::Observed) -> Vec<String> {
         let mut out: Vec<String> = seen
             .pieces
             .iter()
@@ -1626,22 +1984,31 @@ mod tests {
             .collect();
         out.extend([
             format!("{:?}", seen.loaded),
+            format!("{:?}", seen.compute_loaded),
             format!("{:?}", seen.notes),
-            format!("{:?}", post.textures),
-            format!("{:?}", post.sizes),
-            format!("{:?}", post.buffer_objects),
-            format!("{:?}", post.images),
-            format!("{:?}", post.custom.uniforms().collect::<Vec<_>>()),
-            format!("{:?}", post.custom.notes),
-            format!("{:?}", post.config),
-            format!("{:?}", post.shadow_pass),
+            format!("{:?}", seen.custom.uniforms().collect::<Vec<_>>()),
+            format!("{:?}", seen.custom.notes),
+            format!("{:?}", seen.shadow_pass),
         ]);
         out
     }
 
+    fn observe_post(post: &sunrise_shaders::Post) -> check::Observed {
+        let mut notes = post.notes.clone();
+        notes.extend(post.config.notes.iter().cloned());
+        notes.extend(post.custom.notes.iter().cloned());
+        let refusals = post
+            .notes
+            .iter()
+            .filter(|note| note.ends_with("skipped"))
+            .cloned()
+            .collect();
+        check::observe(post, notes, refusals, Vec::new(), Default::default())
+    }
+
     /// The pack at `full` loaded as a case on `programs` (dimension 0, flat terrain, no step)
     /// loads it, and as the pack itself loads: both, with their render-driving outputs equal.
-    fn unmutated(full: &Path, programs: &[&str]) -> sunrise_shaders::Post {
+    fn unmutated(full: &Path, programs: &[&str]) -> (check::Observed, sunrise_shaders::Post) {
         let source = cases::Source::open(full).unwrap();
         let programs = programs.iter().map(|p| (*p).to_owned()).collect();
         let case = Case::unmutated(&source, 0, 0, true, programs);
@@ -1651,11 +2018,14 @@ mod tests {
             dim: 0,
             flat: true,
             expect: Vec::new(),
+            expect_compute: Vec::new(),
             size_limit: 16 << 20,
         };
-        let (whole, part) = (check::load(full, &request), check::load(&sample, &request));
-        assert_eq!(outputs(&part), outputs(&whole));
-        part
+        let (whole_observed, _whole) = check::load_with_post(full, &request);
+        let (sample_observed, sample) = check::load_with_post(&sample, &request);
+        assert_eq!(outputs(&sample_observed), outputs(&whole_observed));
+        assert_eq!(sample_observed.stage_sizes, whole_observed.stage_sizes);
+        (sample_observed, sample)
     }
 
     /// The loader reads, for `composite`: an include with a comment after it, a raw custom
@@ -1719,10 +2089,10 @@ void main() {
                 ("data/fz.bin", &[1u8; 16]),
             ],
         );
-        let part = unmutated(&full, &["composite"]);
+        let (_observed, part) = unmutated(&full, &["composite"]);
         // What each input gave: `composite` loaded with its include, the texture blurred, the
         // buffer filled, colortex2 at half size.
-        assert_eq!(check::observe(&part).loaded, ["composite"]);
+        assert_eq!(observe_post(&part).loaded, ["composite"]);
         assert_eq!(part.textures.len(), 1);
         assert_eq!(part.textures[0].name, "fzNoise");
         let sunrise_shaders::TextureSource::Image(texture) = &part.textures[0].source else {
@@ -1770,7 +2140,7 @@ void main() {
                 ("shadow.fsh", &colortex),
             ],
         );
-        let part = unmutated(&shadows, &["shadow"]);
+        let (_observed, part) = unmutated(&shadows, &["shadow"]);
         assert!(part.shadow_pass);
         assert_eq!(
             part.shadow.as_ref().map(|p| p.name.as_str()),
@@ -1787,7 +2157,7 @@ void main() {
                 ("gbuffers_terrain_solid.fsh", &texture),
             ],
         );
-        let part = unmutated(&terrain, &["gbuffers_terrain"]);
+        let (_observed, part) = unmutated(&terrain, &["gbuffers_terrain"]);
         let name = |p: &Option<sunrise_shaders::PostProgram>| p.as_ref().map(|p| p.name.clone());
         assert_eq!(
             name(&part.terrain).as_deref(),
@@ -1823,11 +2193,15 @@ void main() {
             dim: 0,
             flat: false,
             expect: Vec::new(),
+            expect_compute: Vec::new(),
             size_limit: 16 << 20,
         };
-        let terrain = |post: &sunrise_shaders::Post| {
-            let program = post.terrain.as_ref().expect("terrain loads");
-            format!("{:?}", program.program.as_ref().unwrap().vertex)
+        let terrain = |seen: &check::Observed| {
+            seen.pieces
+                .iter()
+                .find(|(label, _)| label.ends_with("gbuffers_terrain vertex"))
+                .map(|(_, hash)| *hash)
+                .expect("terrain vertex is observed")
         };
         let pack = sunrise_shaders::Pack::open(&dir).unwrap();
         let with = |separate_ao: bool| {
@@ -1843,7 +2217,7 @@ void main() {
             );
             let inputs =
                 sunrise_render_shaderpack::pack_atlas::game_inputs(Some(atlas), false, &[3, 4]);
-            terrain(&sunrise_shaders::load_post(
+            observe_post(&sunrise_shaders::load_post(
                 &pack,
                 "",
                 &properties,
@@ -1851,9 +2225,9 @@ void main() {
                 &inputs,
             ))
         };
-        let loaded = terrain(&check::load(&dir, &request));
-        assert_eq!(loaded, with(true));
-        assert_ne!(loaded, with(false));
+        let loaded = check::load(&dir, &request);
+        assert_eq!(terrain(&loaded), terrain(&with(true)));
+        assert_ne!(terrain(&loaded), terrain(&with(false)));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1891,7 +2265,23 @@ void main() {
         };
         let case = cases::sample(index, first.id).unwrap();
         let signature = first.failure.signature();
-        shrink::shrink(ev, &case, &first.request, &signature, budget)
+        let baseline_request = Request {
+            expect: Vec::new(),
+            expect_compute: Vec::new(),
+            ..first.request.clone()
+        };
+        let base = ev.eval(&case.files, &baseline_request);
+        let template = first.request.clone();
+        shrink::shrink_with(ev, &case, &signature, budget, |candidate, files| {
+            let (expect, expect_compute) = expectations(candidate, &base, files);
+            Request {
+                dim: candidate.dim,
+                flat: candidate.flat,
+                expect,
+                expect_compute,
+                ..template.clone()
+            }
+        })
     }
 
     #[test]
@@ -1970,7 +2360,7 @@ void main() {
             loaded: vec!["composite".into(), "final".into()],
             ..Default::default()
         };
-        let mut case = cases::smoke(&index)
+        let case = cases::smoke(&index)
             .unwrap()
             .into_iter()
             .find(|c| c.programs.len() == 7)
@@ -1979,12 +2369,403 @@ void main() {
         files.insert("final.fsh".into(), b"x".to_vec());
         assert_eq!(expect(&case, &base, &files), ["final"]);
         files.insert("lib/common.glsl".into(), b"x".to_vec());
-        assert_eq!(expect(&case, &base, &files), Vec::<String>::new());
-        case.files.insert(
+        assert_eq!(expect(&case, &base, &files), ["composite", "final"]);
+
+        files.insert(
             "shaders.properties".into(),
             b"program.final.enabled=false".to_vec(),
         );
-        let files = case.files.clone();
+        files.insert("final.fsh".into(), b"changed again".to_vec());
+        assert_eq!(expect(&case, &base, &files), ["composite"]);
+    }
+
+    #[test]
+    fn comments_and_unrelated_properties_do_not_hide_changed_programs() {
+        let corpus = cases::index(&cases::seed_pack(), None);
+        let mut case = cases::smoke(&corpus)
+            .unwrap()
+            .into_iter()
+            .find(|c| c.programs.len() == 7)
+            .unwrap();
+        case.files.insert(
+            "shaders.properties".into(),
+            b"# baseline comment\n".to_vec(),
+        );
+        let base = Outcome {
+            loaded: vec!["composite".into(), "final".into()],
+            ..Default::default()
+        };
+        let mut files = case.files.clone();
+        files.insert(
+            "shaders.properties".into(),
+            b"# program.final.enabled=false is only a comment\nclouds=off\n".to_vec(),
+        );
+        files.insert("final.fsh".into(), b"changed".to_vec());
+        assert_eq!(expect(&case, &base, &files), ["final"]);
+
+        files.insert("extra.vsh".into(), b"vertex".to_vec());
+        files.insert("extra.fsh".into(), b"fragment".to_vec());
+        assert_eq!(expect(&case, &base, &files), ["final"]);
+    }
+
+    #[test]
+    fn property_only_changes_expect_programs_the_loader_rechecks() {
+        let corpus = cases::index(&cases::seed_pack(), None);
+        let mut case = cases::smoke(&corpus)
+            .unwrap()
+            .into_iter()
+            .find(|case| case.programs.iter().any(|name| name == "final"))
+            .unwrap();
+        case.files.insert("shaders.properties".into(), Vec::new());
+        let base = Outcome {
+            loaded: vec!["final".into()],
+            ..Default::default()
+        };
+        let mut files = case.files.clone();
+        files.insert(
+            "shaders.properties".into(),
+            b"image.fz_test = none RGBA RGBA8 BYTE false false 8 8\n".to_vec(),
+        );
+        assert_eq!(expect(&case, &base, &files), ["final"]);
+    }
+
+    #[test]
+    fn option_and_renderer_macros_recheck_effective_image_settings() {
+        let corpus = cases::index(&cases::seed_pack(), None);
+        let case = cases::smoke(&corpus)
+            .unwrap()
+            .into_iter()
+            .find(|case| case.programs.iter().any(|name| name == "final"))
+            .unwrap();
+        let base = Outcome {
+            loaded: vec!["final".into()],
+            ..Default::default()
+        };
+        let mut files = case.files.clone();
+        files.insert(
+            "pack-settings.glsl".into(),
+            b"#define USE_CUSTOM_IMAGE // [true false]\n#ifdef USE_CUSTOM_IMAGE\n#endif\n".to_vec(),
+        );
+        files.insert(
+            "shaders.properties".into(),
+            b"#if MC_MIPMAP_LEVEL == 4 && defined(USE_CUSTOM_IMAGE)\nimage.fz_test = none RGBA RGBA8 BYTE false false 8 8\n#endif\n"
+                .to_vec(),
+        );
+        assert_eq!(image_settings(&effective_properties(&files)).len(), 1);
+        assert_eq!(expect(&case, &base, &files), ["final"]);
+    }
+
+    #[test]
+    fn option_disabling_the_sampled_program_expects_the_loader_fallback() {
+        let case = Case {
+            seed: 0,
+            pack: "terrain-fallback".into(),
+            dim: 0,
+            flat: true,
+            programs: vec!["gbuffers_terrain".into()],
+            folder: String::new(),
+            files: [
+                ("gbuffers_terrain.vsh".into(), b"void main() {}".to_vec()),
+                ("gbuffers_terrain.fsh".into(), b"void main() {}".to_vec()),
+                ("gbuffers_basic.vsh".into(), b"void main() {}".to_vec()),
+                ("gbuffers_basic.fsh".into(), b"void main() {}".to_vec()),
+                (
+                    "options.glsl".into(),
+                    b"//#define DISABLE_TERRAIN\n#ifdef DISABLE_TERRAIN\n#endif\n".to_vec(),
+                ),
+                (
+                    "shaders.properties".into(),
+                    b"program.gbuffers_terrain.enabled = !DISABLE_TERRAIN\n".to_vec(),
+                ),
+            ]
+            .into(),
+            reach: ["gbuffers_terrain.fsh".to_owned()].into_iter().collect(),
+            steps: Vec::new(),
+        };
+        let base = Outcome {
+            // `gbuffers_basic` is already reached by several other fallback chains. The option
+            // change still needs to recheck it when terrain switches to its fallback.
+            loaded: vec!["gbuffers_terrain".into(), "gbuffers_basic".into()],
+            ..Default::default()
+        };
+        let mut files = case.files.clone();
+        files.insert(
+            "options.glsl".into(),
+            b"#define DISABLE_TERRAIN\n#ifdef DISABLE_TERRAIN\n#endif\n".to_vec(),
+        );
+
+        assert_eq!(expect(&case, &base, &files), ["gbuffers_basic"]);
+    }
+
+    #[test]
+    fn image_setting_changes_recheck_loaded_compute_stages() {
+        let case = Case {
+            seed: 0,
+            pack: "compute".into(),
+            dim: 0,
+            flat: true,
+            programs: Vec::new(),
+            folder: String::new(),
+            files: [
+                ("composite.csh".into(), b"void main() {}".to_vec()),
+                ("shaders.properties".into(), Vec::new()),
+            ]
+            .into(),
+            reach: ["composite.csh".to_owned()].into_iter().collect(),
+            steps: Vec::new(),
+        };
+        let base = Outcome {
+            compute_loaded: vec!["composite".into()],
+            ..Default::default()
+        };
+        let mut files = case.files.clone();
+        files.insert(
+            "shaders.properties".into(),
+            b"image.fz_test = none RGBA RGBA8 BYTE false false 8 8\n".to_vec(),
+        );
+
+        assert_eq!(expect_compute(&case, &base, &files), ["composite"]);
+    }
+
+    #[test]
+    fn enabling_a_compute_stage_by_property_expects_its_refusal() {
+        let case = Case {
+            seed: 0,
+            pack: "compute-enable".into(),
+            dim: 0,
+            flat: true,
+            programs: vec!["setup".into()],
+            folder: String::new(),
+            files: [
+                ("setup_a.csh".into(), b"void main() {}".to_vec()),
+                (
+                    "shaders.properties".into(),
+                    b"program.setup_a.enabled = false\n".to_vec(),
+                ),
+            ]
+            .into(),
+            reach: ["setup_a.csh".to_owned()].into_iter().collect(),
+            steps: Vec::new(),
+        };
+        let base = Outcome::default();
+        let mut files = case.files.clone();
+        files.insert(
+            "shaders.properties".into(),
+            b"program.setup_a.enabled = true\n".to_vec(),
+        );
+
+        assert_eq!(expect_compute(&case, &base, &files), ["setup_a"]);
+    }
+
+    #[test]
+    fn indirect_compute_setting_changes_recheck_the_stage() {
+        let case = Case {
+            seed: 0,
+            pack: "compute-indirect".into(),
+            dim: 0,
+            flat: true,
+            programs: vec!["composite".into()],
+            folder: String::new(),
+            files: [
+                ("composite.csh".into(), b"void main() {}".to_vec()),
+                ("shaders.properties".into(), Vec::new()),
+            ]
+            .into(),
+            reach: ["composite.csh".to_owned()].into_iter().collect(),
+            steps: Vec::new(),
+        };
+        let base = Outcome {
+            compute_loaded: vec!["composite".into()],
+            ..Default::default()
+        };
+        let mut files = case.files.clone();
+        files.insert(
+            "shaders.properties".into(),
+            b"bufferObject.0 = 64\nindirect.composite = 0 4\n".to_vec(),
+        );
+
+        assert_eq!(expect_compute(&case, &base, &files), ["composite"]);
+    }
+
+    #[test]
+    fn shadow_compute_stages_are_not_expected_when_candidate_disables_shadows() {
+        let case = Case {
+            seed: 0,
+            pack: "shadow-compute".into(),
+            dim: 0,
+            flat: true,
+            programs: vec!["shadowcomp1".into()],
+            folder: String::new(),
+            files: [
+                ("shadowcomp1.vsh".into(), b"void main() {}".to_vec()),
+                ("shadowcomp1.fsh".into(), b"void main() {}".to_vec()),
+                ("shadowcomp1_a.csh".into(), b"void main() {}".to_vec()),
+                (
+                    "shaders.properties".into(),
+                    b"shadow.enabled = true\n".to_vec(),
+                ),
+            ]
+            .into(),
+            reach: ["shadowcomp1_a.csh".to_owned()].into_iter().collect(),
+            steps: Vec::new(),
+        };
+        let base = Outcome {
+            loaded: vec!["shadowcomp1".into()],
+            compute_loaded: vec!["shadowcomp1_a".into()],
+            shadow_pass: true,
+            ..Default::default()
+        };
+        let mut files = case.files.clone();
+        files.insert(
+            "shadowcomp1_a.csh".into(),
+            b"void main() { uint fz_changed = 1u; }".to_vec(),
+        );
+        files.insert(
+            "shaders.properties".into(),
+            b"shadow.enabled = false\n".to_vec(),
+        );
+
+        let expected = expect(&case, &base, &files);
+        let expected_compute = expect_compute(&case, &base, &files);
+        assert!(expected.is_empty());
+        assert!(expected_compute.is_empty());
+        let request = check::Request {
+            dim: 0,
+            flat: true,
+            expect: expected,
+            expect_compute: expected_compute,
+            size_limit: 1 << 24,
+        };
+        let observed = check::Observed {
+            shadow_pass: false,
+            ..Default::default()
+        };
+        assert!(
+            check::judge(Ok(observed.clone()), Ok(observed), &request)
+                .failures
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn candidate_shader_changes_keep_implicit_shadow_dispatch_checkable() {
+        let case = Case {
+            seed: 0,
+            pack: "implicit-shadow".into(),
+            dim: 0,
+            flat: true,
+            programs: vec!["composite".into()],
+            folder: String::new(),
+            files: [
+                ("composite.vsh".into(), b"void main() {}".to_vec()),
+                (
+                    "composite.fsh".into(),
+                    b"void main() { gl_FragColor = vec4(1.0); }".to_vec(),
+                ),
+                ("shadowcomp_a.csh".into(), b"void main() {}".to_vec()),
+                ("shaders.properties".into(), Vec::new()),
+            ]
+            .into(),
+            reach: ["composite.fsh".to_owned()].into_iter().collect(),
+            steps: Vec::new(),
+        };
+        let base = Outcome {
+            loaded: vec!["composite".into()],
+            shadow_pass: false,
+            ..Default::default()
+        };
+        let mut files = case.files.clone();
+        files.insert(
+            "composite.fsh".into(),
+            b"uniform sampler2D shadowtex0;\nvoid main() { gl_FragColor = texture2D(shadowtex0, vec2(0.0)); }"
+                .to_vec(),
+        );
+
+        assert_eq!(expect_compute(&case, &base, &files), ["shadowcomp_a"]);
+    }
+
+    #[test]
+    fn candidate_option_macros_control_expected_programs() {
+        let corpus = cases::index(&cases::seed_pack(), None);
+        let case = cases::smoke(&corpus)
+            .unwrap()
+            .into_iter()
+            .find(|case| case.programs.iter().any(|name| name == "final"))
+            .unwrap();
+        let base = Outcome {
+            loaded: vec!["final".into()],
+            ..Default::default()
+        };
+        let mut files = case.files.clone();
+        files.insert(
+            "options.glsl".into(),
+            b"#define DISABLE_FINAL // [true false]\n#ifdef DISABLE_FINAL\n#endif\n".to_vec(),
+        );
+        files.insert(
+            "shaders.properties".into(),
+            b"program.final.enabled = !DISABLE_FINAL\n".to_vec(),
+        );
+        files.insert("final.fsh".into(), b"changed".to_vec());
+        assert_eq!(expect(&case, &base, &files), Vec::<String>::new());
+
+        files.insert(
+            "options.glsl".into(),
+            b"//#define DISABLE_FINAL // [true false]\n#ifdef DISABLE_FINAL\n#endif\n".to_vec(),
+        );
+        assert_eq!(expect(&case, &base, &files), ["final"]);
+    }
+
+    #[test]
+    fn enabling_a_baseline_disabled_program_expects_its_refusal() {
+        let corpus = cases::index(&cases::seed_pack(), None);
+        let mut case = cases::smoke(&corpus)
+            .unwrap()
+            .into_iter()
+            .find(|case| case.programs.iter().any(|name| name == "final"))
+            .unwrap();
+        case.files.insert(
+            "options.glsl".into(),
+            b"#define DISABLE_FINAL // [true false]\n#ifdef DISABLE_FINAL\n#endif\n".to_vec(),
+        );
+        case.files.insert(
+            "shaders.properties".into(),
+            b"program.final.enabled = !DISABLE_FINAL\n".to_vec(),
+        );
+        let base = Outcome::default();
+        let mut files = case.files.clone();
+        files.insert(
+            "options.glsl".into(),
+            b"//#define DISABLE_FINAL // [true false]\n#ifdef DISABLE_FINAL\n#endif\n".to_vec(),
+        );
+        assert_eq!(expect(&case, &base, &files), ["final"]);
+    }
+
+    #[test]
+    fn shrinking_away_a_dimension_folder_drops_its_expectation() {
+        let case = Case {
+            seed: 0,
+            pack: "dimension".into(),
+            dim: 0,
+            flat: true,
+            programs: vec!["final".into()],
+            folder: "world0".into(),
+            files: [
+                ("world0/final.vsh".into(), b"vertex".to_vec()),
+                ("world0/final.fsh".into(), b"fragment".to_vec()),
+                ("shaders.properties".into(), Vec::new()),
+            ]
+            .into(),
+            reach: ["world0/final.vsh".to_owned(), "world0/final.fsh".to_owned()]
+                .into_iter()
+                .collect(),
+            steps: Vec::new(),
+        };
+        let base = Outcome {
+            loaded: vec!["final".into()],
+            ..Default::default()
+        };
+        let files = [("shaders.properties".into(), Vec::new())].into();
+        assert_eq!(cases::active_folder(case.dim, &files), "");
         assert_eq!(expect(&case, &base, &files), Vec::<String>::new());
     }
 
@@ -1993,6 +2774,7 @@ void main() {
         let outcome = Outcome {
             failures: vec![Failure::new("naga", "composite: x")],
             loaded: vec!["composite".into()],
+            compute_loaded: Vec::new(),
             shadow_pass: true,
         };
         assert_eq!(parse_outcome(&outcome_json(&outcome)), Some(outcome));
@@ -2029,6 +2811,7 @@ void main() {
                     dim: 2,
                     flat: false,
                     expect: vec!["final".into()],
+                    expect_compute: Vec::new(),
                     size_limit: 16 << 20,
                 },
                 failure: Failure::new("memory", "over 64 MiB"),

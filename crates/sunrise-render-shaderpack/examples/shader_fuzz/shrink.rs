@@ -27,16 +27,21 @@ fn fails(ev: &mut dyn Evaluate, files: &Files, request: &Request, signature: &st
         .any(|f| f.signature() == signature)
 }
 
-/// The step that first makes `signature` fail: the case's steps applied one by one, `base` when
-/// the case fails so without any.
-pub fn first_step(
+/// The first step that makes `signature` fail, deriving the request from each candidate.
+pub fn first_step_with(
     ev: &mut dyn Evaluate,
     case: &Case,
-    request: &Request,
     signature: &str,
+    mut request_for: impl FnMut(&Case, &Files) -> Request,
 ) -> String {
     for n in 0..case.steps.len() {
-        if fails(ev, &case.materialize_first(n), request, signature) {
+        let candidate = Case {
+            steps: case.steps[..n].to_vec(),
+            ..case.clone()
+        };
+        let files = candidate.materialize();
+        let request = request_for(&candidate, &files);
+        if fails(ev, &files, &request, signature) {
             return match n {
                 0 => "base".to_owned(),
                 n => case.steps[n - 1].kind.name().to_owned(),
@@ -72,22 +77,30 @@ pub struct Shrunk {
     pub files: Files,
 }
 
-/// `case`, smaller, still failing with `signature`: steps dropped, then files, then runs of
-/// lines (halving the run until single lines), then files again, each kept only while the
-/// failure stays.
-///
-/// A `refusal` failure is about a program that must load (`request.expect`): without its stage
-/// files it would be a missing program, which loads nothing and needs no note (spec 2.5), so
-/// the failure would "stay" with the cause gone. Those files are never removed or emptied.
-pub fn shrink(
+/// Shrinks a failure while recalculating expectations for every candidate file set.
+pub fn shrink_with(
     ev: &mut dyn Evaluate,
     case: &Case,
-    request: &Request,
     signature: &str,
     mut budget: Budget,
+    mut request_for: impl FnMut(&Case, &Files) -> Request,
 ) -> Shrunk {
+    let fails_candidate = |ev: &mut dyn Evaluate,
+                           candidate: &Case,
+                           files: &Files,
+                           request_for: &mut dyn FnMut(&Case, &Files) -> Request,
+                           signature: &str| {
+        let request = request_for(candidate, files);
+        fails(ev, files, &request, signature)
+    };
+    let original_files = case.materialize();
+    let original_request = request_for(case, &original_files);
     let kept = |path: &str| {
-        signature.starts_with("refusal|") && request.expect.iter().any(|p| case.owns(p, path))
+        signature.starts_with("refusal|")
+            && original_request
+                .expect
+                .iter()
+                .any(|program| case.owns(program, path))
     };
     let mut steps = case.steps.clone();
     let mut changed = true;
@@ -103,7 +116,8 @@ pub fn shrink(
                 steps: fewer.clone(),
                 ..case.clone()
             };
-            if fails(ev, &candidate.materialize(), request, signature) {
+            let files = candidate.materialize();
+            if fails_candidate(ev, &candidate, &files, &mut request_for, signature) {
                 steps = fewer;
                 changed = true;
                 break;
@@ -127,20 +141,28 @@ pub fn shrink(
         for path in &unread {
             fewer.remove(path);
         }
-        if fails(ev, &fewer, request, signature) {
+        let candidate = Case {
+            steps: steps.clone(),
+            ..case.clone()
+        };
+        if fails_candidate(ev, &candidate, &fewer, &mut request_for, signature) {
             files = fewer;
         }
     }
     // Biggest first: they hold the most to remove.
     let mut paths: Vec<String> = files.keys().cloned().collect();
     paths.sort_by_key(|p| std::cmp::Reverse(files[p].len()));
-    for path in paths.iter().filter(|p| !kept(p)) {
+    for path in &paths {
         if !budget.spend() {
             break;
         }
         let mut fewer = files.clone();
         fewer.remove(path);
-        if fails(ev, &fewer, request, signature) {
+        let candidate = Case {
+            steps: steps.clone(),
+            ..case.clone()
+        };
+        if fails_candidate(ev, &candidate, &fewer, &mut request_for, signature) {
             files = fewer;
         }
     }
@@ -159,9 +181,15 @@ pub fn shrink(
                 fewer.drain(i..(i + run).min(lines.len()));
                 let text = fewer.join(&b'\n');
                 let mut candidate = files.clone();
-                let emptied = text.iter().all(u8::is_ascii_whitespace) && kept(&path);
+                let emptied = text.iter().all(u8::is_ascii_whitespace);
                 candidate.insert(path.clone(), text);
-                if !emptied && fails(ev, &candidate, request, signature) {
+                let case_candidate = Case {
+                    steps: steps.clone(),
+                    ..case.clone()
+                };
+                if !emptied
+                    && fails_candidate(ev, &case_candidate, &candidate, &mut request_for, signature)
+                {
                     lines = fewer;
                     files = candidate;
                 } else {
@@ -175,14 +203,18 @@ pub fn shrink(
         }
     }
     // Files the lines left empty, or no longer needed.
-    let paths: Vec<String> = files.keys().filter(|p| !kept(p)).cloned().collect();
+    let paths: Vec<String> = files.keys().cloned().collect();
     for path in paths {
         if !budget.spend() {
             break;
         }
         let mut fewer = files.clone();
         fewer.remove(&path);
-        if fails(ev, &fewer, request, signature) {
+        let candidate = Case {
+            steps: steps.clone(),
+            ..case.clone()
+        };
+        if fails_candidate(ev, &candidate, &fewer, &mut request_for, signature) {
             files = fewer;
         }
     }

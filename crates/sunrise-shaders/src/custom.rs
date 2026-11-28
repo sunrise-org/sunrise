@@ -174,7 +174,7 @@ const FLOAT_FUNCTIONS: [&str; 25] = [
     "tan", "todeg", "torad",
 ];
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 enum Expr {
     /// A number, and whether it is written as a float (`2.0`, not `2`).
     Num(f64, bool),
@@ -186,7 +186,7 @@ enum Expr {
     Bin(&'static str, Box<Expr>, Box<Expr>),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct Item {
     name: String,
     ty: String,
@@ -195,7 +195,7 @@ struct Item {
 }
 
 /// The pack's custom uniforms and variables, with the state `smooth` and `random` keep.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Custom {
     items: Vec<Item>,
     /// `smooth` state per call site.

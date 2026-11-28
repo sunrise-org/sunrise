@@ -220,6 +220,48 @@ pub fn preprocess(pack: &Pack, path: &str, macros: &Macros) -> Preprocessed {
     run.out
 }
 
+/// The pack-relative targets of `#include` directives in `text`, resolved exactly as
+/// [`preprocess`] resolves them. Comments and non-include directives are ignored.
+pub fn include_targets(from_file: &str, text: &str) -> Vec<String> {
+    let (text, _) = strip_comments(text);
+    let lines: Vec<&str> = text
+        .split('\n')
+        .map(|line| line.trim_end_matches('\r'))
+        .collect();
+    let mut targets = Vec::new();
+    let mut n = 0;
+    while n < lines.len() {
+        let (line, next) = logical_line(&lines, n);
+        n = next;
+        if let Some(target) = (|| {
+            let line = line.as_str();
+            let after = line.trim_start().strip_prefix('#')?;
+            let (word, rest) = split_directive(after)?;
+            if word != "include" {
+                return None;
+            }
+            let target = rest.trim_matches(|c| c == '"' || c == '<' || c == '>');
+            resolve(from_file, target)
+        })() {
+            targets.push(target);
+        }
+    }
+    targets
+}
+
+/// Join one preprocessor logical line, returning the next physical line after it. Both include
+/// discovery and preprocessing use this so a continued `#include` has one interpretation.
+fn logical_line(lines: &[&str], start: usize) -> (String, usize) {
+    let mut n = start;
+    let mut line = lines[n].to_owned();
+    while line.ends_with('\\') && n + 1 < lines.len() {
+        line.pop();
+        n += 1;
+        line.push_str(lines[n]);
+    }
+    (line, n + 1)
+}
+
 struct Run<'p> {
     pack: &'p Pack,
     macros: Macros,
@@ -252,13 +294,8 @@ impl Run<'_> {
         let mut n = 0;
         while n < lines.len() {
             let first = n;
-            let mut line = lines[n].to_owned();
-            while line.ends_with('\\') && n + 1 < lines.len() {
-                line.pop();
-                n += 1;
-                line.push_str(lines[n]);
-            }
-            n += 1;
+            let (mut line, next) = logical_line(&lines, n);
+            n = next;
             // A macro call's arguments may span lines: they join the line the call starts on.
             // Telling whether a call goes on expands the line so far, from the file's work too,
             // so a joined line spends its work up to twice.
@@ -472,6 +509,44 @@ mod tests {
             ]
         );
         assert!(p.diagnostics.is_empty(), "{:?}", p.diagnostics);
+    }
+
+    #[test]
+    fn include_targets_ignore_trailing_line_comments() {
+        assert_eq!(
+            include_targets(
+                "world0/program/main.fsh",
+                "#include \"../lib/common.glsl\" // shared helpers\n#include </root.glsl> /* root */\n#include \\\n  \"../lib/continued.glsl\"\n#define KEEP 1\n"
+            ),
+            [
+                "world0/lib/common.glsl",
+                "root.glsl",
+                "world0/lib/continued.glsl"
+            ]
+        );
+    }
+
+    #[test]
+    fn continued_include_targets_match_preprocessor_dispatch() {
+        let p = run(&[
+            (
+                "program/final.fsh",
+                "#version 330\n#include \\\n  \"shared/continued.glsl\"\nvoid main() {}\n",
+            ),
+            ("program/shared/continued.glsl", "float continued;\n"),
+        ]);
+        assert_eq!(
+            p.files,
+            ["program/final.fsh", "program/shared/continued.glsl"]
+        );
+        assert!(p.code().contains("float continued;"));
+        assert_eq!(
+            include_targets(
+                "program/final.fsh",
+                "#include \\\n  \"shared/continued.glsl\"\n"
+            ),
+            ["program/shared/continued.glsl"]
+        );
     }
 
     #[test]
