@@ -1,16 +1,22 @@
 //! `ClientboundSetCameraPacket` (`ClientPacketListener.handleSetCamera`) and
 //! `Camera.alignWithEntity`: a server's camera follows any entity the level
 //! holds, not only mobs and armor stands.
+#[cfg(test)]
 use crate::game::remote_camera::CameraEntities;
 use sunrise_core::geometry::Vec3;
+#[cfg(test)]
 use sunrise_gameplay_common::game::boats_common::Boat;
+#[cfg(test)]
 use sunrise_gameplay_common::game::tnt_common::PrimedTnt;
+#[cfg(test)]
 use sunrise_sim::entities::ItemFrame;
 
+#[cfg(test)]
 fn boat(id: u32) -> Boat {
     Boat::new(id, "oak".into(), Vec3::new(10.5, 64.0, -3.5), 90.0)
 }
 
+#[cfg(test)]
 fn frame(id: u32, pos: [i32; 3], facing: u8) -> ItemFrame {
     ItemFrame {
         id,
@@ -31,6 +37,7 @@ fn frame(id: u32, pos: [i32; 3], facing: u8) -> ItemFrame {
     }
 }
 
+#[cfg(test)]
 fn tnt(id: u32) -> PrimedTnt {
     let at = Vec3::new(4.5, 64.0, 7.5);
     PrimedTnt {

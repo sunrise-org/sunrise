@@ -1,4 +1,13 @@
 //! Server-owned fields of [`super::Game`].
+
+#[cfg(feature = "parity-fixtures")]
+include!(concat!(env!("OUT_DIR"), "/parity_fixtures.rs"));
+
+#[cfg(feature = "parity-fixtures")]
+pub(crate) fn parity_fixtures() -> &'static [(&'static str, fn())] {
+    PARITY_FIXTURES
+}
+
 use {crate::game::*, sunrise_gameplay_common::game::*};
 
 #[macro_use]
