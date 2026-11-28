@@ -1147,6 +1147,9 @@ pub struct ServerState {
     pub pass_mobs: Option<potent_sulfur::PassMobs>,
     /// Entities whose copies are held out of storage; their handles refuse until stored back.
     pub held_out: Vec<u32>,
+    /// Item entities whose `ItemEntity.playerTouch` runs with a mod hearing it: a `touch_item`
+    /// of one of them from its own listener takes nothing.
+    pub(in crate::game) touching_items: Vec<u32>,
     /// What the boats' and minecarts' ticks know about the mobs: their box reach
     /// (`vehicle_mob_reach`) and a grid of their boxes (`mobs_meeting`).
     pub vehicle_mobs: boat_passengers::VehicleMobs,
@@ -1478,6 +1481,7 @@ impl ServerState {
             pickup_columns: None,
             pass_mobs: None,
             held_out: Vec::with_capacity(4),
+            touching_items: Vec::new(),
             vehicle_mobs: Default::default(),
             missing_professions: Default::default(),
             collider_changes: Vec::new(),

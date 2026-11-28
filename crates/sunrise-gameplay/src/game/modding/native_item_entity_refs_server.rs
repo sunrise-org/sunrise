@@ -14,9 +14,14 @@ impl crate::game::ServerGame<'_> {
     ) -> Result<u32, mod_api::PickupError> {
         use mod_api::PickupError;
         let turn = self.native_touch_turn(player)?;
+        // The handle resolves in the level in place only, so an item of another level is stale.
         self.native_item_entity_index(item, None)
             .ok_or(PickupError::Stale)?;
         let id = item.entity().id();
+        // A listener of this item's own pickup: the outer pickup decides it, so this takes none.
+        if self.server.touching_items.contains(&id) {
+            return Ok(0);
+        }
         let mut taken = 0;
         turn.run(self, |game| taken = game.native_touch_item_now(id))
             .ok_or(PickupError::Stale)?;
@@ -34,6 +39,11 @@ impl crate::game::ServerGame<'_> {
         self.native_orb_mut(orb.entity())
             .map_err(|_| PickupError::Stale)?;
         let id = orb.entity().id();
+        // `native_orb_mut` also finds an orb of a parked level: as for an item, only an orb of
+        // the level in place is touched, and another level's is stale.
+        if !self.common.orbs.iter().any(|o| o.id == id) {
+            return Err(PickupError::Stale);
+        }
         let mut taken = false;
         turn.run(self, |game| taken = game.native_touch_orb_now(id))
             .ok_or(PickupError::Stale)?;
@@ -41,15 +51,18 @@ impl crate::game::ServerGame<'_> {
     }
 
     /// The receiver of `touch_item` or `touch_orb`: a living player, as the game's own pickup
-    /// pass skips the dead (`Player.aiStep` touches only while `getHealth() > 0`). Refused
-    /// inside a transaction: the pickup writes the inventory, the statistic, the ground entity
-    /// and the experience outside the journal and sends its take packets and sounds at once,
-    /// so an abort could not undo it, and restoring a journaled inventory would lose what it
-    /// took.
+    /// pass skips the dead (`Player.aiStep` touches only while `getHealth() > 0`), standing in
+    /// the level in place: a pickup takes an entity of the player's own level only
+    /// (`Player.aiStep` touches `level().getEntities`), so a player of another level is
+    /// `OtherLevel`. Refused inside a transaction: the pickup writes the inventory, the
+    /// statistic, the ground entity and the experience outside the journal and sends its take
+    /// packets and sounds at once, so an abort could not undo it, and restoring a journaled
+    /// inventory would lose what it took.
     fn native_touch_turn(
         &self,
         player: mod_api::PlayerRef,
     ) -> Result<super::native_server_server::PlayerTurn, mod_api::PickupError> {
+        use super::native_server_server::PlayerTurn;
         use mod_api::PickupError;
         let turn = self.native_living_player_turn(player).map_err(|refusal| {
             if matches!(refusal, mod_api::PlayerDataRefusal::Client) {
@@ -58,6 +71,18 @@ impl crate::game::ServerGame<'_> {
                 PickupError::Stale
             }
         })?;
+        let here = match &turn {
+            PlayerTurn::Acting => self.acting_in_level_in_place(),
+            PlayerTurn::Parked(conn) => self
+                .server
+                .lan
+                .as_ref()
+                .and_then(|host| host.hub.guest(*conn))
+                .is_some_and(|guest| guest.dimension == self.common.dim.id()),
+        };
+        if !here {
+            return Err(PickupError::OtherLevel);
+        }
         if self.has_open_transaction() {
             return Err(PickupError::InTransaction);
         }
@@ -683,6 +708,347 @@ mod tests {
             assert_eq!(held(game, 13), living_before);
             assert_eq!(game.dropped.len(), 1);
             assert_eq!((game.orbs.len(), game.orbs[0].count), (1, 1));
+        });
+    }
+
+    /// `PlayerRef::touch_item` and `touch_orb` (#6126) for a guest standing in another level
+    /// than the one in place: `Err(OtherLevel)`, and the item and the orb stay where they are
+    /// (`Player.aiStep` touches the entities of the player's own level only).
+    #[test]
+    #[ignore = "daily"]
+    fn a_player_of_another_level_is_refused_a_touch() {
+        crate::game::native_guest_turn_tests::with_guests(|game| {
+            fixture_resident_column(&mut game.world, (0, 0));
+            let guest = game.player(12).unwrap();
+            game.spawn_item(
+                ItemStack::new("minecraft:stone", 5),
+                [3.0, 64.0, 5.0],
+                [0.0; 3],
+                0,
+            );
+            game.add_orb([3.0, 64.0, 5.0], 7);
+            let item = game
+                .item_entity(game.entity(game.dropped[0].id).unwrap())
+                .unwrap();
+            let orb = mod_api::prelude::EntitiesServerHost::experience_orb(
+                game,
+                game.entity(game.orbs[0].id).unwrap(),
+            )
+            .unwrap()
+            .unwrap();
+            game.server
+                .lan
+                .as_mut()
+                .unwrap()
+                .hub
+                .update_guest(12, |g| g.dimension = "minecraft:the_nether".to_owned())
+                .unwrap();
+            assert_eq!(
+                guest.touch_item(game, item),
+                Err(mod_api::PickupError::OtherLevel)
+            );
+            assert_eq!(
+                guest.touch_orb(game, orb),
+                Err(mod_api::PickupError::OtherLevel)
+            );
+            assert_eq!(game.dropped[0].stack.count, 5);
+            assert_eq!((game.orbs.len(), game.orbs[0].count), (1, 1));
+        });
+    }
+
+    /// From `item_picked_up`, touches the item heard with the player stored, once, recording
+    /// the answer.
+    #[derive(Clone, Default)]
+    struct NestedItemTouch {
+        player: std::sync::Arc<std::sync::Mutex<Option<mod_api::PlayerRef>>>,
+        heard: std::sync::Arc<std::sync::Mutex<Vec<Result<u32, mod_api::PickupError>>>>,
+    }
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for NestedItemTouch {
+        fn item_picked_up(
+            &self,
+            host: &mut dyn mod_api::ServerHost,
+            event: &mut mod_api::ItemPickedUpEvent<'_>,
+        ) {
+            let player = self.player.lock().unwrap().take();
+            if let Some(player) = player {
+                let answer = player.touch_item(host, event.item);
+                self.heard.lock().unwrap().push(answer);
+            }
+        }
+    }
+
+    /// A `touch_item` of an item from its own `item_picked_up` listener (#6126), by another
+    /// guest, takes nothing (`Ok(0)`): the outer pickup by guest 12 still takes all 8 and
+    /// guest 13's inventory is unchanged.
+    #[test]
+    #[ignore = "daily"]
+    fn a_touch_from_the_items_own_pickup_listener_takes_nothing() {
+        let nested = NestedItemTouch::default();
+        let mods = vec![mod_api::ModEntry::new(
+            "nested-item-touch",
+            Box::new(nested.clone()),
+        )]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            crate::game::native_guest_turn_tests::with_guests(|game| {
+                fixture_resident_column(&mut game.world, (0, 0));
+                let (outer, inner) = (game.player(12).unwrap(), game.player(13).unwrap());
+                let held = |game: &crate::game::ServerGame<'_>, conn: u32| {
+                    let guest = game.server.lan.as_ref().unwrap().hub.guest(conn).unwrap();
+                    guest
+                        .inventory
+                        .iter()
+                        .flatten()
+                        .map(|s| s.count)
+                        .sum::<u32>()
+                };
+                let (outer_before, inner_before) = (held(game, 12), held(game, 13));
+                game.spawn_item(
+                    ItemStack::new("minecraft:stone", 8),
+                    [3.0, 64.0, 5.0],
+                    [0.0; 3],
+                    0,
+                );
+                let item = game
+                    .item_entity(game.entity(game.dropped[0].id).unwrap())
+                    .unwrap();
+                *nested.player.lock().unwrap() = Some(inner);
+                assert_eq!(outer.touch_item(game, item), Ok(8));
+                assert_eq!(*nested.heard.lock().unwrap(), vec![Ok(0)]);
+                assert_eq!(held(game, 12), outer_before + 8);
+                assert_eq!(held(game, 13), inner_before);
+                assert!(game.dropped.is_empty());
+            });
+        });
+    }
+
+    /// From `pickup_xp`, touches the orb stored with the player stored, once, recording the
+    /// answer.
+    #[derive(Clone, Default)]
+    struct NestedOrbTouch {
+        next: std::sync::Arc<
+            std::sync::Mutex<Option<(mod_api::PlayerRef, mod_api::ExperienceOrbRef)>>,
+        >,
+        heard: std::sync::Arc<std::sync::Mutex<Vec<Result<bool, mod_api::PickupError>>>>,
+    }
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for NestedOrbTouch {
+        fn pickup_xp(
+            &self,
+            host: &mut dyn mod_api::ServerHost,
+            _: &mut mod_api::PickupXpEvent<'_>,
+        ) -> mod_api::Flow {
+            let next = self.next.lock().unwrap().take();
+            if let Some((player, orb)) = next {
+                let answer = player.touch_orb(host, orb);
+                self.heard.lock().unwrap().push(answer);
+            }
+            mod_api::Flow::Continue
+        }
+    }
+
+    /// A `pickup_xp` listener that takes another orb for the same player (#6126) starts
+    /// `takeXpDelay`: the outer pickup is checked again after the listener and refused
+    /// (`Ok(false)`), so the player gets the inner orb's 3 points only and the outer orb stays.
+    #[test]
+    #[ignore = "daily"]
+    fn an_orb_taken_from_a_pickup_xp_listener_refuses_the_outer_pickup() {
+        let nested = NestedOrbTouch::default();
+        let mods = vec![mod_api::ModEntry::new(
+            "nested-orb-touch",
+            Box::new(nested.clone()),
+        )]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            with_game(|game| {
+                fixture_resident_column(&mut game.world, (0, 0));
+                game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                    game.motion,
+                    Vec3::new(3.0, 64.0, 5.0),
+                ));
+                crate::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
+                let player = game.player(123).unwrap();
+                game.server.xp_delay = 0;
+                game.experience = Default::default();
+                game.add_orb([8.0, 64.0, 8.0], 7);
+                game.add_orb([8.0, 64.0, 8.0], 3);
+                let orb = |game: &crate::game::ServerGame<'_>, i: usize| {
+                    mod_api::prelude::EntitiesServerHost::experience_orb(
+                        game,
+                        game.entity(game.orbs[i].id).unwrap(),
+                    )
+                    .unwrap()
+                    .unwrap()
+                };
+                let (outer, inner) = (orb(game, 0), orb(game, 1));
+                *nested.next.lock().unwrap() = Some((player, inner));
+                assert_eq!(player.touch_orb(game, outer), Ok(false));
+                assert_eq!(*nested.heard.lock().unwrap(), vec![Ok(true)]);
+                assert_eq!(game.experience.total, 3);
+                assert_eq!(game.orbs.iter().map(|o| o.value).collect::<Vec<_>>(), [7]);
+                assert_eq!(player.exp_cooldown(game), Some(2));
+            });
+        });
+    }
+
+    /// Kills the orb stored, once, from `player_xp_change` (after Mending, before the count).
+    #[derive(Clone, Default)]
+    struct KillOrbOnXp(std::sync::Arc<std::sync::Mutex<Option<mod_api::ExperienceOrbRef>>>);
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for KillOrbOnXp {
+        fn player_xp_change(
+            &self,
+            host: &mut dyn mod_api::ServerHost,
+            _: &mut mod_api::PlayerXpChangeEvent<'_>,
+        ) -> mod_api::Flow {
+            let orb = self.0.lock().unwrap().take();
+            if let Some(orb) = orb {
+                assert_eq!(orb.entity().kill(host), Ok(true));
+            }
+            mod_api::Flow::Continue
+        }
+    }
+
+    /// `touch_orb` (#6126) is `Ok(true)` once the pickup committed: a `player_xp_change`
+    /// listener that removes the orb after its points were given does not turn it into a
+    /// refusal, and the guest keeps the 7 points and the delay. A guest's: `xp_change` asks the
+    /// mods for the player whose turn it is (`lan_acting_uuid`), which the host's own player
+    /// outside a turn is not.
+    #[test]
+    #[ignore = "daily"]
+    fn an_orb_removed_after_its_points_were_given_still_counts_as_taken() {
+        let kill = KillOrbOnXp::default();
+        let mods = vec![mod_api::ModEntry::new(
+            "kill-orb-on-xp",
+            Box::new(kill.clone()),
+        )]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            crate::game::native_guest_turn_tests::with_guests(|game| {
+                fixture_resident_column(&mut game.world, (0, 0));
+                let guest = game.player(12).unwrap();
+                let xp = |game: &crate::game::ServerGame<'_>| {
+                    game.server
+                        .lan
+                        .as_ref()
+                        .unwrap()
+                        .hub
+                        .guest(12)
+                        .unwrap()
+                        .xp_total
+                };
+                let before = xp(game);
+                game.add_orb([3.0, 64.0, 5.0], 7);
+                let orb = mod_api::prelude::EntitiesServerHost::experience_orb(
+                    game,
+                    game.entity(game.orbs[0].id).unwrap(),
+                )
+                .unwrap()
+                .unwrap();
+                *kill.0.lock().unwrap() = Some(orb);
+                assert_eq!(guest.touch_orb(game, orb), Ok(true));
+                assert!(kill.0.lock().unwrap().is_none(), "the listener ran");
+                assert_eq!(xp(game), before + 7);
+                assert_eq!(guest.exp_cooldown(game), Some(2));
+            });
+        });
+    }
+
+    /// Edits each `item_picked_up_post`: `1` claims all of it fit (`remaining = None`), `2`
+    /// discards the item.
+    #[derive(Clone, Default)]
+    struct PostEdit(std::sync::Arc<std::sync::Mutex<u8>>);
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for PostEdit {
+        fn item_picked_up_post(
+            &self,
+            host: &mut dyn mod_api::ServerHost,
+            event: &mut mod_api::ItemPickedUpPostEvent<'_>,
+        ) {
+            let mode = *self.0.lock().unwrap();
+            match mode {
+                1 => *event.remaining = None,
+                2 => assert_eq!(event.item.entity().kill(host), Ok(true)),
+                _ => {}
+            }
+        }
+    }
+
+    /// `PlayerRef::touch_item` (#6126) answers what `Inventory.add` took, 5 of 8 apples,
+    /// whatever an `item_picked_up_post` listener then does with the rest: one claiming all of
+    /// it fit and one discarding the item, for the host's own player, and the discard for a
+    /// guest.
+    #[test]
+    #[ignore = "daily"]
+    fn touch_item_answers_what_the_inventory_took_whatever_a_post_listener_does() {
+        let edit = PostEdit::default();
+        let mods = vec![mod_api::ModEntry::new("post-edit", Box::new(edit.clone()))].into();
+        let stone = || Some(ItemStack::new("minecraft:stone", 64));
+        mod_platform::testing::with_mods(mods, || {
+            with_game(|game| {
+                fixture_resident_column(&mut game.world, (0, 0));
+                game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                    game.motion,
+                    Vec3::new(3.0, 64.0, 5.0),
+                ));
+                crate::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
+                let player = game.player(123).unwrap();
+                for mode in [1, 2] {
+                    *edit.0.lock().unwrap() = mode;
+                    game.inventory.fill(stone());
+                    game.offhand = stone();
+                    game.inventory[0] = Some(ItemStack::new("minecraft:apple", 59));
+                    game.spawn_item(
+                        ItemStack::new("minecraft:apple", 8),
+                        [8.0, 64.0, 8.0],
+                        [0.0; 3],
+                        0,
+                    );
+                    let id = game.dropped.iter().find(|d| d.stack.count == 8).unwrap().id;
+                    let item = game.item_entity(game.entity(id).unwrap()).unwrap();
+                    assert_eq!(player.touch_item(game, item), Ok(5), "post edit {mode}");
+                    assert_eq!(game.inventory[0].as_ref().map(|s| s.count), Some(64));
+                }
+            });
+            crate::game::native_guest_turn_tests::with_guests(|game| {
+                fixture_resident_column(&mut game.world, (0, 0));
+                let guest = game.player(12).unwrap();
+                *edit.0.lock().unwrap() = 2;
+                game.server
+                    .lan
+                    .as_mut()
+                    .unwrap()
+                    .hub
+                    .update_guest(12, |g| {
+                        g.inventory.fill(stone());
+                        g.offhand = stone();
+                        g.inventory[0] = Some(ItemStack::new("minecraft:apple", 59));
+                    })
+                    .unwrap();
+                game.spawn_item(
+                    ItemStack::new("minecraft:apple", 8),
+                    [3.0, 64.0, 5.0],
+                    [0.0; 3],
+                    0,
+                );
+                let item = game
+                    .item_entity(game.entity(game.dropped[0].id).unwrap())
+                    .unwrap();
+                assert_eq!(guest.touch_item(game, item), Ok(5));
+                let first = game
+                    .server
+                    .lan
+                    .as_ref()
+                    .unwrap()
+                    .hub
+                    .guest(12)
+                    .unwrap()
+                    .inventory[0]
+                    .as_ref()
+                    .map(|s| s.count);
+                assert_eq!(first, Some(64));
+            });
         });
     }
 }

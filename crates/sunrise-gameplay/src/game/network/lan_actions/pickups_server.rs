@@ -1,6 +1,20 @@
 use super::*;
 use sunrise_gameplay_common::game::GameGameExt3 as _;
 
+/// Who takes an orb in `take_orb`.
+pub(in crate::game) enum OrbTaker {
+    /// The host's own player.
+    Host,
+    /// Guest `conn`: its entity `id`, at `at`, its UUID `player` and its `name`.
+    Guest {
+        conn: u32,
+        id: i32,
+        at: [f64; 3],
+        player: u128,
+        name: String,
+    },
+}
+
 impl crate::game::ServerGame<'_> {
     /// `Player.aiStep` touching arrows in the guest's box grown by (1, 0.5, 1):
     /// `AbstractArrow.playerTouch` for a guest, as `touch_arrows` does for the
@@ -147,36 +161,72 @@ impl crate::game::ServerGame<'_> {
             .random
             .next_int_bound(touching.len() as i32)
             .unwrap_or(0) as usize;
-        self.guest_take_orb(conn, id, at, player, &name, touching[pick]);
+        self.take_orb(
+            OrbTaker::Guest {
+                conn,
+                id,
+                at,
+                player,
+                name,
+            },
+            touching[pick],
+            false,
+        );
     }
 
-    /// `ExperienceOrb.playerTouch` for guest `conn` (entity `id`, at `at`, named `name`) and the
-    /// orb at `index`: the `pickup_xp` hook, then the delay, the take, Mending and the points. False
-    /// when a mod vetoed or removed the orb.
-    pub(in crate::game) fn guest_take_orb(
-        &mut self,
-        conn: u32,
-        id: i32,
-        at: [f64; 3],
-        player: u128,
-        name: &str,
-        index: usize,
-    ) -> bool {
-        // A merged orb gives its value once per count and goes at zero.
+    /// The `takeXpDelay` of `taker`, the player whose inventory and experience `take_orb` reaches.
+    fn orb_taker_delay(&self, taker: &OrbTaker) -> u32 {
+        match taker {
+            OrbTaker::Guest { conn, .. } if self.server.lan_acting != Some(*conn) => self
+                .server
+                .lan
+                .as_ref()
+                .and_then(|host| host.play.get(conn))
+                .map_or(0, |play| play.xp_delay),
+            // The host's own, or the guest whose turn it is: in place.
+            _ => self.server.xp_delay,
+        }
+    }
+
+    /// Runs `f` as `taker`: in place for the host's own player, in the guest's turn for a guest
+    /// (`as_guest_here`). None when the guest's turn is refused.
+    fn as_orb_taker<R>(&mut self, taker: &OrbTaker, f: impl FnOnce(&mut Self) -> R) -> Option<R> {
+        match taker {
+            OrbTaker::Host => Some(f(self)),
+            OrbTaker::Guest { conn, .. } => self.as_guest_here(*conn, f),
+        }
+    }
+
+    /// `ExperienceOrb.playerTouch` for `taker` and the orb at `index`, the one sequence of the
+    /// host's hooked pass, the guests' pass and `touch_orb` (`api`): `pickup_xp` when a mod hears
+    /// it, then `takeXpDelay = 2`, `Player.take`, Mending with the orb's signed value and the
+    /// rest as points, then one off the orb's count, discarding it at 0. After a listener ran,
+    /// the taker's `takeXpDelay` and the orb are checked again, as the listener may have taken
+    /// another orb or this one. True once the delay is set: the pickup has committed, whatever a
+    /// later listener does to the orb. False when a mod vetoed, a delay started meanwhile or the
+    /// orb is gone.
+    ///
+    /// The take: for `touch_orb`, to every guest tracking the orb (`Entity.take` through
+    /// `ServerChunkCache.broadcast`), wherever the collector stands; for the guests' pass, to the
+    /// guests near the collector; the host's own pass sends none.
+    pub(in crate::game) fn take_orb(&mut self, taker: OrbTaker, index: usize, api: bool) -> bool {
         let join = self.common.orbs[index].join;
         let orb_id = self.common.orbs[index].id;
         // Swapping the guest in costs: only when a mod hears the pickup.
-        let listened = (self.server.serving.is_some() || self.common.options.dedicated.is_some())
-            && mod_api::__private::listened(mod_api::HookId::PickupXp);
+        let server = self.server.serving.is_some()
+            || self.common.options.dedicated.is_some()
+            || (matches!(taker, OrbTaker::Host) && self.common.is_logical_server());
+        let listened = server && mod_api::__private::listened(mod_api::HookId::PickupXp);
         if listened && let Some(epoch) = self.common.native_lifecycle.epoch() {
             let orb = mod_api::ExperienceOrbRef::new(mod_api::EntityRef::new(epoch, orb_id));
             let mut canceled = false;
             let dimension = self.common.dim.id();
-            let called = self.as_guest_here(conn, |game| {
+            let called = self.as_orb_taker(&taker, |game| {
                 let player = game.native_acting_id();
                 game.native_pickup_xp(player, dimension, orb, &mut canceled);
             });
-            if called.is_none() || canceled {
+            // A listener that took an orb for this player started its delay: this one waits.
+            if called.is_none() || canceled || self.orb_taker_delay(&taker) > 0 {
                 return false;
             }
         }
@@ -200,15 +250,33 @@ impl crate::game::ServerGame<'_> {
         };
         // ExperienceOrb.playerTouch: delay, take, repair/award positive value,
         // then decrement count and discard at zero.
-        if self.server.lan_acting == Some(conn) {
+        match &taker {
+            OrbTaker::Guest { conn, .. } if self.server.lan_acting != Some(*conn) => {
+                if let Some(host) = self.server.lan.as_mut() {
+                    host.play.entry(*conn).or_default().xp_delay = 2;
+                }
+            }
             // In the guest's own turn its `takeXpDelay` is in place; the turn's end saves it.
-            self.server.xp_delay = 2;
-        } else if let Some(host) = self.server.lan.as_mut() {
-            host.play.entry(conn).or_default().xp_delay = 2;
+            _ => self.server.xp_delay = 2,
         }
-        self.native_player_exp_cooldown_change(player, name, 2);
-        if let Some(host) = self.server.lan.as_ref() {
-            host.hub.take_item(orb_id as i32, id, 1, at);
+        // `player_exp_cooldown_change` is the guests' hook: their pass also fires it each tick
+        // the delay counts down, which the host's own `tick_experience` does not.
+        if let OrbTaker::Guest {
+            id,
+            at,
+            player,
+            name,
+            ..
+        } = &taker
+        {
+            self.native_player_exp_cooldown_change(*player, name, 2);
+            if !api && let Some(host) = self.server.lan.as_ref() {
+                host.hub.take_item(orb_id as i32, *id, 1, *at);
+            }
+        }
+        if api && let Some(host) = self.server.lan.as_ref() {
+            host.hub
+                .take_item_tracked(orb_id as i32, self.own_entity_id(), 1);
         }
         let mut random = sunrise_level::random_source::create();
         let pitch = (random.next_float() - random.next_float()) * 0.35 + 0.9;
@@ -218,16 +286,15 @@ impl crate::game::ServerGame<'_> {
             0.1,
             pitch,
         );
-        self.as_guest_here(conn, |game| {
+        self.as_orb_taker(&taker, |game| {
             let rest = game.mending(orb_value);
             if rest > 0 {
                 game.give_experience_points(rest);
             }
         });
-        if !live(self) {
-            return false;
-        }
-        if let Some(index) = self.common.orbs.locate(join) {
+        if live(self)
+            && let Some(index) = self.common.orbs.locate(join)
+        {
             if self.common.orbs[index].count <= 1 {
                 self.remove_orb(index);
             } else {
@@ -311,3 +378,5 @@ use sunrise_gameplay_common::game::held_items::HeldItemsGameExt1 as _;
 use sunrise_gameplay_common::game::native_hooks::ModGameExt1 as _;
 
 use sunrise_gameplay_common::game::GameGameExt1 as _;
+
+use sunrise_gameplay_common::game::player_identity::PlayerIdentityGameExt1 as _;

@@ -381,6 +381,20 @@ impl Hub {
         );
     }
 
+    /// `Entity.take` through `ServerChunkCache.broadcast`: the take of the entity `item` by
+    /// `collector` to every placed guest tracking `item` (`send_to_tracking`), wherever the
+    /// collector stands.
+    pub fn take_item_tracked(&self, item: i32, collector: i32, count: i32) {
+        self.send_to_tracking(
+            item,
+            &C::TakeItemEntity(play::TakeItemEntity {
+                item,
+                player: collector,
+                amount: count,
+            }),
+        );
+    }
+
     /// Open a block container for a guest (ServerPlayer.openMenu). `extra`,
     /// for a mod menu type, goes first in a `sunrise:menu_extra` payload with
     /// the window and `pos` (`openMenu` with an extra-data writer).

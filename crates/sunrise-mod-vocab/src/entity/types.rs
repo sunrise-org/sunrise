@@ -850,6 +850,9 @@ pub enum PickupError {
     Unavailable,
     /// A transaction is open: the pickup cannot join one, as an abort could not undo it.
     InTransaction,
+    /// The player is not in the level in place (the one whose tick or hook is running): a
+    /// pickup takes an entity of the player's own level only.
+    OtherLevel,
 }
 
 impl crate::NoBackend for PickupError {
