@@ -1747,7 +1747,8 @@ impl ParsedStagePrelude {
         // Bool uniforms currently in `uniforms` (after merging loose uniforms).
         let bool_uniforms: HashSet<String> = uniforms
             .iter()
-            .filter_map(|(n, ty)| (ty == "bool").then(|| n.clone()))
+            .filter(|(_, ty)| ty.as_str() == "bool")
+            .map(|(name, _)| name.clone())
             .collect();
 
         let mut header_decls = String::new();
