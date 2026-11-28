@@ -1,4 +1,8 @@
 pub use crate::game_facade::*;
+
+// The table belongs here so it can see runners restricted to `crate::game`.
+#[cfg(sunrise_parity_fixtures)]
+include!(concat!(env!("OUT_DIR"), "/parity_fixtures.rs"));
 #[cfg(test)]
 pub(crate) use resource_load::{load_resources, load_resources_skip_lang, load_resources_uncached};
 #[cfg(all(test, feature = "client"))]

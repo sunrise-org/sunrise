@@ -1,6 +1,7 @@
 use sunrise_core::nbt::Tag;
 use sunrise_gameplay_common::game::maps::{MapBanner, MapData, MapFrame};
 
+#[cfg(test)]
 const OPTIONAL: [&str; 6] = [
     "scale",
     "locked",

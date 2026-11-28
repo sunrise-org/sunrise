@@ -1,21 +1,15 @@
+use std::path::PathBuf;
+
 fn main() {
-    let table = r#"
-static FIXTURES: std::sync::LazyLock<Vec<(&'static str, fn())>> = std::sync::LazyLock::new(|| {
-    let mut rows = Vec::new();
-    rows.extend_from_slice(sunrise_gameplay_common::parity_fixtures());
-    rows.extend_from_slice(sunrise_gameplay::parity_fixtures());
-    #[cfg(feature = "client-defaults")]
-    {
-        rows.extend_from_slice(sunrise_client_gameplay::parity_fixtures());
-        rows.extend_from_slice(sunrise_client::parity_fixtures());
+    let manifest =
+        PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    let client = manifest.join("../sunrise-client");
+    let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR"));
+    println!("cargo::rustc-cfg=test");
+    println!("cargo::rustc-check-cfg=cfg(sunrise_parity_fixtures)");
+    println!("cargo::rustc-cfg=sunrise_parity_fixtures");
+    if std::env::var_os("CARGO_FEATURE_FIXTURES").is_some() {
+        sunrise_game_discovery::parity_fixtures::write_bin_table(&client, &out_dir)
+            .expect("generate parity fixtures dispatcher table");
     }
-    rows.sort_unstable_by_key(|row| row.0);
-    for pair in rows.windows(2) {
-        assert_ne!(pair[0].0, pair[1].0, "duplicate parity fixture");
-    }
-    rows
-});
-"#;
-    let path = std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR"));
-    std::fs::write(path.join("parity_fixtures.rs"), table).expect("write parity dispatcher table");
 }

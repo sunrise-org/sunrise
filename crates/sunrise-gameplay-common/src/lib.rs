@@ -48,6 +48,16 @@ pub mod worn_boots;
 
 extern crate self as sunrise_gameplay_common;
 pub mod game;
+
+#[cfg(feature = "parity-fixtures")]
+include!(concat!(env!("OUT_DIR"), "/parity_fixtures.rs"));
+
+/// Fixtures available to the parity dispatcher in this build.
+#[cfg(feature = "parity-fixtures")]
+pub fn parity_fixtures() -> &'static [(&'static str, fn())] {
+    PARITY_FIXTURES
+}
+
 #[cfg(test)]
 #[path = "../../sunrise-core/src/prepared_test_root.rs"]
 pub(crate) mod prepared_test_root;
