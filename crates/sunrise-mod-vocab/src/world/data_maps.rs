@@ -1182,7 +1182,7 @@ mod tests {
             "neoforge:parrot_imitations",
             String,
             |v: &Tag| match v.get("sound") {
-                Some(Tag::String(s)) => Some(s.to_string()),
+                Some(Tag::String(s)) => s.to_string().ok(),
                 _ => None,
             }
         );
@@ -1202,7 +1202,7 @@ mod tests {
             "neoforge:villager_types",
             String,
             |v: &Tag| match v.get("villager_type") {
-                Some(Tag::String(s)) => Some(s.to_string()),
+                Some(Tag::String(s)) => s.to_string().ok(),
                 _ => None,
             }
         );
@@ -1212,7 +1212,7 @@ mod tests {
             "neoforge:raid_hero_gifts",
             String,
             |v: &Tag| match v.get("loot_table") {
-                Some(Tag::String(s)) => Some(s.to_string()),
+                Some(Tag::String(s)) => s.to_string().ok(),
                 _ => None,
             }
         );
