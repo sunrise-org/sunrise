@@ -19,11 +19,27 @@ impl ServerGame<'_> {
     /// None for anything else, so a hit's view never answers where `LivingRef` does not.
     pub(in crate::game) fn native_parked_causer(&self, id: i32) -> Option<u32> {
         let epoch = self.common.native_lifecycle.epoch()?;
-        let living =
-            mod_api::LivingRef::new(mod_api::EntityRef::new(epoch, u32::try_from(id).ok()?));
+        let living = mod_api::LivingRef::new(mod_api::EntityRef::new(
+            epoch,
+            sunrise_gameplay_common::game::entity_ids::entity_id_bits(id),
+        ));
         match self.native_living_target(living)? {
             Target::Guest(conn) if self.server.lan_acting != Some(conn) => Some(conn),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod issue_6336_tests {
+    use sunrise_gameplay_common::game::entity_ids::entity_id_bits;
+
+    /// A guest id with the high bit set is stored as a negative `i32`; reading
+    /// it back must keep every bit, not refuse the id (#6336).
+    #[test]
+    fn issue_6336_a_high_bit_guest_id_reads_back_as_its_bits() {
+        let wire = 0x8000_0001_u32 as i32;
+        assert_eq!(entity_id_bits(wire), 0x8000_0001);
+        assert_eq!(entity_id_bits(-1), u32::MAX);
     }
 }
