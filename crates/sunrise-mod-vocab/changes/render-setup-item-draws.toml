@@ -1,0 +1,10 @@
+ids = [
+    "type:RenderSetup",
+    "type:TextureTransform",
+    "type:OutlineProperty",
+    "type:SpecialModelRenderType",
+]
+why = """A custom RenderSetup submitted through SpecialModelSubmitOptions::with_render_type(SpecialModelRenderType::Custom(..)) now applies its remaining settings to the item quads, as vanilla 26.3 RenderType.draw and OutlineBufferSource.getBuffer do (#5786): texture_transform Glint, EntityGlint and ArmorEntityGlint scroll and scale the quads' UVs with the frame's glint clock (TextureTransform.createMatrix, scales 8, 0.5 and 0.16), as Offset already moved them; a render type without use_lightmap draws at LightCoordsUtil.FULL_BRIGHT (no Sampler2 bound); a glowing dropped item or item display outlines only the layers whose outline is not OutlineProperty::None; and a pipeline naming a registered mod pipeline of the default PositionTexColor format and quads draws a dropped item's or item display's quads of that render type with the custom geometry instead of the item shaders (the GUI, a held item, an item frame and other vertex formats keep the item shaders). No signature changed."""
+migrate = """
+- Behaviour change: `RenderSetup::new` keeps vanilla's builder defaults, `use_lightmap` false and `outline` `OutlineProperty::None`, and item draws now honour them. A custom render type that set neither draws its item quads full bright and stays out of a glowing item's outline: call `.use_lightmap(true)` and `.outline(OutlineProperty::AffectsOutline { texture: None })` to keep the old look.
+"""

@@ -1397,6 +1397,9 @@ pub struct ClientState {
     pub skin_frame: std::cell::RefCell<sunrise_client::gfx::entity_skin::SkinFrame>,
     /// The glowing entities' silhouettes this frame (game/entities/glowing.rs).
     pub glowing_vertices: std::cell::RefCell<Vec<Vertex>>,
+    /// This frame's item quads whose custom render type names a mod pipeline, drawn by it with
+    /// the mods' custom geometry (game/interface/item_draw.rs, `submit_item_world_routed`).
+    pub item_pipeline_quads: std::cell::RefCell<Vec<sunrise_client::item_render::PipelineItemQuad>>,
     /// Client mods' sounds (`play_local_sound`): those waiting for the next audio update
     /// (`tick_sound_engine`), the stops and fades asked of them, and their handles.
     pub mod_sounds: native_local_sounds::ModSounds,
@@ -2079,6 +2082,7 @@ impl ClientState {
             entity_motion_posed: Default::default(),
             skin_frame: Default::default(),
             glowing_vertices: Default::default(),
+            item_pipeline_quads: Default::default(),
             mod_sounds: Default::default(),
             mod_clear_particles: Default::default(),
             pack_ids: None,

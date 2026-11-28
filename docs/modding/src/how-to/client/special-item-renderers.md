@@ -141,6 +141,18 @@ tick. The game does not cache the renderer's draw output.
   shading, or override `packed_light` (vanilla `LightCoordsUtil` bit layout), `render_type`
   (`Baked`, `ItemCutout`, `ItemTranslucent`, or `Custom(RenderTypeRef)`), and `lighting`
   (`Diffuse` or `LightmapOnly`) per submission.
+- A `Custom(RenderTypeRef)` render type applies its `RenderSetup` to the submitted quads, as
+  vanilla's `RenderType.draw` does: `texture_transform` moves the UVs (`Offset`) or scrolls and
+  scales them with the frame's glint clock (`Glint`, `EntityGlint`, `ArmorEntityGlint`), and
+  `layering` offsets the quads in view space. Without `use_lightmap` the quads draw full bright,
+  so call `.use_lightmap(true)` for quads lit by the world. A glowing dropped item or item
+  display outlines only the layers whose `outline` is not `OutlineProperty::None` (the
+  `RenderSetup::new` default): use `OutlineProperty::AffectsOutline { texture: None }` for a
+  layer that should glow. When `pipeline` names one of your registered pipelines that takes the
+  default `PositionTexColor` vertex format and quads, a dropped item's or item display's quads
+  of that render type are drawn by that pipeline (atlas UVs, ARGB colour) with the custom
+  geometry; in the GUI, in a hand, in an item frame, or with another vertex format they keep
+  the item shaders.
 - `with_pose(transform, |child| ...)` lends a collector at a child pose. The transform is a
   row-major 3×4 affine; the current pose multiplies it on the left, and the composed pose must
   be finite. Model space is in blocks from the model's corner (element coordinates divided by

@@ -1294,11 +1294,29 @@ impl ClientGame<'_> {
                     let mut item_pose = pose;
                     item_pose.rotate_y(std::f32::consts::PI);
                     translucent.scratch.clear();
-                    self.submit_item_world_joml(&state, item_pose, light, &mut translucent.scratch);
-                    if let Some(rgb) = outline
-                        && !translucent.scratch.is_empty()
-                    {
-                        self.mark_outline(&translucent.scratch, rgb);
+                    self.submit_item_world_joml_routed(
+                        &state,
+                        item_pose,
+                        light,
+                        &mut translucent.scratch,
+                    );
+                    if let Some(rgb) = outline {
+                        match state.outline_layers() {
+                            None if !translucent.scratch.is_empty() => {
+                                self.mark_outline(&translucent.scratch, rgb);
+                            }
+                            None => {}
+                            Some(outlined) => {
+                                let mut silhouette = Vec::new();
+                                self.submit_item_world_joml(
+                                    &outlined,
+                                    item_pose,
+                                    light,
+                                    &mut silhouette,
+                                );
+                                self.mark_outline(&silhouette, rgb);
+                            }
+                        }
                     }
                     let tr_start = translucent.verts.len();
                     for quad in translucent.scratch.as_chunks::<4>().0 {

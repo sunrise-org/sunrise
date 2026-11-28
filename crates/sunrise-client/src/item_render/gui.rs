@@ -1053,6 +1053,7 @@ mod tests {
             packed_light: None,
             lightmap_only: false,
             explicit_alpha_cutoff: false,
+            mod_pipeline: None,
         }
     }
 

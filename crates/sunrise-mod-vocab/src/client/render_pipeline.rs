@@ -4426,11 +4426,17 @@ pub struct RenderSetup {
     owner: String,
     /// Unique namespaced identifier for this render type (for example `mymod:glowing_cutout`).
     pub id: Identifier,
-    /// Registered mod or built-in vanilla [`RenderPipeline`] identifier.
+    /// Registered mod or built-in vanilla [`RenderPipeline`] identifier. A mod pipeline that
+    /// takes the default `PositionTexColor` vertex format and quads draws the item quads of a
+    /// dropped item or an item display submitted with this render type (`RenderType.draw`), with
+    /// the custom geometry; elsewhere (the GUI, a held item, another format) they are drawn with
+    /// the item shaders.
     pub pipeline: Identifier,
     /// Named texture bindings (`RenderSetup.textures`), e.g. `"Sampler0"`.
     pub textures: Vec<RenderTypeTexture>,
-    /// Bind the engine lightmap texture to `Sampler2` (`RenderSetup.useLightmap`).
+    /// Bind the engine lightmap texture to `Sampler2` (`RenderSetup.useLightmap`). Item quads
+    /// of a render type without it are not darkened by the lightmap: they draw at
+    /// `LightCoordsUtil.FULL_BRIGHT`.
     pub use_lightmap: bool,
     /// Bind the hurt/white-flash overlay texture to `Sampler1` (`RenderSetup.useOverlay`).
     pub use_overlay: bool,
@@ -4444,9 +4450,12 @@ pub struct RenderSetup {
     pub force_solid_model_phase: bool,
     /// Model-view Z layering offset (`RenderSetup.layeringTransform`).
     pub layering: LayeringTransform,
-    /// Texture-coordinate matrix transform (`RenderSetup.textureTransform`).
+    /// Texture-coordinate matrix transform (`RenderSetup.textureTransform`), applied to the
+    /// item quads' UVs; the glint transforms scroll with the frame's glint clock.
     pub texture_transform: TextureTransform,
     /// Entity outline pass participation (`RenderSetup.outlineProperty` + `outlineTextureName`).
+    /// A glowing dropped item or item display outlines only its layers whose render type is not
+    /// [`OutlineProperty::None`] (`OutlineBufferSource.getBuffer`).
     pub outline: OutlineProperty,
 }
 

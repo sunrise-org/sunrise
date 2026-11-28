@@ -868,6 +868,113 @@ impl crate::game::ClientGame<'_> {
             &mut sink,
         );
     }
+    /// [`Self::submit_item_world`] for an item drawn in the world's camera-relative space (a
+    /// dropped item, an item display): a quad whose custom render type names a mod pipeline
+    /// that can take it is drawn by that `RenderPipeline` (`RenderType.draw`), with the mods'
+    /// custom geometry (`item_pipeline_quads`); the rest go into `out`.
+    pub(in crate::game) fn submit_item_world_routed(
+        &self,
+        state: &ItemRenderState,
+        pose: glam::Mat4,
+        light: u32,
+        out: &mut Vec<Vertex>,
+    ) {
+        self.submit_item_routed(state, light, out, |sink| {
+            state.submit(
+                &self.client.client_pack.item_renderer,
+                &self.client.gui.atlas.sprites,
+                &self.item_host(),
+                pose,
+                sink,
+            );
+        });
+    }
+    /// [`Self::submit_item_world_routed`] preserving JOML `Matrix4f` rounding.
+    pub(in crate::game) fn submit_item_world_joml_routed(
+        &self,
+        state: &ItemRenderState,
+        pose: joml::Mat4,
+        light: u32,
+        out: &mut Vec<Vertex>,
+    ) {
+        self.submit_item_routed(state, light, out, |sink| {
+            state.submit_joml(
+                &self.client.client_pack.item_renderer,
+                &self.client.gui.atlas.sprites,
+                &self.item_host(),
+                pose,
+                sink,
+            );
+        });
+    }
+    fn submit_item_routed(
+        &self,
+        state: &ItemRenderState,
+        light: u32,
+        out: &mut Vec<Vertex>,
+        submit: impl FnOnce(&mut dyn item_render::ItemSink),
+    ) {
+        let lights = diffuse_lights(self.nether_lighting());
+        let routes = |slot: u32| self.routes_item_pipeline(slot);
+        let mut routed = Vec::new();
+        let mut sink = item_render::PipelineRouting {
+            world: WorldSink {
+                out,
+                light: item_hdr_light(state, light),
+                lights: (state.hdr_light == 0).then_some(lights),
+                glint: self.glint(),
+                tier: state.hdr_tier,
+            },
+            routes: &routes,
+            routed: &mut routed,
+        };
+        submit(&mut sink);
+        if !routed.is_empty() {
+            self.client
+                .item_pipeline_quads
+                .borrow_mut()
+                .append(&mut routed);
+        }
+    }
+    /// Whether an item quad can be drawn by the mod pipeline in `slot`: this frame draws the
+    /// mods' custom geometry (`native_camera_frame`), and the pipeline takes quads of the
+    /// default `PositionTexColor` format, as `pipeline_quads` hands them.
+    fn routes_item_pipeline(&self, slot: u32) -> bool {
+        let pipelines = &self.client.client_pack.render.mod_pipelines;
+        self.client.native_camera_frame.is_some()
+            && pipelines.uses_default_vertex_format(slot)
+            && pipelines
+                .topology(slot)
+                .unwrap_or(mod_api::PrimitiveTopology::Quads)
+                == mod_api::PrimitiveTopology::Quads
+    }
+    /// Hand this frame's item quads routed to mod pipelines to `draw`, with the mods' custom
+    /// geometry, a run per pipeline.
+    pub(in crate::game) fn submit_item_pipeline_quads(
+        &self,
+        draw: &mut sunrise_client::world_geometry::WorldGeometry,
+    ) {
+        let routed = std::mem::take(&mut *self.client.item_pipeline_quads.borrow_mut());
+        let camera = draw.camera();
+        let mut quads = Vec::new();
+        for run in routed.chunk_by(|a, b| a.slot == b.slot) {
+            quads.clear();
+            quads.extend(run.iter().map(|q| {
+                mod_api::PipelineQuad::new(
+                    q.pos.map(|p| {
+                        [
+                            f64::from(p.x) + camera[0],
+                            f64::from(p.y) + camera[1],
+                            f64::from(p.z) + camera[2],
+                        ]
+                    }),
+                    q.uv,
+                    q.color,
+                )
+            }));
+            draw.pipeline_quads(run[0].slot, &quads);
+        }
+    }
     /// [`Self::submit_item_world`] shaded by other diffuse lights (a
     /// `Lighting.Entry` other than the level's), in the pose's output space.
     pub(in crate::game::client_side) fn submit_item_lit(
@@ -1189,11 +1296,20 @@ impl crate::game::ClientGame<'_> {
                 .flatten();
             if skinned.is_none() {
                 for &copy in &copies {
-                    self.submit_item_world(&state, copy, packed, out);
+                    self.submit_item_world_routed(&state, copy, packed, out);
                 }
             }
             if let Some(rgb) = outline {
-                self.mark_outline(&out[entity_start..], rgb);
+                match state.outline_layers() {
+                    None => self.mark_outline(&out[entity_start..], rgb),
+                    Some(outlined) => {
+                        let mut silhouette = Vec::new();
+                        for &copy in &copies {
+                            self.submit_item_world(&outlined, copy, packed, &mut silhouette);
+                        }
+                        self.mark_outline(&silhouette, rgb);
+                    }
+                }
                 if let Some(((first, _, _), _)) = skinned {
                     let color = sunrise_client::mobs::render::abgr(rgb);
                     self.client
