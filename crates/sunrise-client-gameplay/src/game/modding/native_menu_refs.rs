@@ -69,7 +69,6 @@ impl ClientGame<'_> {
         }
         self.close_container_client();
         self.set_screen(super::Screen::Playing);
-        self.capture(true);
         true
     }
 

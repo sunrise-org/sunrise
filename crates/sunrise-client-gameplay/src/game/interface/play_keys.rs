@@ -15,14 +15,16 @@ impl crate::game::ClientGame<'_> {
     /// mode the creative inventory `InventoryScreen.init` swaps in.
     pub fn open_player_inventory(&mut self) {
         if self.instabuild() {
-            self.set_screen(Screen::Creative);
-            self.refresh_creative_tabs();
-            self.client.creative_screen.0.reopen();
-            self.refresh_saved_hotbars();
+            self.transition_screen(Screen::Creative, false, |game, accepted| {
+                if accepted == Some(Screen::Creative) {
+                    game.refresh_creative_tabs();
+                    game.client.creative_screen.0.reopen();
+                    game.refresh_saved_hotbars();
+                }
+            });
         } else {
             self.set_screen(Screen::Inventory);
         }
-        self.capture(false);
     }
     /// A key press while a world is open (keyboard or control socket). `key`
     /// is the vanilla default the pressed mapping translates to, `raw` the
@@ -101,17 +103,20 @@ impl crate::game::ClientGame<'_> {
                     self.options_key(KeyCode::Escape, None)?;
                 }
                 Screen::Playing => {
-                    self.client.pause_focus = None;
-                    self.set_screen(Screen::Paused);
-                    self.client.pause_menu = true;
-                    self.capture(false);
+                    self.transition_screen(Screen::Paused, false, |game, accepted| {
+                        if accepted == Some(Screen::Paused) {
+                            game.client.pause_focus = None;
+                            game.client.pause_menu = true;
+                        }
+                    });
                 }
                 Screen::Creative => {
-                    self.pad_clear_focus();
-                    self.mod_browser_closed();
-                    self.common.carried = None;
-                    self.set_screen_with(Screen::Playing, |g| g.close_creative_menu());
-                    self.capture(true);
+                    self.set_screen_with(Screen::Playing, |game| {
+                        game.pad_clear_focus();
+                        game.mod_browser_closed();
+                        game.common.carried = None;
+                        game.close_creative_menu();
+                    });
                 }
                 Screen::Paused | Screen::Inventory => {
                     // RecipeBookComponent.keyPressed: a narrow window's open
@@ -122,15 +127,17 @@ impl crate::game::ClientGame<'_> {
                     // AbstractContainerScreen.onClose closes the menu (on a server, with
                     // a ServerboundContainerClosePacket); PauseScreen.onClose only
                     // swaps the screen.
-                    if self.client.screen == Screen::Inventory {
-                        self.close_container_client();
-                    } else {
-                        self.pad_clear_focus();
-                    }
-                    self.client.pause_focus = None;
-                    self.set_screen(Screen::Playing);
-                    self.client.pause_menu = true;
-                    self.capture(true);
+                    self.transition_screen(Screen::Playing, false, |game, accepted| {
+                        if game.client.screen == Screen::Inventory {
+                            game.close_container_client();
+                        } else {
+                            game.pad_clear_focus();
+                        }
+                        game.client.pause_focus = None;
+                        if accepted == Some(Screen::Playing) {
+                            game.client.pause_menu = true;
+                        }
+                    });
                 }
                 Screen::GameModeSwitcher => self.close_gamemode_switcher(false),
                 Screen::Dead => {

@@ -1,12 +1,74 @@
 #![cfg(test)]
 #[cfg(test)]
 pub(crate) mod pause_close_tests {
+    use crate::game::server_side::native_entity_refs::tests::{
+        with_client_game, with_game_role_client,
+    };
+    use mod_api::{ClientHost, Hooks, ModEntry, ScreenOpening, ScreenOpeningEvent};
+    use sunrise_gameplay_common::game::{Screen, execution_role::ExecutionRole};
     use sunrise_protocol::packets::play::Serverbound as S;
     use winit::keyboard::KeyCode;
-    use {
-        crate::game::server_side::native_entity_refs::tests::with_client_game,
-        sunrise_gameplay_common::game::Screen,
-    };
+
+    struct VetoOpening(&'static str);
+
+    #[mod_api::__subscriptions]
+    impl Hooks for VetoOpening {
+        fn screen_opening(
+            &self,
+            _host: &dyn ClientHost,
+            event: &mut ScreenOpeningEvent<'_>,
+        ) -> Option<ScreenOpening> {
+            (event.new.id == self.0).then_some(ScreenOpening::Cancel)
+        }
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn escape_releases_the_pointer_only_if_the_pause_menu_opens() {
+        let root = crate::prepared_test_root::prepared_root(&[&["facts.json", "registries.json"]]);
+        let cancelled = vec![ModEntry::new("veto", Box::new(VetoOpening("paused")))].into();
+        for (mods, screen, grabbed) in [
+            (cancelled, Screen::Playing, true),
+            (mod_api::Mods::default(), Screen::Paused, false),
+        ] {
+            mod_platform::testing::with_mods(mods, || {
+                with_game_role_client(root.clone(), ExecutionRole::Client, |game| {
+                    game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                        game.motion,
+                        sunrise_core::geometry::Vec3::ZERO,
+                    ));
+                    assert_eq!(game.client.screen, Screen::Playing);
+                    game.client.pause_menu = false;
+                    // Without a window, the agent's grab is the gameplay pointer grab.
+                    game.client.agent_pointer = true;
+                    game.key_pressed(KeyCode::Escape, KeyCode::Escape).unwrap();
+                    assert_eq!(game.client.screen, screen);
+                    assert_eq!(game.client.agent_pointer, grabbed);
+                    assert_eq!(game.client.pause_menu, screen == Screen::Paused);
+                });
+            });
+        }
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn cancelling_inventory_opening_preserves_the_gameplay_pointer_grab() {
+        let root = crate::prepared_test_root::prepared_root(&[&["facts.json", "registries.json"]]);
+        let mods = vec![ModEntry::new("veto", Box::new(VetoOpening("inventory")))].into();
+        mod_platform::testing::with_mods(mods, || {
+            with_game_role_client(root, ExecutionRole::Client, |game| {
+                game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                    game.motion,
+                    sunrise_core::geometry::Vec3::ZERO,
+                ));
+                assert_eq!(game.client.screen, Screen::Playing);
+                game.client.agent_pointer = true;
+                game.open_player_inventory();
+                assert_eq!(game.client.screen, Screen::Playing);
+                assert!(game.client.agent_pointer);
+            });
+        });
+    }
 
     /// On a server, Escape out of the inventory closes its menu with a
     /// ServerboundContainerClosePacket; Escape out of the pause menu sends

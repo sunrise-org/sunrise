@@ -60,11 +60,13 @@ impl DebugHost for Host<'_, '_> {
         // the menu as it always has (key_pressed).
         let g = &mut *self.game;
         if without_menu && g.client.screen == Screen::Playing {
-            g.client.pause_menu = !g.has_singleplayer_server() || g.is_published();
-            g.client.pause_focus = None;
-            g.set_screen(Screen::Paused);
-            g.capture(false);
-            g.set_client_mining(None);
+            g.transition_screen(Screen::Paused, false, |game, accepted| {
+                if accepted == Some(Screen::Paused) {
+                    game.client.pause_menu = !game.has_singleplayer_server() || game.is_published();
+                    game.client.pause_focus = None;
+                    game.set_client_mining(None);
+                }
+            });
         }
     }
     fn debug_action(&mut self, action: DebugAction, shift: bool) -> bool {

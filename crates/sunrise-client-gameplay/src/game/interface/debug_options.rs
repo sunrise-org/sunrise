@@ -119,7 +119,6 @@ impl crate::game::ClientGame<'_> {
         });
         self.set_screen(Screen::DebugOptions);
         self.client.pause_menu = true;
-        self.capture(false);
         self.set_client_mining(None);
     }
     /// The interrupted screen's own close (`Screen.onClose`): the containers
@@ -133,13 +132,11 @@ impl crate::game::ClientGame<'_> {
                 self.client.pause_focus = None;
                 self.set_screen(Screen::Playing);
                 self.client.pause_menu = true;
-                self.capture(true);
             }
             Screen::Creative => {
                 self.pad_clear_focus();
                 self.common.carried = None;
                 self.set_screen_with(Screen::Playing, |g| g.close_creative_menu());
-                self.capture(true);
             }
             Screen::Mod => self.close_mod_screen(),
             _ => {}
@@ -147,9 +144,7 @@ impl crate::game::ClientGame<'_> {
     }
     /// `Screen.onClose`: back to the title when no level is open, otherwise the game.
     pub(in crate::game::client_side) fn close_debug_options(&mut self) {
-        self.client.debug_options = None;
-        self.set_screen(Screen::Playing);
-        self.capture(self.client.title.0.is_none());
+        self.set_screen_with(Screen::Playing, |game| game.client.debug_options = None);
     }
     /// The header's title row and warning (`init`'s vertical layout,
     /// centred in the header): the title's x, the row's top, the warning's

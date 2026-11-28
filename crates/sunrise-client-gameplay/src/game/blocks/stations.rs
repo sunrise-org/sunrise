@@ -660,7 +660,6 @@ impl crate::game::ClientGame<'_> {
         if self.side_combiner_take_effects(kind, pos, menu.level_change) {
             self.close_station_client();
             self.set_screen(Screen::Playing);
-            self.capture(true);
         }
     }
     /// Whether the result slot may be taken (`mayPickup`).

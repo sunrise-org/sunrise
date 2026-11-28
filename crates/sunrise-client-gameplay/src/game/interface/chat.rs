@@ -426,7 +426,6 @@ impl crate::game::ClientGame<'_> {
             screen.auto_suggestions = game.client.settings.auto_suggestions;
             game.client.chat_ui.chat_screen = Some(screen);
             game.client.chat_ui.chat_opened = Some(std::time::Instant::now());
-            game.capture(false);
         });
         true
     }
@@ -440,9 +439,6 @@ impl crate::game::ClientGame<'_> {
         if self.client.screen == Screen::Chat {
             // `Gui.setScreen(null)`: Closing fires, no vetoable Opening does.
             self.dismiss_screen_with(|game| game.remove_chat_screen(reason));
-            if self.client.screen == Screen::Playing {
-                self.capture(true);
-            }
         } else {
             self.remove_chat_screen(reason);
         }
@@ -521,9 +517,6 @@ impl crate::game::ClientGame<'_> {
                 self.client.chat_ui.in_bed_chat = false;
             } else {
                 self.dismiss_screen_with(|game| game.remove_chat_screen(ChatExit::Interrupted));
-                if self.client.screen == Screen::Playing {
-                    self.capture(true);
-                }
             }
         } else if self.common.sleeping.is_some()
             && self.client.screen == Screen::Playing

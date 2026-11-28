@@ -707,8 +707,7 @@ impl crate::game::ClientGame<'_> {
     }
 
     pub fn close_world_options(&mut self) {
-        self.client.world_options.0 = None;
-        self.set_screen(Screen::Paused);
+        self.set_screen_with(Screen::Paused, |game| game.client.world_options.0 = None);
     }
 
     /// `WorldOptionsScreen.updatePersonalGameModeButton`: update both the displayed

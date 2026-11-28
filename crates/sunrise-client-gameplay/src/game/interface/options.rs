@@ -132,26 +132,24 @@ impl crate::game::ClientGame<'_> {
     /// were opened: the recipe book's settings, World Options, the title or
     /// the pause menu.
     pub fn leave_options(&mut self) {
-        let to_game = self.client.options_from_title;
-        let back = if let Some(screen) = self.client.panel.recipes_settings_return.take() {
+        let back = if let Some(screen) = self.client.panel.recipes_settings_return {
             screen
-        } else if std::mem::take(&mut self.client.options_to_world_options) {
+        } else if self.client.options_to_world_options {
             Screen::WorldOptions
         } else if self.client.options_from_title {
             Screen::Playing
         } else {
             Screen::Paused
         };
-        self.set_screen(back);
-        // Vanilla grabs only on `setScreen(null)`: back on the title, which
-        // is still shown, the pointer stays free (#1999). The startup handoff
-        // can enter a world while its options are open, and closing them then
-        // returns to that world, as `capture_loaded_world` grabs.
-        if to_game && self.client.title.0.is_none() {
-            self.capture(true);
-        }
+        self.set_screen_with(back, |game| {
+            if game.client.panel.recipes_settings_return.take().is_none() {
+                game.client.options_to_world_options = false;
+            }
+        });
         // Closed from calibration (sunrise-ctl, a lost window): out of it.
-        self.show_calibration((0.0, 0.0));
+        if self.client.screen != Screen::Options {
+            self.show_calibration((0.0, 0.0));
+        }
     }
     /// Open the options screens (OptionsScreen) from the title or pause menu.
     pub fn open_options(&mut self, from_title: bool) {

@@ -251,7 +251,6 @@ impl crate::game::ClientGame<'_> {
     fn close_beacon_screen(&mut self) {
         self.close_container_client();
         self.set_screen(super::Screen::Playing);
-        self.capture(true);
     }
     /// `BeaconScreen`'s confirm button sends `ServerboundSetBeaconPacket` to the server.
     fn confirm_beacon(&mut self, sel: [Option<usize>; 2]) {

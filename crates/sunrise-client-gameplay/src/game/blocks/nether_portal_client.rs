@@ -43,7 +43,6 @@ impl crate::game::ClientGame<'_> {
                 self.common.carried = None;
             }
             self.set_screen(Screen::Playing);
-            self.capture(true);
         }
         if self.client.screen_fx.portal == 0.0 {
             let pitch = self.common.world.random.next_float() * 0.4 + 0.8;

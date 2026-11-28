@@ -106,7 +106,6 @@ impl crate::game::ClientGame<'_> {
         self.common.container = None;
         self.common.craft_size = 2;
         self.set_screen(Screen::Inventory);
-        self.capture(false);
     }
     /// Riding a mount that has a horse inventory (`HasCustomInventoryScreen`).
     pub(in crate::game::client_side) fn riding_mount_with_menu(&self) -> bool {
@@ -154,7 +153,6 @@ impl crate::game::ClientGame<'_> {
         if !valid {
             self.close_container_client();
             self.set_screen(Screen::Playing);
-            self.capture(true);
         }
     }
     /// Closing the screen clears the client's open mount menu copy.

@@ -313,9 +313,6 @@ impl crate::game::ClientGame<'_> {
     /// lands there.
     pub fn close_confirm_link(&mut self) {
         self.set_screen(self.confirm_link_back());
-        if self.client.screen == Screen::Playing {
-            self.capture(true);
-        }
     }
     /// `ScrollableLayout`'s mouse wheel over the links.
     pub(in crate::game::client_side) fn server_links_scroll(&mut self, delta: f32) -> bool {

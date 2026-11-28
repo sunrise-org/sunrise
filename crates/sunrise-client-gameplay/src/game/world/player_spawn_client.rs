@@ -16,7 +16,6 @@ impl crate::game::ClientGame<'_> {
             self.client.chat_ui.died_at = Some(Instant::now());
             self.client.chat_ui.death_text = None;
             self.client.chat_ui.death_confirm = None;
-            self.capture(false);
         }
         self.common.previous_position = feet;
         if entering {

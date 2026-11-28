@@ -106,17 +106,17 @@ impl crate::game::ClientGame<'_> {
 
     /// `AbstractContainerScreen.keyPressed`: the inventory binding closes the current menu.
     pub(in crate::game::client_side) fn close_inventory_key(&mut self) {
-        if self.client.screen == Screen::Creative {
-            self.pad_clear_focus();
-            if let Some(c) = self.common.carried.take() {
-                let _ = self.add_stack_to_inventory(c);
+        self.set_screen_with(Screen::Playing, |game| {
+            if game.client.screen == Screen::Creative {
+                game.pad_clear_focus();
+                if let Some(c) = game.common.carried.take() {
+                    let _ = game.add_stack_to_inventory(c);
+                }
+                game.close_creative_menu();
+            } else {
+                game.close_container_client();
             }
-            self.set_screen_with(Screen::Playing, |g| g.close_creative_menu());
-        } else {
-            self.close_container_client();
-            self.set_screen(Screen::Playing);
-        }
-        self.capture(true);
+        });
     }
 
     /// `CreativeModeInventoryScreen.keyPressed` on the search tab: a hotbar

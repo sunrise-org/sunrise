@@ -1278,9 +1278,6 @@ impl crate::game::ClientGame<'_> {
                     "agent" => Page::Agent,
                     other => return Err(format!("unknown options page {other}").into()),
                 };
-                if self.client.screen == Screen::Playing && self.client.title.0.is_none() {
-                    self.capture(false);
-                }
                 self.open_options(self.client.title.0.is_some());
                 self.client.chat_ui.options.show(page);
                 if sunrise_client::options_ui::OptionsUi::lists_shader_packs(page) {

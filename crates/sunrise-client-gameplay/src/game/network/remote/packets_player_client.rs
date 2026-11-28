@@ -427,7 +427,6 @@ impl crate::game::ClientGame<'_> {
                 self.set_screen(Screen::Dead);
                 self.client.chat_ui.death_time = 0;
                 self.client.chat_ui.death_confirm = None;
-                self.capture(false);
             } else {
                 self.respawn_player()?;
             }
@@ -765,7 +764,6 @@ impl crate::game::ClientGame<'_> {
             self.set_screen(Screen::Dead);
             self.client.chat_ui.death_time = 0;
             self.client.chat_ui.death_confirm = None;
-            self.capture(false);
         }
     }
     /// `C::SetHeldSlot`: its arms of `apply_packet`, guard and order kept.

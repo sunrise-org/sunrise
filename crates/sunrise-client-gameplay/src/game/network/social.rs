@@ -55,14 +55,12 @@ impl crate::game::ClientGame<'_> {
         self.client.social.scroll = 0.0;
         self.client.social.from_pause = from_pause;
         self.set_screen(Screen::Social);
-        self.capture(false);
     }
     pub fn close_social(&mut self) {
         if self.client.social.from_pause {
             self.set_screen(Screen::Paused);
         } else {
             self.set_screen(Screen::Playing);
-            self.capture(true);
         }
     }
     /// The page's rows, sorted and filtered as `SocialInteractionsPlayerList` does.

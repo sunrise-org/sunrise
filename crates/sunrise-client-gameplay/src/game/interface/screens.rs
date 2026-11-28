@@ -531,7 +531,6 @@ impl crate::game::ClientGame<'_> {
             0 => {
                 self.client.pause_focus = None;
                 self.set_screen(Screen::Playing);
-                self.capture(true);
             }
             1 => self.open_options(false),
             3 => self.open_stats(),
@@ -558,7 +557,6 @@ impl crate::game::ClientGame<'_> {
                 if let Some((_, dialog)) = self.pause_screen_additions() {
                     self.client.pause_focus = None;
                     self.set_screen(Screen::Playing);
-                    self.capture(true);
                     self.show_dialog(&dialog);
                 }
             }
