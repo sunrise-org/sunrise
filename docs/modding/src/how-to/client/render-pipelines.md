@@ -143,10 +143,10 @@ translation checks.
 
 When `SUNRISE_RESOURCES` is set, it must point to a prepared 26.3 resources directory (an invalid
 or missing path is refused rather than falling back to stubs); `minecraft:` includes and vertex
-shaders are read directly from it without stub fallback. When `SUNRISE_RESOURCES` is unset (such
-as in CI or registry checks), the tool uses Sunrise-written interface-only stubs for `minecraft:*`
-includes and standard vertex shaders so every interface error is still caught offline; the game's
-resource load remains the authority. Because the tool does not execute your Rust registration
+shaders are read directly from it without stub fallback. When no prepared resources directory is
+selected, the tool uses Sunrise-written interface-only stubs for `minecraft:*` includes and
+standard vertex shaders so every interface error is still caught offline; the game's resource load
+remains the authority. Because the tool does not execute your Rust registration
 code, a `.fsh` with no `.vsh` beside it is checked against `minecraft:core/position_tex_color`,
 and a program referencing `sampleSprite`, `pipeline_sprite.glsl`, `SpriteRect`, or `Sampler0` is
 checked as textured.
