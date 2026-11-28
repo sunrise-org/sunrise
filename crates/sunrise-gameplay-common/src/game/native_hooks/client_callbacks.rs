@@ -1,11 +1,4 @@
-use crate::game::native_equipment_read::{hand_slot, lend_equipment};
-use crate::game::native_living_body::{
-    body_absorption, body_attribute, body_effect, body_effects, body_equipment, body_health,
-    body_holder, body_kind, body_max_health, body_no_ai, body_potion_affected,
-};
-use mod_api::{__private::LivingParty, ActiveEffect};
-use sunrise_sim::health::LivingBody;
-use sunrise_world::attribute_map::ValueKind;
+use crate::game::native_living_body::with_lent_view;
 
 pub fn install_client_hooks() {
     crate::game::api_values::install_stack_hooks();
@@ -242,81 +235,5 @@ pub fn install_client_hooks() {
         },
     ) {
         log::warn!("Native client hooks already installed; keeping the first callbacks");
-    }
-}
-
-#[derive(Clone, Copy)]
-struct BodyReads<'a> {
-    body: LivingBody<'a>,
-    reads: sunrise_sim::health::HitReads<'a>,
-}
-
-impl mod_api::__private::LivingReads for BodyReads<'_> {
-    fn living_entity(&self, _: LivingParty) -> Option<mod_api::EntityRef> {
-        let id = match self.body {
-            LivingBody::Mob(m) => m.id,
-            LivingBody::Player(p) => u32::try_from(p.id).ok()?,
-            LivingBody::Stand(s) | LivingBody::Dragon(s) => s.id,
-        };
-        Some(mod_api::EntityRef::new(self.reads.epoch, id))
-    }
-    fn living_kind(&self, _: LivingParty) -> Option<mod_api::EntityTypeKey> {
-        body_kind(self.body, self.reads.living_types)
-    }
-    fn living_holder(&self, _: LivingParty) -> Option<mod_api::Holder> {
-        body_holder(self.body)
-    }
-    fn living_health(&self, _: LivingParty) -> Option<f32> {
-        body_health(self.body)
-    }
-    fn living_absorption(&self, _: LivingParty) -> Option<f32> {
-        body_absorption(self.body)
-    }
-    fn living_max_health(&self, _: LivingParty) -> Option<f32> {
-        body_max_health(self.body)
-    }
-    fn living_effect(&self, _: LivingParty, effect: mod_api::EffectKey) -> Option<ActiveEffect> {
-        let def = mod_api::__private::effect_index(effect)
-            .and_then(sunrise_game_data::potions::effect_by_index)?;
-        body_effect(self.body, def.index)
-    }
-    fn living_effects(&self, _: LivingParty) -> Option<Vec<ActiveEffect>> {
-        body_effects(self.body)
-    }
-    fn living_potion_affected(&self, _: LivingParty, effect: mod_api::EffectKey) -> bool {
-        mod_api::__private::effect_index(effect)
-            .and_then(sunrise_game_data::potions::effect_by_index)
-            .is_some_and(|def| body_potion_affected(self.body, def.index))
-    }
-    fn living_attribute_value(&self, _: LivingParty, id: &str) -> Option<f64> {
-        body_attribute(self.body, self.reads.attributes, id, ValueKind::Computed)
-    }
-    fn living_hand_item(
-        &self,
-        _: LivingParty,
-        hand: mod_api::Hand,
-        read: &mut dyn for<'s> FnMut(mod_api::ItemStackView<'s>),
-    ) -> Option<()> {
-        let stack = body_equipment(self.body, hand_slot(hand))?;
-        lend_equipment(stack, read)
-    }
-    fn living_no_ai(&self, _: LivingParty) -> Option<bool> {
-        body_no_ai(self.body)
-    }
-}
-
-fn with_lent_view(
-    lend: sunrise_sim::health::LivingLend<'_>,
-    dispatch: impl FnOnce(&mod_api::LivingView<'_>),
-) {
-    let Some(reads) = (lend.reads)() else {
-        return;
-    };
-    let lent = BodyReads {
-        body: lend.living_body(&reads),
-        reads,
-    };
-    if let Some(view) = mod_api::LivingView::new(&lent, LivingParty::Subject) {
-        dispatch(&view);
     }
 }

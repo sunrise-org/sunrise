@@ -71,6 +71,10 @@ pub struct Menu {
     /// Canonical name from the menu registry, retained for slot dispatch.
     pub registry_id: Box<str>,
     pub pos: Option<(i32, i32, i32)>,
+    /// `PlayerEnderChestContainer.activeChest`'s identity: the block entity's
+    /// generation when an ender-chest block opened this menu. None for a
+    /// blockless ender chest (a mod's, or no chest).
+    pub active_chest: Option<u64>,
     /// Where the container's slots live.
     pub slots: Slots,
     /// Slots of the container itself (without the 36 inventory slots).
@@ -243,7 +247,21 @@ impl Menu {
     /// block passes `None` even if its opener supplied a screen position.
     /// Vanilla menu types, vehicles and menus without an answering part are
     /// not asked. A menu whose backing block entities are gone closes without asking.
+    /// `PlayerEnderChestContainer.stillValid`: a menu on an ender-chest block
+    /// needs the same block entity still at `pos`; a blockless one stays valid.
+    pub fn active_chest_valid(&self, world: &World) -> bool {
+        match (self.slots, self.pos, self.active_chest) {
+            (Slots::Ender, Some(pos), Some(generation)) => {
+                world.block_entities.generation(&pos) == Some(generation)
+            }
+            _ => true,
+        }
+    }
+
     pub fn still_valid(&self, context: &LoopContext, world: &World, guest: &Guest) -> bool {
+        if !self.active_chest_valid(world) {
+            return false;
+        }
         if !self.asks_still_valid {
             return self.slots.still_valid(context, world, guest, self.pos);
         }
@@ -2314,6 +2332,7 @@ pub(crate) mod tests {
         let slots = Slots::Block(k);
         g.menu = Some(Menu {
             window: 1,
+            active_chest: None,
             kind: 0,
             pos: Some(k),
             slots,
@@ -2464,6 +2483,7 @@ pub(crate) mod tests {
         let slots = Slots::Block(k);
         g.menu = Some(Menu {
             window: 1,
+            active_chest: None,
             kind: 0,
             registry_id: "test:station".into(),
             pos: Some(k),
@@ -3571,6 +3591,7 @@ pub(crate) mod tests {
         let mut g = guest();
         g.menu = Some(Menu {
             window: 1,
+            active_chest: None,
             kind: 0,
             pos: Some((0, 0, 0)),
             slots: Slots::Block((0, 0, 0)),
@@ -3698,6 +3719,7 @@ pub(crate) mod tests {
             let mut g = guest();
             g.menu = Some(Menu {
                 window: 1,
+                active_chest: None,
                 kind: 0,
                 pos: Some((0, 0, 0)),
                 slots: Slots::Block((0, 0, 0)),
@@ -4010,6 +4032,7 @@ pub(crate) mod tests {
         let mut g = guest();
         g.menu = Some(Menu {
             window: 1,
+            active_chest: None,
             kind: 0,
             pos: Some((0, 0, 0)),
             slots: Slots::Block((0, 0, 0)),
@@ -4098,6 +4121,7 @@ pub(crate) mod tests {
             let mut g = guest();
             g.menu = Some(Menu {
                 window: 1,
+                active_chest: None,
                 kind: 0,
                 pos: Some((0, 0, 0)),
                 slots: Slots::Block((0, 0, 0)),
@@ -4191,6 +4215,7 @@ pub(crate) mod tests {
             let mut guest = guest();
             guest.menu = Some(Menu {
                 window: 1,
+                active_chest: None,
                 kind: 0,
                 pos: Some((0, 0, 0)),
                 slots: Slots::Block((0, 0, 0)),
@@ -4377,6 +4402,7 @@ pub(crate) mod tests {
             }));
         let make = |kind: &'static crate::containers::ModMenuType| Menu {
             window: 1,
+            active_chest: None,
             kind: 0,
             pos: None,
             slots: Slots::Native,
@@ -4441,6 +4467,63 @@ pub(crate) mod tests {
                 owned_slots: vec![Some(ItemStack::new("minecraft:stick", 1)), None],
             })
         );
+    }
+
+    /// `PlayerEnderChestContainer.stillValid`: a physical ender-chest menu is
+    /// valid only while the block entity it opened on is still there;
+    /// replacing it at the same position closes the menu too. A blockless
+    /// ender chest (a mod's) stays valid without one (#6767).
+    #[test]
+    fn an_ender_chest_menu_keeps_the_block_entity_it_opened_on() {
+        let mut world = World::new(sunrise_world::registry::BlockStateId(0), 0);
+        let k = (0, 64, 0);
+        world
+            .block_entities
+            .insert(k, BlockEntity::Chest(vec![None; 27]));
+        let generation = world
+            .block_entities
+            .generation(&k)
+            .expect("the ender chest's entity");
+        let context = crate::test_resources::server_loop_context();
+        let mut g = guest();
+        g.menu = Some(Menu {
+            window: 1,
+            active_chest: Some(generation),
+            kind: 2,
+            pos: Some(k),
+            slots: Slots::Ender,
+            size: 27,
+            state: 0,
+            sent: Vec::new(),
+            drag: None,
+            sent_data: Vec::new(),
+            reported_unsent_data_len: None,
+            blockless_data: Vec::new(),
+            mod_type: None,
+            registry_id: "minecraft:generic_9x3".into(),
+            craft: None,
+            links: Vec::new(),
+            asks_still_valid: false,
+            opening_item: None,
+            opener_block: None,
+            removed: false,
+            slot_changed_seen: None,
+        });
+        let menu = g.menu.as_ref().unwrap();
+        assert!(menu.still_valid(context, &world, &g));
+        // Broken: the menu closes, as `activeChest.stillValid` does.
+        world.block_entities.remove(&k);
+        assert!(!menu.still_valid(context, &world, &g));
+        // Replaced at the same position: a new entity, so still invalid.
+        world
+            .block_entities
+            .insert(k, BlockEntity::Chest(vec![None; 27]));
+        assert!(!menu.still_valid(context, &world, &g));
+        // A blockless ender chest stays valid without a block entity.
+        let mut blockless = menu.clone();
+        blockless.pos = None;
+        blockless.active_chest = None;
+        assert!(blockless.still_valid(context, &world, &g));
     }
 }
 

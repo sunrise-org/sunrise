@@ -76,13 +76,34 @@ impl Hooks for CrossLevelRespawn {
     }
 }
 
-/// A server of `role` with one survival player at (3.5, 64, 5.5) in the Overworld, its options as
-/// `integrated.rs`'s server Game and a dedicated server set them.
 fn with_server(
     role: ExecutionRole,
     test: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>),
 ) {
     let root = std::path::PathBuf::from(std::env::var_os("SUNRISE_TEST_RESOURCES").unwrap());
+    with_server_at(root, role, test);
+}
+
+fn with_prepared_server(
+    role: ExecutionRole,
+    test: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>),
+) {
+    use sunrise_core::prepared_test_support::{SERVER_INPUTS, WORLDGEN_INPUTS};
+    let root = crate::prepared_test_root::prepared_root(&[
+        WORLDGEN_INPUTS,
+        SERVER_INPUTS,
+        &["movement-properties.nbt"],
+    ]);
+    with_server_at(root, role, test);
+}
+
+/// A server of `role` with one survival player at (3.5, 64, 5.5) in the Overworld, its options as
+/// `integrated.rs`'s server Game and a dedicated server set them.
+fn with_server_at(
+    root: std::path::PathBuf,
+    role: ExecutionRole,
+    test: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>),
+) {
     with_game_role(root, role, |game| {
         game.options.dedicated = Some(Vec::new());
         let config = HubConfig {
@@ -207,6 +228,62 @@ fn finish_trip(game: &mut sunrise_gameplay::game::ServerGame<'_>, dim: Dim) {
     game.enter_level(home).unwrap();
 }
 
+#[test]
+#[ignore = "daily"]
+fn deferred_end_entry_turns_the_server_and_client_motion_to_the_west_facing_arrival() {
+    use sunrise_protocol::{
+        buf::Reader,
+        packets::play::{Clientbound, relative},
+    };
+    use sunrise_sim::lan::Out;
+    with_prepared_server(ExecutionRole::DedicatedServer, |game| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        game.server
+            .lan
+            .as_mut()
+            .unwrap()
+            .hub
+            .update_guest(CONN, |g| {
+                g.sender = PlayerSender::new(tx, Arc::default());
+                g.yaw = 0.0;
+                g.pitch = 24.0;
+                g.known_movement = [2.0, 0.5, 0.0];
+                g.motion.as_mut().unwrap().velocity = Vec3::new(1.0, 0.25, 0.0);
+            })
+            .unwrap();
+        game.start_server_trip(CONN, Dim::End, None);
+        finish_trip(game, Dim::End);
+        let guest = game.server.lan.as_ref().unwrap().hub.guest(CONN).unwrap();
+        assert_eq!(guest.dimension, Dim::End.id());
+        let body = guest.motion.as_deref().unwrap();
+        assert_eq!((guest.yaw, guest.pitch), (90.0, 24.0));
+        assert_eq!(body.velocity.y, 0.5);
+        assert_eq!(body.velocity.z, 2.0);
+        let correction = rx
+            .try_iter()
+            .find_map(|out| {
+                let Out::Packet(bytes) = out else { return None };
+                let mut reader = Reader::new(&bytes);
+                let id = reader.varint().unwrap();
+                match Clientbound::decode(id, reader.rest()) {
+                    Ok(Clientbound::PlayerPosition(packet)) => Some(packet),
+                    _ => None,
+                }
+            })
+            .expect("End portal position correction");
+        assert_eq!((correction.yaw, correction.pitch), (90.0, 0.0));
+        assert_eq!(
+            correction.relatives,
+            relative::DELTA_X
+                | relative::DELTA_Y
+                | relative::DELTA_Z
+                | relative::ROTATE_DELTA
+                | relative::X_ROT
+        );
+        assert_eq!(correction.delta, [0.0; 3]);
+    });
+}
+
 fn place_anchor(game: &mut sunrise_gameplay::game::ServerGame<'_>, pos: [i32; 3]) {
     light(game, pos[0] >> 4, pos[2] >> 4);
     let registry = game.pack.assets.registry;
@@ -280,6 +357,65 @@ fn overworld_to_nether() -> Vec<(String, String)> {
 
 #[test]
 #[ignore = "daily"]
+fn cross_level_command_stops_and_native_teleport_keeps_the_motion_on_both_sides() {
+    use sunrise_protocol::{buf::Reader, packets::play::Clientbound};
+    use sunrise_sim::lan::Out;
+    let role = ExecutionRole::DedicatedServer;
+    let entered = Vec3::new(0.25, 0.125, -0.5);
+    for keep in [false, true] {
+        with_prepared_server(role, |game| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            game.server
+                .lan
+                .as_mut()
+                .unwrap()
+                .hub
+                .update_guest(CONN, |g| {
+                    g.sender = PlayerSender::new(tx, Arc::default());
+                    g.motion.as_mut().unwrap().velocity = entered;
+                })
+                .unwrap();
+            if keep {
+                let entity = game.entity(CONN).unwrap();
+                assert!(game.entity_teleport_to_level(
+                    entity,
+                    Dim::Nether.id(),
+                    [8.5, 70.0, 8.5],
+                    None
+                ));
+                game.run_level_teleports();
+            } else {
+                run_as_player(
+                    game,
+                    role,
+                    "execute in minecraft:the_nether run tp @s 8.5 70 8.5",
+                );
+            }
+            let guest = game.server.lan.as_ref().unwrap().hub.guest(CONN).unwrap();
+            assert_eq!(guest.dimension, Dim::Nether.id());
+            let expected = if keep { entered } else { Vec3::ZERO };
+            assert_eq!(guest.motion.as_deref().unwrap().velocity, expected);
+            let correction = rx
+                .try_iter()
+                .filter_map(|out| {
+                    let Out::Packet(bytes) = out else { return None };
+                    let mut reader = Reader::new(&bytes);
+                    let id = reader.varint().unwrap();
+                    match Clientbound::decode(id, reader.rest()) {
+                        Ok(Clientbound::PlayerPosition(packet)) => Some(packet),
+                        _ => None,
+                    }
+                })
+                .last()
+                .expect("cross-level correction");
+            assert_eq!(correction.relatives, 0);
+            assert_eq!(correction.delta, expected.components());
+        });
+    }
+}
+
+#[test]
+#[ignore = "daily"]
 fn a_cross_level_teleport_returns_both_cursors_before_arrival() {
     use sunrise_items::items::ItemStack;
 
@@ -304,6 +440,7 @@ fn a_cross_level_teleport_returns_both_cursors_before_arrival() {
                 dim: Dim::Nether,
                 at: [8.5, 70.0, 8.5],
                 rotation: None,
+                motion: sunrise_gameplay::teleport_transition::TeleportMotion::Stop,
                 vehicle: None,
             },
         );
@@ -794,6 +931,47 @@ fn credits_respawn_position_cross_dimension_resets_player_tick_count() {
             );
             assert_eq!(entity.tick_count(game), Some(0));
         });
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn credits_restore_live_food_and_reapply_speed_to_the_replacement() {
+    use sunrise_sim::effects::EffectInstance;
+    with_prepared_server(ExecutionRole::DedicatedServer, |game| {
+        prepare_end_exit(game, false);
+        game.server
+            .lan
+            .as_mut()
+            .unwrap()
+            .hub
+            .update_guest(CONN, |g| {
+                let food = &mut g.motion.as_mut().unwrap().health.food;
+                (food.food, food.saturation, food.exhaustion, food.timer) = (13, 2.5, 3.25, 19);
+                (g.food, g.saturation) = (food.food, food.saturation);
+                // The active effect can come from a save without an explicit attribute modifier.
+                g.effects.add(EffectInstance::new("speed", 200, 1));
+            })
+            .unwrap();
+        game.handle_server_portal(CONN);
+        game.guest_respawn(CONN);
+        finish_trip(game, Dim::Overworld);
+        let g = game.server.lan.as_ref().unwrap().hub.guest(CONN).unwrap();
+        let body = g.motion.as_deref().unwrap();
+        let food = &body.health.food;
+        assert_eq!(
+            (food.food, food.saturation, food.exhaustion, food.timer),
+            (13, 2.5, 3.25, 19)
+        );
+        assert_eq!(g.effects.get("speed").unwrap().amplifier, 1);
+        let modifier = body
+            .attributes
+            .modifiers("minecraft:movement_speed")
+            .unwrap()
+            .iter()
+            .find(|modifier| modifier.id() == "minecraft:effect.speed")
+            .unwrap();
+        assert_eq!(modifier.amount(), f64::from(0.2f32) * 2.0);
     });
 }
 

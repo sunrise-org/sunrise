@@ -304,6 +304,7 @@ pub mod decorated_pot;
 pub mod developer_launch;
 #[path = "game/world/end_common.rs"]
 pub mod end_common;
+pub mod entity_ids;
 #[path = "game/modding/entity_sections.rs"]
 pub mod entity_sections;
 #[path = "game/modding/entity_type_rows.rs"]

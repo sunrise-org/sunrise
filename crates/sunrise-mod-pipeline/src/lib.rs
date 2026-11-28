@@ -160,35 +160,26 @@ pub fn linear_fragment_finish(out_name: &str) -> String {
 }
 
 /// Returns the GLSL output variable name bound to fragment `location = 0` in `module`, if any.
+///
+/// Relies on the vendored `naga` 30.0.1 GLSL frontend's entry-point lowering
+/// (`third_party/naga/src/front/glsl/functions.rs`, `Frontend::add_entry_point`): when the entry
+/// point has outputs, it builds a `TypeInner::Struct` result with `binding: None` whose member
+/// carrying `Binding::Location { location: 0, .. }` holds the GLSL `out` variable's name (and
+/// sets `result: None` when the entry point has no outputs).
 fn fragment_loc0_output_name(module: &naga::Module) -> Option<&str> {
     let ep = module
         .entry_points
         .iter()
         .find(|e| e.stage == naga::ShaderStage::Fragment)?;
     let res = ep.function.result.as_ref()?;
-    if let Some(naga::Binding::Location { location: 0, .. }) = res.binding {
-        // Trace the entry point's returned expression back to the GLSL output GlobalVariable.
-        let ret_expr = ep.function.body.iter().rev().find_map(|stmt| match stmt {
-            naga::Statement::Return { value: Some(expr) } => Some(*expr),
-            _ => None,
-        })?;
-        let ptr = match ep.function.expressions[ret_expr] {
-            naga::Expression::Load { pointer } => pointer,
-            _ => ret_expr,
-        };
-        if let naga::Expression::GlobalVariable(gv) = ep.function.expressions[ptr] {
-            return module.global_variables[gv].name.as_deref();
-        }
+    let naga::TypeInner::Struct { ref members, .. } = module.types[res.ty].inner else {
         return None;
-    }
-    if let naga::TypeInner::Struct { ref members, .. } = module.types[res.ty].inner {
-        for m in members {
-            if let Some(naga::Binding::Location { location: 0, .. }) = m.binding {
-                return m.name.as_deref();
-            }
-        }
-    }
-    None
+    };
+    members.iter().find_map(|m| {
+        matches!(m.binding, Some(naga::Binding::Location { location: 0, .. }))
+            .then(|| m.name.as_deref())
+            .flatten()
+    })
 }
 
 /// `sampleSprite`'s texel arithmetic, for testing without a GPU: the integer texel of an atlas

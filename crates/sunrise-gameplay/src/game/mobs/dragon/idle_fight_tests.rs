@@ -201,6 +201,7 @@ fn send(game: &mut crate::game::ServerGame<'_>, conn: u32, dim: Dim, at: [f64; 3
         dim,
         at,
         rotation: None,
+        motion: crate::teleport_transition::TeleportMotion::Stop,
         vehicle: None,
     });
     assert_eq!(game.command_guest(conn).unwrap().dimension, dim.id());

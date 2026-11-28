@@ -571,8 +571,6 @@ impl crate::game::ServerGame<'_> {
         if let Some(host) = self.server.lan.as_mut()
             && let Some(play) = host.play.get_mut(&conn)
         {
-            // The replacement ServerPlayer's lastEquipmentItems starts empty.
-            play.last_equipment = None;
             play.inventory_heard = None;
             play.level_up_sound = Default::default();
         }
@@ -587,46 +585,66 @@ impl crate::game::ServerGame<'_> {
             to.dim,
             was_death,
             |g| {
-                if let Some(previous) = g.new_body(!was_death) {
-                    let previous = *previous;
-                    g.logs_kept = Some((previous.hurt_log, previous.attack_log));
-                }
-                // Even a credits return constructs a new entity. Keep its restored attributes
-                // and health, not the old body's tick count or body yaw.
-                g.carried_tick_count = None;
-                g.carried_body_yaw = Some(0.0);
-                g.carried_last_hurt_mob = None;
+                let previous = g.motion.take();
+                let food = (!was_death)
+                    .then(|| previous.as_ref().map(|body| body.health.food))
+                    .flatten();
                 // Entity's constructor starts it at the origin; snapTo follows clone and copy.
                 g.place([0.0; 3]);
                 (g.yaw, g.pitch) = (0.0, 0.0);
+                let body = g.build_motion(motion, [0.0; 3]);
+                if let Some(previous) = previous {
+                    body.apply_saved_attributes(Some(&previous.carried_attributes(!was_death)));
+                    (body.hurt_log, body.attack_log) = (previous.hurt_log, previous.attack_log);
+                }
+                if was_death {
+                    // ServerPlayer.restoreFrom: max health after copying the old base attributes.
+                    g.health = body.max_health();
+                }
                 g.spawn = None;
                 g.respawn_elsewhere = None;
-                if !was_death {
-                    return;
+                if was_death {
+                    g.dead = false;
+                    g.death_canceled = false;
+                    g.death_time = 0;
+                    g.food = 20;
+                    g.saturation = 5.0;
+                    let mut xp = Experience {
+                        level: g.xp_level,
+                        progress: g.xp_progress,
+                        total: g.xp_total,
+                    };
+                    let keep_inventory = keep_inventory_rule || g.game_mode == SPECTATOR;
+                    if !keep_inventory {
+                        g.inventory.fill(None);
+                        g.armor.fill(None);
+                        g.offhand = None;
+                        g.equipment = Default::default();
+                        g.selected = 0;
+                        // ServerPlayer.restoreFrom copies Score with the inventory and XP.
+                        g.score = 0;
+                    }
+                    xp.respawn(keep_inventory);
+                    g.effects = Default::default();
+                    (g.xp_level, g.xp_progress, g.xp_total) = (xp.level, xp.progress, xp.total);
                 }
-                g.dead = false;
-                g.death_time = 0;
-                g.food = 20;
-                g.saturation = 5.0;
-                g.health = g.respawn_health(motion);
-                let mut xp = Experience {
-                    level: g.xp_level,
-                    progress: g.xp_progress,
-                    total: g.xp_total,
-                };
-                let keep_inventory = keep_inventory_rule || g.game_mode == SPECTATOR;
-                if !keep_inventory {
-                    g.inventory.fill(None);
-                    g.armor.fill(None);
-                    g.offhand = None;
-                    g.equipment = Default::default();
-                    g.selected = 0;
-                    // ServerPlayer.restoreFrom copies Score with the inventory and XP.
-                    g.score = 0;
+                if let Some(food) = food {
+                    (g.food, g.saturation) = (food.food, food.saturation);
                 }
-                xp.respawn(keep_inventory);
-                g.effects = Default::default();
-                (g.xp_level, g.xp_progress, g.xp_total) = (xp.level, xp.progress, xp.total);
+                g.apply_loaded_motion(false);
+                if let Some(body) = g.motion.as_mut() {
+                    if let Some(food) = food {
+                        body.health.food = food;
+                    }
+                    if !was_death {
+                        for effect in &g.effects.list {
+                            body.write_effect_modifiers(
+                                effect.registry_index,
+                                Some(effect.amplifier),
+                            );
+                        }
+                    }
+                }
             },
             |game| {
                 if !copy_spawn {

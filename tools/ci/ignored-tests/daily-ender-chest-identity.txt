@@ -1,0 +1,1 @@
+sunrise-gameplay game::lan_actions::menu_still_valid_tests::an_ender_chest_replaced_in_place_retires_its_menu_without_close_effects lib daily resources

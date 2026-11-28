@@ -344,6 +344,12 @@ impl PlayerMotion {
         hit.dealt = environment.dealt;
         Ok(result)
     }
+    /// Apply a decoded health value to the validated player's health field.
+    pub fn set_loaded_health(&mut self, value: f32) {
+        use sunrise_world::living_health;
+        living_health::set_health(self, value)
+            .expect("player health attribute and float bound at resource load");
+    }
     pub fn set_health(&mut self, value: f32, absorption: bool) -> Result<()> {
         let h = &mut self.health;
         let mut observer = Updates(&mut self.events);

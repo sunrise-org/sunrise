@@ -2396,6 +2396,133 @@ mod hub_tests {
     }
 
     #[test]
+    #[ignore = "daily"]
+    fn an_effects_only_arrival_saves_the_added_or_removed_speed_modifier() {
+        use crate::{effects::EffectInstance, lan::playerdata};
+        use sunrise_core::nbt::Tag;
+        use sunrise_game_data::nbt_value::{float, string, text};
+        let motion = crate::test_fixtures::prepared_motion();
+        let world = tempfile::tempdir().unwrap();
+        let speed = EffectInstance::new("speed", 200, 0);
+        let index = speed.registry_index.expect("Speed is registered");
+        for add in [false, true] {
+            let (_, mut hub, _seen, _mine) = held_in_a_second_hub();
+            let (mut source, i) = exported_guest();
+            source.guests.update(i, |g| {
+                if add {
+                    g.effects.add(speed.clone());
+                }
+            });
+            let record = super::export_record(&mut source, i, true, Default::default()).unwrap();
+            hub.guests.update(1, |g| {
+                let at = g.position;
+                let body = g.build_motion(&motion, at);
+                let scale = Tag::List(vec![Tag::compound([
+                    ("id", string("minecraft:scale")),
+                    ("base", Tag::Double(0.5f64.to_bits())),
+                ])]);
+                body.apply_saved_attributes(Some(&scale));
+                if !add {
+                    body.write_effect_modifiers(Some(index), Some(0));
+                    g.effects.add(speed.clone());
+                }
+            });
+            let done = crate::lan::import::import_player(
+                &mut hub,
+                motion.attributes(),
+                UUID_N,
+                &serde_json::json!({ "record": record, "place": false, "parts": ["effects"] }),
+            )
+            .unwrap();
+            let i = hub.imported_arrival(UUID_N, done.handover).unwrap();
+            playerdata::save_now(
+                &hub.guests[i],
+                world.path(),
+                &crate::items::Items::default(),
+            )
+            .unwrap();
+            hub.confirm_arrival(UUID_N, done.handover).unwrap();
+            let saved = crate::save::read_dat(&playerdata::path(world.path(), UUID_N)).unwrap();
+            let mut level = crate::save::Level::default();
+            level.read_player(&saved);
+            assert_eq!(
+                level
+                    .active_effects
+                    .iter()
+                    .any(|e| e.id == "minecraft:speed"),
+                add
+            );
+            let Some(Tag::List(attributes)) = saved.get("attributes") else {
+                panic!("saved attributes")
+            };
+            let lookup = |id| {
+                attributes
+                    .iter()
+                    .find(|entry| text(entry.get("id")).as_deref() == Some(id))
+                    .unwrap()
+            };
+            assert_eq!(float(lookup("minecraft:scale").get("base")), Some(0.5));
+            let modifier = match lookup("minecraft:movement_speed").get("modifiers") {
+                Some(Tag::List(modifiers)) => modifiers
+                    .iter()
+                    .find(|m| text(m.get("id")).as_deref() == Some("minecraft:effect.speed")),
+                _ => None,
+            };
+            assert_eq!(
+                modifier.and_then(|m| float(m.get("amount"))),
+                add.then_some(f64::from(0.2f32))
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn whole_record_without_scale_replaces_the_held_players_nondefault_scale() {
+        use crate::lan::playerdata;
+        use sunrise_core::nbt::Tag;
+        use sunrise_game_data::nbt_value::string;
+        let motion = crate::test_fixtures::prepared_motion();
+        let (record, mut hub, _seen, _mine) = held_in_a_second_hub();
+        assert!(compound_of(&record).get("attributes").is_none());
+        let body = hub.guests.update(1, |g| {
+            let at = g.position;
+            let body = g.build_motion(&motion, at);
+            body.apply_saved_attributes(Some(&Tag::List(vec![Tag::compound([
+                ("id", string("minecraft:scale")),
+                ("base", Tag::Double(0.5f64.to_bits())),
+            ])])));
+            assert_eq!(body.attribute("minecraft:scale").unwrap(), 0.5);
+            std::ptr::from_ref(body)
+        });
+        let done = crate::lan::import::import_player(
+            &mut hub,
+            motion.attributes(),
+            UUID_N,
+            &serde_json::json!({ "record": record, "place": false }),
+        )
+        .unwrap();
+        let i = hub.imported_arrival(UUID_N, done.handover).unwrap();
+        hub.guests.update(i, |g| {
+            let arrived = g.motion.as_deref_mut().unwrap();
+            assert_eq!(std::ptr::from_ref(arrived), body);
+            assert_eq!(arrived.attribute("minecraft:scale").unwrap(), 1.0);
+        });
+        let world = tempfile::tempdir().unwrap();
+        playerdata::save_now(
+            &hub.guests[i],
+            world.path(),
+            &crate::items::Items::default(),
+        )
+        .unwrap();
+        hub.confirm_arrival(UUID_N, done.handover).unwrap();
+        let saved = crate::save::read_dat(&playerdata::path(world.path(), UUID_N)).unwrap();
+        let mut read =
+            crate::motion::PlayerMotion::new(&motion, sunrise_core::geometry::Vec3::ZERO);
+        read.apply_saved_attributes(saved.get("attributes"));
+        assert_eq!(read.attribute("minecraft:scale").unwrap(), 1.0);
+    }
+
+    #[test]
     fn a_whole_record_makes_the_held_player_the_player_it_was_exported_from() {
         let (record, mut hub, seen, mine) = held_in_a_second_hub();
         let (source, i) = exported_guest();

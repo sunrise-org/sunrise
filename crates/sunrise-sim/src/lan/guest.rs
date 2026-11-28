@@ -1156,6 +1156,63 @@ impl Guest {
             self.send(p);
         }
     }
+    /// Construct a `ServerPlayer` body, before applying saved or copied state.
+    /// The seed belongs to the new entity; moving it does not start another stream.
+    pub fn build_motion(
+        &mut self,
+        resources: &crate::motion::MotionResources,
+        at: [f64; 3],
+    ) -> &mut PlayerMotion {
+        let [x, y, z] = at;
+        let position = Vec3::new(x, y, z);
+        let mut body = PlayerMotion::new(resources, position);
+        body.entity_id = self.entity_id;
+        body.random = sunrise_core::random::EntityRandom::own(crate::mobs::entity_random(
+            self.entity_id as u32,
+            position,
+        ));
+        self.motion.insert(Box::new(body)).as_mut()
+    }
+
+    /// Apply the decoded living and entity fields to the owned body. Import calls
+    /// this after merging its selected parts, without constructing another body.
+    pub fn apply_loaded_motion(&mut self, reload_attributes: bool) {
+        let spectator = self.spectator();
+        let Some(body) = self.motion.as_mut() else {
+            return;
+        };
+        if let Some(saved) = self.loaded_body.take() {
+            saved.apply(body);
+            if reload_attributes {
+                body.set_walking_speed_base(self.abilities.walking_speed);
+                body.apply_saved_attributes(
+                    self.saved.as_ref().and_then(|tag| tag.get("attributes")),
+                );
+            }
+        }
+        if let Some(absorption) = self.saved_absorption.take() {
+            body.internal_set_absorption(absorption);
+        }
+        body.set_loaded_health(self.health);
+        body.health.food.food = self.food;
+        body.health.food.saturation = self.saturation;
+        let [x, y, z] = self.position;
+        body.position = Vec3::new(x, y, z);
+        body.yaw = self.yaw;
+        body.pitch = self.pitch;
+        body.ground.on_ground = self.on_ground;
+        body.fall_flying = self.fall_flying;
+        body.spectator = spectator;
+        body.local_spectator = spectator;
+        body.may_fly = self.abilities.may_fly;
+        body.flying = self.abilities.flying;
+        body.flying_speed = self.abilities.flying_speed;
+        body.invulnerable = self.abilities.invulnerable || self.handover.is_some();
+        let mut status = self.effects.status();
+        status.protection = std::mem::take(&mut body.status.protection);
+        body.status = status;
+    }
+
     /// A new player at `at` (`ChunkMap.addEntity`; the tickets start there).
     pub fn place(&mut self, at: [f64; 3]) {
         (
@@ -1274,17 +1331,6 @@ impl Guest {
         }
         Some(m)
     }
-    /// `ServerPlayer.restoreFrom(old, false)`'s `setHealth(getMaxHealth())`:
-    /// the health a player comes back from a death with, the max health of
-    /// the base values their next body takes over, before its equipment
-    /// modifies it (40 after `/attribute @s minecraft:max_health base set
-    /// 40`, not 20).
-    pub fn respawn_health(&self, resources: &crate::motion::MotionResources) -> f32 {
-        let mut body = PlayerMotion::new(resources, Vec3::ZERO);
-        let _ = body.apply_saved_attributes(self.carried_attributes.as_ref());
-        body.attribute("minecraft:max_health")
-            .map_or(20.0, |max| max as f32)
-    }
     /// `Entity.getBoundingBox`.
     pub fn bounds(&self) -> Aabb {
         let [x, y, z] = self.position;
@@ -1301,8 +1347,29 @@ impl Guest {
     /// `Player.isWithinBlockInteractionRange(pos, buffer)` for the guest:
     /// its block interaction range is 4.5, 5 in creative.
     pub fn within_block_range(&self, pos: [i32; 3], buffer: f64) -> bool {
-        let range = if self.creative() { 5.0 } else { 4.5 };
-        within_block_range(self.eye(), range + buffer, pos)
+        use sunrise_world::attribute_map::ValueKind;
+        // The live attribute and the body pose's eyes, as `may_reach_block` reads
+        // them: a mid-tick edit or stance change reaches open menus too (#6828).
+        let eye = self.motion.as_ref().map_or_else(
+            || self.eye(),
+            |m| {
+                [
+                    self.position[0],
+                    self.position[1] + f64::from(m.dimensions.eye_height),
+                    self.position[2],
+                ]
+            },
+        );
+        let otherwise = if self.creative() { 5.0 } else { 4.5 };
+        let range = self
+            .motion
+            .as_ref()
+            .and_then(|m| {
+                let key = m.attributes.key("minecraft:block_interaction_range")?;
+                m.attributes.value(Some(key), ValueKind::Computed).ok()
+            })
+            .unwrap_or(otherwise);
+        within_block_range(eye, range + buffer, pos)
     }
     /// [`Self::within_block_range`], then a mod's `block_interaction_range`: what a menu's
     /// `stillValid` asks (`buffer` 4).
@@ -1337,21 +1404,7 @@ impl Guest {
     /// guest's body in its pose (crouching, swimming, gliding), with its
     /// `block_interaction_range` (4.5, 5 in creative, more with `/attribute`).
     pub fn may_reach_block(&mut self, pos: [i32; 3]) -> bool {
-        let eye = self
-            .motion
-            .as_ref()
-            .map_or_else(|| self.eye_height(), |m| f64::from(m.dimensions.eye_height));
-        let otherwise = if self.creative() { 5.0 } else { 4.5 };
-        let range = self
-            .motion
-            .as_mut()
-            .and_then(|m| m.attribute("minecraft:block_interaction_range").ok())
-            .unwrap_or(otherwise);
-        within_block_range(
-            [self.position[0], self.position[1] + eye, self.position[2]],
-            range + 1.0,
-            pos,
-        )
+        self.within_block_range(pos, 1.0)
     }
     /// The inventory menu's 46 slots (ServerPlayer.inventoryMenu): 0 crafting
     /// result, 1..=4 crafting grid, 5..=8 armor, 9..=35 main, 36..=44 hotbar,
@@ -1456,7 +1509,10 @@ pub fn within_block_range(eye: [f64; 3], range: f64, pos: [i32; 3]) -> bool {
     (0..3)
         .map(|k| {
             let lo = f64::from(pos[k]);
-            (lo - eye[k]).max(eye[k] - lo - 1.0).max(0.0).powi(2)
+            // Subtract the actual max face (`lo + 1`, exact for block coordinates).
+            // `eye - lo - 1` can round up across a power of two, turning a distance
+            // just under the boundary into exactly the range and rejecting the pick.
+            (lo - eye[k]).max(eye[k] - (lo + 1.0)).max(0.0).powi(2)
         })
         .sum::<f64>()
         < range * range
@@ -1691,12 +1747,11 @@ mod tests {
                 .edit(&handle, |a, o| a.add_permanent(bonus, o))
                 .unwrap();
             g.motion = Some(Box::new(m));
-            assert!(g.new_body(false).is_some());
-            assert_eq!(g.respawn_health(&resources), want, "base {base}");
+            let old = g.motion.take().unwrap();
+            let body = g.build_motion(&resources, [0.5, 64.0, 0.5]);
+            body.apply_saved_attributes(Some(&old.carried_attributes(false)));
+            assert_eq!(body.max_health(), want, "base {base}");
         }
-        // No body to take anything from: the default.
-        let g = guest_at([0.5, 64.0, 0.5]);
-        assert_eq!(g.respawn_health(&resources), 20.0);
     }
 
     /// #3684: a glide the client announced (`START_FALL_FLYING`) is the

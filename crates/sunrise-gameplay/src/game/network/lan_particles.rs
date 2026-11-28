@@ -401,7 +401,7 @@ impl crate::game::ServerGame<'_> {
         if sound.skip_hooks || self.common.creatures.asking_level_sound {
             return Some(sound);
         }
-        let emitter = sound.entity.and_then(|id| u32::try_from(id).ok());
+        let emitter = native_sound_emitter(sound.entity);
         let mut asked = LevelSound::new(&sound.sound, sound.at, sound.volume, sound.pitch)
             .in_source(
                 SoundSource::ALL
@@ -619,6 +619,12 @@ impl crate::game::ServerGame<'_> {
             }
         }
     }
+}
+
+/// The `u32` storage id an entity sound's `i32` emitter carries, high bit
+/// included: the same encoding the queue wrote (#6335).
+pub(in crate::game::server_side) fn native_sound_emitter(entity: Option<i32>) -> Option<u32> {
+    entity.map(sunrise_gameplay_common::game::entity_ids::entity_id_bits)
 }
 
 /// `ClientboundExplodePacket` without a push, or None while not serving.
@@ -1154,5 +1160,15 @@ pub mod tests {
             p.particle.data,
             Some(ParticleData::Color(0xFFFF_0000u32 as i32))
         );
+    }
+
+    /// An emitter id with the high bit set is stored as a negative `i32`; the
+    /// flush must read it back through its bits, not drop it (#6335).
+    #[test]
+    fn issue_6335_a_high_bit_emitter_id_reaches_the_entity_sound() {
+        let wire = 0x8000_0001_u32 as i32;
+        assert_eq!(super::native_sound_emitter(Some(wire)), Some(0x8000_0001));
+        assert_eq!(super::native_sound_emitter(Some(-1)), Some(u32::MAX));
+        assert_eq!(super::native_sound_emitter(None), None);
     }
 }

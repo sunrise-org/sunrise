@@ -1,0 +1,3 @@
+ids = ["handle:EntityRef::merge_nbt"]
+why = "#6769: merge_nbt now reloads a resident area effect cloud from the merged data, as /data merge entity does, instead of refusing it. Other kinds are unchanged."
+migrate = "Nothing to change."

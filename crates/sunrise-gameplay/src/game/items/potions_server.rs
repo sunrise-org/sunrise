@@ -1,4 +1,4 @@
-use super::{commands::Target, dragon::FightPlayer, living_attributes::AttributeWrite};
+use super::dragon::FightPlayer;
 use crate::game::ServerGame;
 use mod_api::{ActiveEffect, EffectApplicable, EffectTickChange, EntityRef, LivingRef, PlayerFood};
 use sunrise_core::nbt::Tag;
@@ -17,11 +17,10 @@ use {
     sunrise_level::effects::EffectAction, sunrise_level::effects::EffectInstance,
     sunrise_level::effects::EffectTickHost, sunrise_level::effects::OmenTick,
     sunrise_level::effects::PlayerEffects, sunrise_level::effects::TickingEffect,
-    sunrise_level::effects::effect_modifiers, sunrise_level::particle_options::ParticleType,
-    sunrise_sim::mobs::Damage, sunrise_sim::mobs::DamageKind, sunrise_sim::mobs::Mob,
-    sunrise_sim::mobs::MobEffectAction, sunrise_sim::mobs::ModEffectTick,
-    sunrise_sim::mobs::NamedDamage, sunrise_sim::mobs::Who, sunrise_sim::projectiles::Projectile,
-    sunrise_sim::projectiles::ProjectileKind,
+    sunrise_level::particle_options::ParticleType, sunrise_sim::mobs::Damage,
+    sunrise_sim::mobs::DamageKind, sunrise_sim::mobs::Mob, sunrise_sim::mobs::MobEffectAction,
+    sunrise_sim::mobs::ModEffectTick, sunrise_sim::mobs::NamedDamage, sunrise_sim::mobs::Who,
+    sunrise_sim::projectiles::Projectile, sunrise_sim::projectiles::ProjectileKind,
 };
 
 impl crate::game::ServerGame<'_> {
@@ -519,16 +518,8 @@ impl crate::game::ServerGame<'_> {
         amplifier: i32,
         refresh: bool,
     ) {
-        let modifiers = index
-            .and_then(sunrise_game_data::potions::effect_by_index)
-            .into_iter()
-            .flat_map(effect_modifiers);
-        for (attribute, id, amount, operation) in modifiers {
-            let amount = amount * f64::from(amplifier.wrapping_add(1));
-            // MobEffect.addAttributeModifiers replaces by id and stores permanently.
-            if let Some(write) = AttributeWrite::add(id, amount, operation, true, true) {
-                self.write_attribute(Target::Player, attribute, write);
-            }
+        if let Some(body) = self.common.player.as_mut() {
+            body.write_effect_modifiers(index, Some(amplifier));
         }
         if refresh {
             self.refresh_effect_attributes();
@@ -538,17 +529,9 @@ impl crate::game::ServerGame<'_> {
     /// `LivingEntity.onEffectsRemoved`: refresh even if there was no modifier
     /// to remove; other writes can still have attributes pending.
     pub(in crate::game) fn remove_player_effect_attributes(&mut self, effects: &[Option<usize>]) {
-        for index in effects {
-            for (attribute, id, _, _) in index
-                .and_then(sunrise_game_data::potions::effect_by_index)
-                .into_iter()
-                .flat_map(effect_modifiers)
-            {
-                self.write_attribute(
-                    Target::Player,
-                    attribute,
-                    AttributeWrite::Remove(id.to_owned()),
-                );
+        if let Some(body) = self.common.player.as_mut() {
+            for index in effects {
+                body.write_effect_modifiers(*index, None);
             }
         }
         self.refresh_effect_attributes();

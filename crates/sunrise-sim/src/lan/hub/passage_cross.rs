@@ -232,6 +232,9 @@ impl Hub {
             // the one its TeleportTransition carries.
             [g.yaw, g.pitch] = rotation.unwrap_or(ctx.spawn_angle);
             g.place(at);
+            if let Some(body) = g.motion.as_mut() {
+                body.position = sunrise_core::geometry::Vec3::new(at[0], at[1], at[2]);
+            }
             g.send(&C::Respawn(play::Respawn {
                 spawn: info,
                 keep: i8::from(keep_attributes),
@@ -372,6 +375,7 @@ impl Hub {
         }));
         self.send_permission_level(i);
         LevelChange {
+            keep_motion: false,
             at,
             yaw,
             pitch,
@@ -388,6 +392,7 @@ impl Hub {
         ctx: &TickCtx,
     ) {
         let LevelChange {
+            keep_motion,
             at,
             yaw,
             pitch,
@@ -423,8 +428,16 @@ impl Hub {
                 g.teleport_counter = (g.teleport_counter + 1) & 0x7FFF_FFFF;
             });
         } else {
-            self.guests.update(i, |g| g.first_good = at);
-            self.resend_teleport(i, None);
+            let velocity = self.guests.update(i, |g| {
+                g.first_good = at;
+                let body = g.motion.as_mut()?;
+                body.position = sunrise_core::geometry::Vec3::new(at[0], at[1], at[2]);
+                if !keep_motion {
+                    body.velocity = sunrise_core::geometry::Vec3::ZERO;
+                }
+                Some(body.velocity.components())
+            });
+            self.send_position_correction(i, None, 0, [0.0; 3], 0.0, velocity);
         }
         let g = &self.guests[i];
         g.send(&g.abilities_packet());
@@ -465,13 +478,41 @@ impl Hub {
     /// The rest of a portal's [`Self::finish_level_change`] once its exit is found:
     /// the position, LEVEL_CHUNKS_LOAD_START (the client's loading screen
     /// closes once its chunk is in) and TeleportTransition.PLAY_PORTAL_SOUND.
-    pub fn land(&mut self, i: usize, at: [f64; 3]) {
-        {
-            let value = false;
-            self.guests.update(i, |guest| guest.landing = value);
-        }
-        self.guests.update(i, |g| g.place(at)); // hold the exit chunk
-        self.teleport(i, Some(at));
+    pub fn land(&mut self, i: usize, at: [f64; 3], yaw: f32, relatives: i32) {
+        use play::relative::{ROTATE_DELTA, Y_ROT};
+        use sunrise_core::geometry::Vec3;
+
+        self.guests.update(i, |g| {
+            g.landing = false;
+            g.above_ground_ticks = 0;
+            g.place(at); // hold the exit chunk
+            let old_yaw = g.yaw;
+            g.yaw = if relatives & Y_ROT != 0 {
+                old_yaw + yaw
+            } else {
+                yaw
+            };
+            if let Some(body) = g.motion.as_mut() {
+                body.yaw = g.yaw;
+                body.position = Vec3::new(at[0], at[1], at[2]);
+                // PositionMoveRotation.of uses the client's last known movement.
+                // These transitions either keep all delta axes or none and do not
+                // rotate pitch when keeping motion.
+                body.velocity = if relatives & ROTATE_DELTA != 0 {
+                    let [x, y, z] = g.known_movement;
+                    let turn = f64::from(old_yaw - g.yaw).to_radians() as f32;
+                    Vec3::new(x, y, z)
+                        .rotate_x(0.0)
+                        .rotate_y(turn)
+                        .add_vector(Vec3::ZERO)
+                } else {
+                    Vec3::ZERO
+                };
+            }
+        });
+        // Send the transition, not the server's resolved motion. The client
+        // applies the relative delta to its own potentially newer movement.
+        self.send_position_correction(i, Some(at), relatives, [0.0; 3], yaw, None);
         let g = &self.guests[i];
         g.send(&C::GameEvent(play::GameEvent {
             event: game_event::LEVEL_CHUNKS_LOAD_START,

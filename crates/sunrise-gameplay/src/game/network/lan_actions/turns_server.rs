@@ -235,7 +235,7 @@ impl crate::game::ServerGame<'_> {
         // setter just for taking the body on loan: a pending max-health
         // change has not reached LivingEntity.onAttributeUpdated yet.
         if motion.health.health().to_bits() != g.health.to_bits() {
-            let _ = motion.set_health(g.health, false);
+            motion.set_loaded_health(g.health);
         }
         motion.health.food.food = g.food;
         motion.health.food.saturation = g.saturation;

@@ -1,0 +1,1 @@
+sunrise-gameplay game::server_side::dedicated::transfer::tests::prepared_join_calls_login_then_announces_once lib daily resources

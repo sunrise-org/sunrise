@@ -216,6 +216,13 @@ impl crate::game::ServerGame<'_> {
         if cancel {
             return MenuOpen::Refused;
         }
+        // A physical ender chest must have its live block entity: a positionless
+        // ender menu is the only one that may bypass the identity check
+        // (`PlayerEnderChestContainer.activeChest`). Refused before the open
+        // window is replaced, so the guest keeps it.
+        if slots == Slots::Ender && generation.is_none() {
+            return MenuOpen::Stale;
+        }
         // ServerPlayer.openMenu closes the menu that was open.
         let previous_window = self.server.lan.as_ref().and_then(|host| {
             super::super::native_menus::open_menu_of(host, conn).map(|(window, ..)| window)
@@ -301,6 +308,11 @@ impl crate::game::ServerGame<'_> {
                 host.hub.guests.update(gi, |g| {
                     let open = g.menu.as_mut().expect("the window was just installed");
                     open.opener_block = Some(block.into_boxed_str());
+                    // `PlayerEnderChestContainer.activeChest`: the block entity
+                    // this menu belongs to, checked for identity on each use.
+                    if slots == Slots::Ender {
+                        open.active_chest = generation;
+                    }
                 });
                 Some(host.hub.guest(conn)?.menu_generation)
             }) else {
@@ -452,15 +464,25 @@ impl crate::game::ServerGame<'_> {
     /// `playSound` with no player), the guest included, once the last opener
     /// has left.
     pub(in crate::game) fn guest_container_closed(&mut self, conn: u32) {
-        if let Some(pos) = self
+        let Some(menu) = self
             .server
             .lan
             .as_ref()
             .and_then(|host| host.hub.guest(conn))
-            .and_then(|guest| guest.menu.as_ref()?.pos)
-        {
-            self.guest_container_opener(conn, pos, false);
+            .and_then(|guest| guest.menu.as_ref())
+        else {
+            return;
+        };
+        let Some(pos) = menu.pos else {
+            return;
+        };
+        // A physical ender chest whose block entity was removed or replaced has
+        // no opener here any more: retiring it must not decrement the replacement's
+        // counter or play its close effects.
+        if menu.slots == Slots::Ender && !menu.active_chest_valid(&self.common.world) {
+            return;
         }
+        self.guest_container_opener(conn, pos, false);
     }
 
     /// Closes whatever menu the guest has open, the way each `ContainerClose`

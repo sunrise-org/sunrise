@@ -38,9 +38,9 @@ pub fn initialize(resources: &MotionResources, guest: &mut Guest) {
         && let Some(m) = g.motion.as_mut()
     {
         saved.apply(m);
-        let _ = m.set_walking_speed_base(g.abilities.walking_speed);
+        m.set_walking_speed_base(g.abilities.walking_speed);
         // LivingEntity.readAdditionalSaveData: the saved attributes.
-        let _ = m.apply_saved_attributes(g.saved.as_ref().and_then(|t| t.get("attributes")));
+        m.apply_saved_attributes(g.saved.as_ref().and_then(|t| t.get("attributes")));
     }
     // ServerPlayer.restoreFrom: a body that follows another takes its
     // attributes (a scale of 0.1 stays 0.1 after a respawn or a trip
@@ -49,13 +49,13 @@ pub fn initialize(resources: &MotionResources, guest: &mut Guest) {
     if let Some(carried) = g.carried_attributes.take()
         && let Some(m) = g.motion.as_mut()
     {
-        let _ = m.apply_saved_attributes(Some(&carried));
+        m.apply_saved_attributes(Some(&carried));
     }
     // The saved golden hearts go on the first body of a player who
     // has been here before.
     let saved = guest.saved_absorption.take();
     if let (Some(m), Some(amount)) = (guest.motion.as_mut(), saved) {
-        let _ = m.internal_set_absorption(amount);
+        m.internal_set_absorption(amount);
     }
     let kept = guest.logs_kept.take();
     if let (Some(m), Some((hurts, attacks))) = (guest.motion.as_mut(), kept) {
