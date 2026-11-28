@@ -246,6 +246,10 @@ The bots read the preceding packets, send any chunk and teleport acknowledgement
 then reply with Pong. The server stages that input for the next tick. Chunk availability is prepared before
 joining, so the usual chunk sender and tracker can run on fixed ticks. Keep-alives and advancement grant timestamps
 still use wall time. Compare with `--ignore keep_alive,update_advancements` to discard those packet IDs.
+In the flat template, one remaining payload difference is the saved chunks' bottom sky light layer.
+Depending on the order in which neighboring columns publish light support, `level_chunk_with_light`
+can encode that dark layer as an empty-mask bit or a 2,048-byte zero array. The comparison reports
+that difference even when the chunks, send ticks and entity tracking packets agree.
 
 ### Fuzzing scenarios
 
