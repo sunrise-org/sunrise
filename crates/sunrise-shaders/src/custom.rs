@@ -239,6 +239,10 @@ impl Custom {
             // Tolerate one final terminator, while leaving extra statements to the parser.
             let value = e.value.trim();
             let value = value.strip_suffix(';').unwrap_or(value).trim_end();
+            if let Some((_, m)) = sunrise_glsl::guard::scan(value) {
+                out.notes.push(format!("{}: {m}", e.key));
+                continue;
+            }
             match Parser::new(value, &mut out.calls).expr_all() {
                 Ok(expr) => out.items.push(Item {
                     name: name.to_owned(),
@@ -1661,5 +1665,55 @@ mod tests {
             .map(|n| n[1..].split('`').next().unwrap())
             .collect();
         assert_eq!(noted, warned);
+    }
+
+    #[test]
+    fn deeply_nested_custom_expression_is_refused_with_key_note() {
+        let depth = sunrise_glsl::guard::MAX_NESTING + 1;
+        let chains = sunrise_glsl::guard::MAX_CHAINED_OPERATORS + 1;
+        let text = format!(
+            "uniform.float.deep = {}1.0{}\n\
+             uniform.float.chain = 1.0{}\n",
+            "(".repeat(depth),
+            ")".repeat(depth),
+            "+1.0".repeat(chains),
+        );
+        let parsed = custom(&text);
+        assert_eq!(parsed.uniforms().count(), 0);
+        assert_eq!(parsed.notes.len(), 2, "{:?}", parsed.notes);
+        assert!(
+            parsed.notes[0].starts_with("uniform.float.deep: ")
+                && parsed.notes[0].contains("nesting exceeds"),
+            "{}",
+            parsed.notes[0]
+        );
+        assert!(
+            parsed.notes[1].starts_with("uniform.float.chain: ")
+                && parsed.notes[1].contains("chains more than"),
+            "{}",
+            parsed.notes[1]
+        );
+    }
+
+    #[test]
+    fn custom_expression_at_nesting_limit_parses_and_evaluates_on_shader_pack_stack() {
+        // Matches `sunrise_threads::GAME_THREAD_STACK_BYTES` (8 MiB).
+        const SHADER_PACK_STACK_BYTES: usize = 8 * 1024 * 1024;
+        let handle = std::thread::Builder::new()
+            .stack_size(SHADER_PACK_STACK_BYTES)
+            .spawn(|| {
+                let depth = sunrise_glsl::guard::MAX_NESTING;
+                let text = format!(
+                    "uniform.float.ok = {}42.0{}\n",
+                    "(".repeat(depth),
+                    ")".repeat(depth),
+                );
+                let mut parsed = custom(&text);
+                assert!(parsed.notes.is_empty(), "{:?}", parsed.notes);
+                let values = parsed.eval(0.016, &|_| None);
+                assert_eq!(values[0].v[0], 42.0);
+            })
+            .unwrap();
+        handle.join().unwrap();
     }
 }
