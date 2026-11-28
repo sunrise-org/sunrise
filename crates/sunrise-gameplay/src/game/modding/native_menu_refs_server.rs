@@ -1,8 +1,8 @@
 use super::lan_crafting::machine_menu_kind;
 use mod_api::__private::game::*;
 use mod_api::{
-    EntityRef, HostTransaction, ItemResource, LevelReadError, MenuRef, MenuSlotBacking, PlayerRef,
-    ResourceHandler,
+    EntityRef, HostTransaction, ItemResource, LevelReadError, MenuOpening, MenuRef,
+    MenuSlotBacking, PlayerRef, ResourceHandler,
 };
 use sunrise_gameplay_common::game::api_values::stack_value;
 use sunrise_gameplay_common::game::equip_answers::EquipAnswersGameExt1 as _;
@@ -113,6 +113,30 @@ impl crate::game::ServerGame<'_> {
         );
         self.native_menu_guest(menu)?;
         Some(menu)
+    }
+
+    pub(in crate::game) fn menu_opening(&self, menu: MenuRef) -> Option<MenuOpening> {
+        let guest = self.native_menu_guest(menu)?;
+        let open = guest.menu.as_ref()?;
+        (guest.sender.menu_extra_rev >= sunrise_protocol::menu_extra::OPENING_REVISION
+            && !open.removed)
+            .then(|| menu_opening(open.window, guest.menu_generation))
+    }
+
+    pub(in crate::game) fn player_resolve_open_menu(
+        &self,
+        player: PlayerRef,
+        opening: MenuOpening,
+    ) -> Option<MenuRef> {
+        let (window, generation) = menu_opening_parts(opening);
+        let menu = menu_ref(player, window, generation);
+        let guest = self.native_menu_guest(menu)?;
+        let open = guest.menu.as_ref()?;
+        (guest.sender.menu_extra_rev >= sunrise_protocol::menu_extra::OPENING_REVISION
+            && !open.removed
+            && !self.live_guest_view(guest).spectator
+            && self.guest_menu_still_valid(guest.conn))
+        .then_some(menu)
     }
 
     /// Container id (0 for the player's inventory menu).

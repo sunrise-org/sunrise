@@ -5,6 +5,9 @@ mod config_tests;
 #[cfg(test)]
 #[path = "payload_transport/disconnect_tests.rs"]
 mod disconnect_tests;
+#[cfg(all(test, feature = "client"))]
+#[path = "payload_transport/menu_opening_tests.rs"]
+mod menu_opening_tests;
 #[cfg(test)]
 #[path = "payload_transport/raw_fault_tests.rs"]
 mod raw_fault_tests;

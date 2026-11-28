@@ -563,6 +563,14 @@ pub mod game {
             generation,
         }
     }
+    /// A menu opening named by the server.
+    pub fn menu_opening(window: i32, opening: u64) -> MenuOpening {
+        MenuOpening { window, opening }
+    }
+    /// Read the token at the server's resolution boundary.
+    pub fn menu_opening_parts(token: MenuOpening) -> (i32, u64) {
+        (token.window, token.opening)
+    }
     /// A player handle the game names.
     pub fn player_ref(entity: EntityRef, uuid: u128) -> PlayerRef {
         PlayerRef { entity, uuid }

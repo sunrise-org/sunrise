@@ -201,6 +201,10 @@ fn handle_records_have_declared_field_bytes() {
         (player, -2i32, 91u64),
     );
     fields(
+        crate::__private::game::menu_opening(100, u64::MAX),
+        (100i32, u64::MAX),
+    );
+    fields(
         BlockEntityRef {
             level,
             position: [7, -8, 9],

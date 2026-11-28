@@ -17,6 +17,13 @@ pub trait PlayerMenusBackend {
     /// contents. On a client, refuses stale players and unsupported menu layouts.
     fn player_container_menu(&self, player: PlayerRef) -> Option<MenuRef>;
     /// Side: server.
+    /// Resolve a token against this player's current open menu. Use the payload context's
+    /// sender. The window and opening must both match, the player must not be a spectator,
+    /// and the menu must not have been removed and must still be valid for that player.
+    /// Unlike `container_menu`, this never returns the player's inventory menu. It does not
+    /// open a new screen; `open_menu` with a block entity is the separate write operation.
+    fn player_resolve_open_menu(&self, player: PlayerRef, opening: MenuOpening) -> Option<MenuRef>;
+    /// Side: server.
     /// The player's container counter (`ServerPlayer.containerCounter`): the window id the
     /// last menu opened for them took, 0 until one opens. Every menu the server opens for
     /// them advances it first, as vanilla's `nextContainerCounter` does, to `counter % 100 + 1`
@@ -73,8 +80,9 @@ pub trait PlayerMenusBackendMut {
     /// Opens content mod menu type `menu` for a connected player from anywhere, with no
     /// block (`ServerPlayer.openMenu(provider, extraDataWriter)`): an item's use, an entity,
     /// a command. The menu replaces the one they had open. Its container slots show empty
-    /// and their clicks reach `menu_clicked`. `extra` (at most 1,048,555 bytes, fitting within
-    /// vanilla's 1 MiB clientbound custom payload limit) is available only during construction in
+    /// and their clicks reach `menu_clicked`. `extra` (up to 1,048,547 bytes with opening tokens,
+    /// or 1,048,555 with earlier peers, within vanilla's 1 MiB clientbound custom payload limit)
+    /// is available only during construction in
     /// [`crate::MenuScreenOpen::extra`]. `pos`, when given, is offered to the factory and
     /// available later through `screen_pos`. `data` has exactly the menu type's `data_slots`
     /// signed `i32` values. The negotiated blockless payload sends indices `0..=u16::MAX` after

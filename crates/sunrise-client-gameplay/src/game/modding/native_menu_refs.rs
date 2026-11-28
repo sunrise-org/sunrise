@@ -1,7 +1,9 @@
 //! Handles to supported menus: client reads and clicks.
 use crate::game::ClientGame;
 use mod_api::__private::game::*;
-use mod_api::{DragKind, LevelReadError, MenuClick, MenuRef, MouseButton, PlayerRef, SwapWith};
+use mod_api::{
+    DragKind, LevelReadError, MenuClick, MenuOpening, MenuRef, MouseButton, PlayerRef, SwapWith,
+};
 use sunrise_gameplay_common::game::transactions::{After, TransactionsGameExt as _};
 use sunrise_items::items::ItemStack;
 use sunrise_protocol::packets::play::{ContainerClose, Serverbound};
@@ -243,6 +245,14 @@ impl ClientGame<'_> {
             window,
             remote.menu.generation,
         ))
+    }
+
+    pub(in crate::game) fn menu_opening(&self, menu: MenuRef) -> Option<MenuOpening> {
+        if menu.fields().window == 0 {
+            return None;
+        }
+        self.native_client_menu_name(menu)?;
+        self.client.remote.as_ref()?.menu.opening
     }
 
     pub(in crate::game) fn client_menu_kind(&self, menu: MenuRef) -> Option<Option<String>> {

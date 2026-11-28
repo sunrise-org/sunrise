@@ -1460,11 +1460,12 @@ pub(crate) mod tests {
                 unreachable!()
             };
             assert_eq!(
-                sunrise_protocol::menu_extra::decode(&payload.data).unwrap(),
+                sunrise_protocol::menu_extra::decode(&payload.data, 1).unwrap(),
                 sunrise_protocol::menu_extra::Message {
                     window,
                     pos: None,
-                    data: bytes
+                    data: bytes,
+                    opening: None,
                 }
             );
             assert_eq!(
@@ -1571,10 +1572,11 @@ pub(crate) mod tests {
                 })
                 .unwrap();
             assert_eq!(
-                sunrise_protocol::menu_extra::decode(large_payload).unwrap(),
+                sunrise_protocol::menu_extra::decode(large_payload, 1).unwrap(),
                 sunrise_protocol::menu_extra::Message {
                     window: large_window,
                     pos: None,
+                    opening: None,
                     data: large,
                 }
             );

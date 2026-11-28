@@ -751,6 +751,7 @@ fn a_registered_recipe_book_screen_opens_for_a_blockless_menu() {
                     Some(sunrise_protocol::menu_extra::Message {
                         window: 7,
                         pos: None,
+                        opening: None,
                         data: Vec::new(),
                     }),
                 ));
@@ -821,6 +822,7 @@ fn a_reopened_window_uses_only_its_new_screen_instance() {
                             data: menu_extra::encode(&menu_extra::Message {
                                 window: 23,
                                 pos: None,
+                                opening: None,
                                 data: marker.to_be_bytes().to_vec(),
                             })
                             .unwrap(),

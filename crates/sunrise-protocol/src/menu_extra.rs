@@ -6,14 +6,15 @@
 //!
 //! A payload is the window id, the block's position if there is one (a
 //! boolean, then the three axes), then the bytes the mod wrote (empty when it
-//! wrote none). Clientbound only.
+//! wrote none). Revision 3 appends the server's opening generation. Clientbound only.
 //!
 //! **Revision** (configuration, both directions): before play, the server
 //! sends a client whose `minecraft:brand` is Sunrise's [`query`]
 //! (`[QUERY, REVISION]`). A client answers with [`answer`] (`[ANSWER, revision]`)
 //! for a supported revision (`1..=REVISION`); unsupported revisions (including 0)
 //! are rejected. Revision 2 adds blockless menu data updates (`DATA_CHANNEL`)
-//! without changing the opening payload. A vanilla client is never asked.
+//! without changing the opening payload. Revision 3 carries an opening token.
+//! A vanilla client is never asked.
 use crate::{Error, Result, buf::Reader};
 use sunrise_core::vanilla_bytes::Writer;
 
@@ -23,13 +24,24 @@ pub const CHANNEL: &str = "sunrise:menu_extra";
 pub const DATA_CHANNEL: &str = "sunrise:menu_data";
 /// First revision that supports the live data payload and slotless menus.
 pub const LIVE_DATA_REVISION: u8 = 2;
-/// Latest supported menu revision. Revision 1 introduced optional opening positions.
-pub const REVISION: u8 = LIVE_DATA_REVISION;
-/// Bytes a mod may write at most: fits within vanilla's 1 MiB clientbound custom
+/// First revision that carries the opening generation in each supported menu's opening payload.
+pub const OPENING_REVISION: u8 = 3;
+/// Latest supported menu revision.
+pub const REVISION: u8 = OPENING_REVISION;
+/// Bytes a mod may write at most with the original layout: fits within vanilla's 1 MiB clientbound custom
 /// payload limit (`CLIENTBOUND_LIMIT`, 1,048,576 bytes) after the worst-case
 /// envelope header (5-byte VarInt window + 1-byte optional-position flag +
 /// 12-byte position + 3-byte VarInt byte-array length = 21 bytes).
 pub const MAX_DATA: usize = crate::packets::custom_payload::CLIENTBOUND_LIMIT - 21;
+
+/// Maximum extra data for the negotiated opening envelope.
+pub const fn max_data(revision: u8) -> usize {
+    if revision >= OPENING_REVISION {
+        MAX_DATA - size_of::<u64>()
+    } else {
+        MAX_DATA
+    }
+}
 
 const QUERY: u8 = 0;
 const ANSWER: u8 = 1;
@@ -116,11 +128,18 @@ pub struct Message {
     /// The block that opened the menu; None for a menu opened without one.
     pub pos: Option<[i32; 3]>,
     pub data: Vec<u8>,
+    /// The server's menu generation, present only with revision 3 and later.
+    pub opening: Option<u64>,
 }
 
-/// A message's payload; an error for data past [`MAX_DATA`].
+/// A message's payload; an error for data past the cap of its layout.
 pub fn encode(message: &Message) -> Result<Vec<u8>> {
-    if message.data.len() > MAX_DATA {
+    let revision = if message.opening.is_some() {
+        OPENING_REVISION
+    } else {
+        1
+    };
+    if message.data.len() > max_data(revision) {
         return Err(Error::new("menu extra: data too big"));
     }
     let mut w = Writer::new();
@@ -128,11 +147,14 @@ pub fn encode(message: &Message) -> Result<Vec<u8>> {
     w.bool(message.pos.is_some());
     message.pos.iter().flatten().for_each(|&axis| w.i32(axis));
     w.byte_array(&message.data);
+    if let Some(opening) = message.opening {
+        w.i64(opening as i64);
+    }
     Ok(w.data)
 }
 
 /// A payload's message; an error for one that breaks a cap.
-pub fn decode(data: &[u8]) -> Result<Message> {
+pub fn decode(data: &[u8], revision: u8) -> Result<Message> {
     let mut r = Reader::new(data);
     let window = r.varint()?;
     let pos = if r.bool()? {
@@ -140,11 +162,21 @@ pub fn decode(data: &[u8]) -> Result<Message> {
     } else {
         None
     };
-    let data = r.byte_array(MAX_DATA)?;
+    let data = r.byte_array(max_data(revision))?;
+    let opening = if revision >= OPENING_REVISION {
+        Some(r.i64()? as u64)
+    } else {
+        None
+    };
     if r.remaining() > 0 {
         return Err(Error::new("menu extra: trailing bytes"));
     }
-    Ok(Message { window, pos, data })
+    Ok(Message {
+        window,
+        pos,
+        data,
+        opening,
+    })
 }
 
 #[cfg(test)]
@@ -173,10 +205,15 @@ mod tests {
             (-1, Some([-30_000_000, -64, 29_999_999]), vec![9; MAX_DATA]),
             (100, None, vec![1, 2, 3]),
         ] {
-            let m = Message { window, pos, data };
+            let m = Message {
+                window,
+                pos,
+                data,
+                opening: None,
+            };
             let encoded = encode(&m).unwrap();
             assert!(encoded.len() <= crate::packets::custom_payload::CLIENTBOUND_LIMIT);
-            assert_eq!(decode(&encoded).unwrap(), m);
+            assert_eq!(decode(&encoded, 2).unwrap(), m);
         }
     }
 
@@ -186,6 +223,7 @@ mod tests {
             window: 1,
             pos: Some([0; 3]),
             data: vec![0; MAX_DATA + 1],
+            opening: None,
         };
         assert!(encode(&big).is_err());
         // Built by hand, as a server that skipped the check would.
@@ -193,17 +231,36 @@ mod tests {
         w.varint(1);
         w.bool(false);
         w.byte_array(&vec![0; MAX_DATA + 1]);
-        assert!(decode(&w.data).is_err());
+        assert!(decode(&w.data, 2).is_err());
         let mut ok = encode(&Message {
             window: 1,
             pos: Some([0; 3]),
             data: vec![1],
+            opening: None,
         })
         .unwrap();
         ok.push(0);
-        assert!(decode(&ok).is_err(), "trailing bytes");
-        assert!(decode(&[]).is_err());
-        assert!(decode(&[1, 1, 0]).is_err(), "a cut position");
+        assert!(decode(&ok, 2).is_err(), "trailing bytes");
+        assert!(decode(&[], 2).is_err());
+        assert!(decode(&[1, 1, 0], 2).is_err(), "a cut position");
+    }
+
+    #[test]
+    fn revision_three_requires_the_full_opening_generation() {
+        let message = Message {
+            window: 100,
+            pos: Some([7, -64, 29_999_999]),
+            data: vec![5; max_data(OPENING_REVISION)],
+            opening: Some(u64::MAX),
+        };
+        let bytes = encode(&message).unwrap();
+        assert!(bytes.len() <= crate::packets::custom_payload::CLIENTBOUND_LIMIT);
+        assert_eq!(decode(&bytes, OPENING_REVISION).unwrap(), message);
+        assert!(decode(&bytes, LIVE_DATA_REVISION).is_err());
+        assert!(decode(&bytes[..bytes.len() - 1], OPENING_REVISION).is_err());
+        let mut oversized = message;
+        oversized.data.push(5);
+        assert!(encode(&oversized).is_err());
     }
 
     #[test]

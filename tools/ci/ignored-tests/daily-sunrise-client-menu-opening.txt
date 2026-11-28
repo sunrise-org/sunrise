@@ -1,0 +1,2 @@
+sunrise-client cut_layout::game::payload_transport::menu_opening_tests::revision_two_negotiates_menu_context_without_an_opening_token lib daily resources
+sunrise-client cut_layout::game::payload_transport::menu_opening_tests::typed_menu_edits_resolve_only_the_current_valid_opening lib daily resources

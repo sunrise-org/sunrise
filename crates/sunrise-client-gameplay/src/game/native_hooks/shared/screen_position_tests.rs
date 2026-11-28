@@ -152,6 +152,7 @@ fn screen_extra_data_borrows_only_the_open_windows_bytes() {
                         data: menu_extra::encode(&Message {
                             window,
                             pos: None,
+                            opening: None,
                             data: bytes.to_vec(),
                         })
                         .unwrap(),

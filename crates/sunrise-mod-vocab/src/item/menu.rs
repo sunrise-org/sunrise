@@ -1,6 +1,15 @@
 //! Moved here from the game so mods can name it.
 #[allow(unused_imports)]
 use crate::*;
+/// Opaque identity of one server-opened menu. Send it on a registered typed play payload
+/// and resolve it against the sender with [`PlayerRef::resolve_open_menu`]. It is not a
+/// permission to edit a menu or its contents.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, sunrise_mod_api_macros::Wire)]
+pub struct MenuOpening {
+    pub(crate) window: i32,
+    pub(crate) opening: u64,
+}
+
 /// One click on the local player's open menu, submitted with `MenuRef::click`.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]

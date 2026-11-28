@@ -202,6 +202,7 @@ impl crate::game::ServerGame<'_> {
         } else {
             0
         };
+        let max_extra = sunrise_protocol::menu_extra::max_data(guest.sender.menu_extra_rev);
         if guest.sender.menu_extra_rev < required_rev {
             return MenuOpen::Refused;
         }
@@ -250,11 +251,11 @@ impl crate::game::ServerGame<'_> {
                     let mut data = None;
                     game.native_menu_extra_data(uuid, menu, &block, [k.0, k.1, k.2], &mut data);
                     let data = data.unwrap_or_default();
-                    if data.len() > sunrise_protocol::menu_extra::MAX_DATA {
+                    if data.len() > max_extra {
                         log::error!(
                             "Sunrise: {block}'s menu ({menu}) extra data ({} bytes) exceeds {} bytes; refusing open",
                             data.len(),
-                            sunrise_protocol::menu_extra::MAX_DATA
+                            max_extra
                         );
                         if let Some(container) = previous_window
                             && let Some(host) = game.server.lan.as_mut()

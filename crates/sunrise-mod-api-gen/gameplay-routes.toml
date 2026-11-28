@@ -2244,6 +2244,11 @@ borrow = "shared"
 kind = "shared_trait"
 owner = "::sunrise_gameplay_common::game::native_server::NativeServerGameExt1<'_>"
 
+[host.server."PlayerMenusBackend::player_resolve_open_menu"]
+borrow = "shared"
+kind = "local"
+owner = "crate::game::ServerGame"
+
 [host.server."PlayerMenusBackend::player_container_menu"]
 borrow = "shared"
 kind = "shared_trait"
@@ -2689,6 +2694,11 @@ borrow = "shared"
 kind = "shared_trait"
 owner = "::sunrise_gameplay_common::game::native_living_body::NativeLivingBodyGameExt4<'_>"
 
+[host.client."MenusBackend::menu_opening"]
+borrow = "shared"
+kind = "local"
+owner = "crate::game::ClientGame"
+
 [host.client."MenusBackend::menu_state_id"]
 borrow = "shared"
 kind = "shared_trait"
@@ -2698,6 +2708,11 @@ owner = "::sunrise_gameplay_common::game::native_menu_refs_common::NativeMenuRef
 borrow = "shared"
 kind = "shared_trait"
 owner = "::sunrise_gameplay_common::game::native_living_body::NativeLivingBodyGameExt4<'_>"
+
+[host.server."MenusBackend::menu_opening"]
+borrow = "shared"
+kind = "local"
+owner = "crate::game::ServerGame"
 
 [host.server."MenusBackend::menu_state_id"]
 borrow = "shared"

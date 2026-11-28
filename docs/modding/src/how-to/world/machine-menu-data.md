@@ -303,13 +303,22 @@ means a non-provider, cancelled open, unconnected/wrong-level player or an activ
 action. `Err(BlockEntityError::Stale)` means the entity
 does not resolve. It never opens a replacement through an old handle.
 
+## Sending edits from an open menu
+
+Read `menu.opening(host)` on the client and include the `MenuOpening` in your typed play
+payload. In its server handler, call `sender.resolve_open_menu(host, opening)` with the
+sender from the payload context before editing the backing block entity. A late edit is
+ignored even if the server reused the window ID, and a spectator or invalid menu cannot
+apply an edit. If `opening` returns `None`, there is no token to send. To send an edit and
+close the screen in the same transaction, queue the payload before calling `menu.close(host)`.
+
 ## Blockless status menus
 
 To open a content mod menu type with no block (from an item, an entity or a command),
 call `player.open_mod_menu(host, request)` with a `ModMenuOpen` request (NeoForge's
-`openMenu(provider, extraDataWriter)`). `menu` is the type's `MenuKey`. `extra`, at most
-1,048,555 bytes (vanilla's 1 MiB clientbound custom payload limit minus the 21-byte
-envelope header), is one-time context. Decode `open.extra` in the registered client screen factory.
+`openMenu(provider, extraDataWriter)`). `menu` is the type's `MenuKey`. `extra` is one-time
+context, bounded by the vanilla clientbound payload limit minus the opening envelope. Decode
+`open.extra` in the registered client screen factory.
 It is an empty slice when no payload matched this opening. Reusing a window id does not reuse
 its previous context. Keep owned decoded values if the screen needs them later; the bytes are
 borrowed only during construction. `pos` is an optional hint offered to the factory and later

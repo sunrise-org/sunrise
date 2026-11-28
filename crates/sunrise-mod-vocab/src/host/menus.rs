@@ -17,6 +17,11 @@ pub trait MenusBackend {
     /// Container id (0 for the player's inventory menu).
     fn menu_container_id(&self, menu: MenuRef) -> Option<i32>;
     /// Side: both.
+    /// Token for this opening, suitable for a typed play payload to the server.
+    /// None for a stale or removed menu, the player's inventory menu (window 0),
+    /// or a connection that did not negotiate menu-opening tokens.
+    fn menu_opening(&self, menu: MenuRef) -> Option<MenuOpening>;
+    /// Side: both.
     /// Registry menu type (`AbstractContainerMenu.getType`): `Some(Some(id))` for a
     /// supported registry-backed menu (such as `minecraft:furnace`, `minecraft:generic_9x3`, or
     /// a mod's menu type); `Some(None)` for the player's inventory menu and, on a client, a mount's inventory,

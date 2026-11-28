@@ -453,34 +453,36 @@ impl Hub {
     ) -> Option<i32> {
         let kind = self.registry_id("minecraft:menu", menu_kind)?;
         let i = self.guests.iter().position(|g| g.conn == conn)?;
-        let encoded_extra = match extra {
-            Some(data) => {
-                let next_window = self.guests[i].next_window % 100 + 1;
-                let message = sunrise_protocol::menu_extra::Message {
-                    window: next_window,
-                    pos: pos.map(|p| [p.0, p.1, p.2]),
-                    data,
-                };
-                match sunrise_protocol::menu_extra::encode(&message) {
-                    Ok(bytes) => Some(bytes),
-                    Err(e) => {
-                        log::error!("Sunrise: {menu_kind}'s extra data refused: {e}");
-                        return None;
-                    }
-                }
-            }
-            None => None,
-        };
+        use sunrise_protocol::menu_extra;
+        let revision = self.guests[i].sender.menu_extra_rev;
+        if extra
+            .as_ref()
+            .is_some_and(|data| data.len() > menu_extra::max_data(revision))
+        {
+            log::error!("Sunrise: {menu_kind}'s extra data exceeds the negotiated envelope");
+            return None;
+        }
         self.close_container_at(i);
         let window = self.guests.update(i, |g| {
             let window = g.next_menu_window();
             if slots == Slots::Native {
                 g.native_menu = items.clone();
             }
-            if let Some(data) = encoded_extra {
+            let opening = (revision >= menu_extra::OPENING_REVISION).then_some(g.menu_generation);
+            if extra.is_some() || opening.is_some() {
+                let message = menu_extra::Message {
+                    window,
+                    pos: pos
+                        .filter(|&(_, y, _)| {
+                            y != super::menu::VEHICLE_KEY_Y || slots == Slots::Native
+                        })
+                        .map(|(x, y, z)| [x, y, z]),
+                    data: extra.unwrap_or_default(),
+                    opening,
+                };
                 g.send(&C::CustomPayload(CustomPayload {
-                    channel: sunrise_protocol::menu_extra::CHANNEL.into(),
-                    data,
+                    channel: menu_extra::CHANNEL.into(),
+                    data: menu_extra::encode(&message).expect("preflight checked menu extra data"),
                 }));
             }
             g.send(&C::OpenScreen(play::OpenScreen {

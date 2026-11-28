@@ -1,0 +1,2 @@
+ids = ["type:MenuOpening", "handle:MenuRef::opening", "handle:PlayerRef::resolve_open_menu"]
+why = "A registered typed play payload can name one menu opening even when the window ID is reused. Resolve it against the sender before editing; spectators, removed menus, and openings that are no longer valid are refused. Peers below menu-extra revision 3 do not have a token."

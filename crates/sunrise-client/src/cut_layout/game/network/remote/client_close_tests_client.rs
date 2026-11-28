@@ -142,6 +142,7 @@ fn server_close_keeps_shown_native_screen_alive_for_closing_and_veto() {
                                             data: menu_extra::encode(&Message {
                                                 window,
                                                 pos: Some(POS),
+                                                opening: None,
                                                 data: Vec::new(),
                                             })
                                             .unwrap(),
