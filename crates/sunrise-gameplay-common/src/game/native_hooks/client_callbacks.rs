@@ -1,5 +1,4 @@
-use crate::game::native_living_body::BodyReads;
-use mod_api::__private::LivingParty;
+use crate::game::native_living_body::with_lent_view;
 
 pub fn install_client_hooks() {
     crate::game::api_values::install_stack_hooks();
@@ -236,21 +235,5 @@ pub fn install_client_hooks() {
         },
     ) {
         log::warn!("Native client hooks already installed; keeping the first callbacks");
-    }
-}
-
-fn with_lent_view(
-    lend: sunrise_sim::health::LivingLend<'_>,
-    dispatch: impl FnOnce(&mod_api::LivingView<'_>),
-) {
-    let Some(reads) = (lend.reads)() else {
-        return;
-    };
-    let lent = BodyReads {
-        body: lend.living_body(&reads),
-        reads,
-    };
-    if let Some(view) = mod_api::LivingView::new(&lent, LivingParty::Subject) {
-        dispatch(&view);
     }
 }

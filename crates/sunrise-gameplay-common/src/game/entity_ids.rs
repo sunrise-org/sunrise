@@ -1,6 +1,6 @@
-//! Entity ids are `u32` storage bits; the wire, NBT and the mod API carry them
-//! as `i32`, so an id with the high bit set is stored negative and must be
-//! converted back through its bits, never by a checked narrowing (#6335, #6336).
+//! Entity ids are `u32` storage bits; the wire and NBT carry them as `i32`, so
+//! an id with the high bit set is stored negative and must be converted back
+//! through its bits, never by a checked narrowing (#6335, #6336).
 //!
 //! Signed fields such as `HurtSource::causing` and a guest's `entity_id` carry
 //! those storage bits; `EntityRef` and `LivingRef` expose the `u32` id.
