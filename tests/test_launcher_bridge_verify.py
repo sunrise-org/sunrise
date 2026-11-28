@@ -78,6 +78,46 @@ class LauncherBridge(unittest.TestCase):
         self.assertTrue(self.accepts("launcher@1.1.0", keys, self.dist / "SHA256SUMS.sig"))
         self.assertTrue(self.accepts("v1.1.0", keys, self.dist / "SHA256SUMS.launcher.sig"))
 
+    def test_windows_openssl_only_gets_a_key_file_for_ephemeral_signing(self):
+        # Simulate Git Bash with a native OpenSSL that cannot reopen its /dev/fd paths.
+        bash_env = self.work / "windows-openssl.sh"
+        bash_env.write_text(r"""uname() { echo MINGW64_NT-10.0; }
+windows_openssl() {
+  if [[ "$1" == pkeyutl ]]; then
+    local i next key_path
+    for ((i=1; i<$#; i++)); do
+      [[ "${!i}" == -inkey ]] || continue
+      next=$((i + 1))
+      key_path=${!next}
+      printf '%s\n' "$key_path" > "$KEY_PATH_LOG"
+      [[ "$key_path" != /dev/fd/3 ]] || return 42
+      [[ -f "$key_path" ]] || return 43
+      break
+    done
+  fi
+  command openssl "$@"
+}
+""")
+        key_path_log = self.work / "inkey.txt"
+        env = {"PATH": SCRIPT_PATH, "BASH_ENV": str(bash_env), "OPENSSL": "windows_openssl",
+               "KEY_PATH_LOG": str(key_path_log)}
+        tag = "launcher@1.1.0"
+        cmd = [BASH, SIGN, tag, *(self.dist / name for name in ASSETS)]
+        signature = self.dist / "SHA256SUMS.sig"
+        subprocess.run(cmd, env=dict(env, EPHEMERAL="yes"), check=True, capture_output=True)
+        key_path = Path(key_path_log.read_text().strip())
+        self.assertEqual(key_path.name, "ephemeral.der")
+        self.assertFalse(key_path.exists())
+        keys = self.work / "ephemeral.pub"
+        (self.dist / "ephemeral.pub").rename(keys)
+        self.assertTrue(self.accepts(tag, keys, signature))
+
+        der = subprocess.run([OPENSSL, "genpkey", "-algorithm", "ed25519", "-outform", "DER"], check=True, capture_output=True).stdout
+        refused = subprocess.run(cmd, env=dict(env, RELEASE_SIGNING_KEY=base64.b64encode(der).decode()), capture_output=True)
+        self.assertEqual(refused.returncode, 42, refused.stderr)
+        self.assertEqual(key_path_log.read_text().strip(), "/dev/fd/3")
+        self.assertFalse(signature.exists())
+
     def test_without_a_listed_key_nothing_passes(self):
         self.assertTrue(self.sign())
         empty = self.work / "empty.txt"
