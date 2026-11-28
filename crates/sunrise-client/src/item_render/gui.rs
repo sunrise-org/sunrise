@@ -8,7 +8,7 @@
 use super::{Foil, Glint, GlintFrame, ItemQuad, ItemRenderState, ItemRenderer, SpecialHost};
 use crate::cit::Rule;
 use crate::cit_glint::StackGlint;
-use crate::hud::cit_glint::{GlintTextures, layer_uv, vertex_color};
+use crate::hud::cit_glint::{GlintTextures, layer_uv};
 use crate::hud::{HudBatch, Rect};
 use glam::{EulerRot, Mat4, Vec2, Vec3};
 use std::{collections::HashMap, f32::consts::PI, sync::Arc};
@@ -171,26 +171,16 @@ struct CitDraw<'a> {
 /// each layer is one run over all of them, blended as its rule says, at its intensity times
 /// the glint strength option (`HudBatch::glint_alpha`).
 fn emit_cit(batch: &mut HudBatch, fans: &[Vec<Point>], cit: CitDraw) {
-    let seconds = cit.millis as f64 / 1000.0;
-    for (i, layer) in cit.glint.layers.iter().enumerate() {
-        let Some(slot) = cit.textures.slot_of.get(layer.rule).copied().flatten() else {
-            continue;
-        };
-        let Some(constants) = cit.textures.slots.get(usize::from(slot)) else {
-            continue;
-        };
-        let intensity = cit.glint.intensity(i, seconds) * batch.glint_alpha;
-        if intensity <= 0.0 {
-            continue;
-        }
-        let glint = &cit.rules[layer.rule].glint;
-        let color = vertex_color(slot, intensity);
+    let layers = cit
+        .textures
+        .layers(cit.glint, cit.rules, cit.millis, batch.glint_alpha);
+    for layer in layers {
         let uv = |v: Point| {
             layer_uv(
                 v.cit_uv,
                 cit.millis as f32,
-                glint.speed,
-                glint.rotation,
+                layer.speed,
+                layer.rotation,
                 8.0,
             )
         };
@@ -202,11 +192,11 @@ fn emit_cit(batch: &mut HudBatch, fans: &[Vec<Point>], cit: CitDraw) {
                     corners.map(|v| v.p.to_array()),
                     corners.map(|v| v.uv),
                     corners.map(uv),
-                    color,
+                    layer.color,
                 );
             }
         }
-        batch.blend_since(start, crate::hud::Blend::CitGlint(constants.blend));
+        batch.blend_since(start, crate::hud::Blend::CitGlint(layer.blend));
     }
 }
 

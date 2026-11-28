@@ -320,6 +320,41 @@ fn clipped_entity(in: Out, color: vec4<f32>) -> ClippedEntity {
     let rgb = color.rgb * fade;
     return frame_stored(vec4(rgb * rgb, 0.0));
 }
+// OptiFine CIT enchantment glint layers over items and worn armour (gfx/cit_world.rs): every
+// rule's texture in one array (the HUD's, whose hud.wgsl `fs_cit_glint` reads the same), the
+// slot in the vertex colour's red and the layer's strength in its alpha, `glint_uv` the layer's
+// own texture coordinate. Masked by the surface's texture and cut as vanilla's glint is, faded
+// by fog, then blended by the pipeline the rule's `blend` asks for.
+struct CitSlot {
+    rgba: vec4<f32>,
+    // x: linear filtering (`blur`).
+    blur: vec4<f32>,
+}
+struct CitSlots {
+    slots: array<CitSlot, 256>,
+}
+// The array is bound twice, once per sampler: naga's GLSL writer pairs each image with one
+// sampler, so one image sampled through both cannot run on OpenGL (#2386).
+@group(1) @binding(0) var cit_tex: texture_2d_array<f32>;
+@group(1) @binding(1) var cit_blur: sampler;
+@group(1) @binding(2) var cit_nearest: sampler;
+@group(1) @binding(3) var<uniform> cit: CitSlots;
+@group(1) @binding(4) var cit_tex_sharp: texture_2d_array<f32>;
+@fragment fn fs_cit_glint(in: Out) -> @location(0) vec4<f32> {
+    let mask = textureSample(atlas, atlas_sampler, in.uv).a;
+    let index = u32(round(in.color.r * 255.0));
+    let slot = cit.slots[index];
+    let blurred = textureSampleLevel(cit_tex, cit_blur, in.glint_uv, index, 0.0);
+    let sharp = textureSampleLevel(cit_tex_sharp, cit_nearest, in.glint_uv, index, 0.0);
+    if mask < 0.1 { discard; }
+    var t = select(sharp, blurred, slot.blur.x > 0.5) * slot.rgba;
+    t.a *= in.color.a;
+    if t.a < 0.1 { discard; }
+    let f = max(linear_fog(in.fog_distance.x, globals.fog.x, globals.fog.y),
+                linear_fog(in.fog_distance.y, globals.fog.z, globals.fog.w));
+    t.a *= 1.0 - f * globals.fog_color.a;
+    return frame_stored(t);
+}
 // core/entity.fsh (`RenderPipelines.BANNER_PATTERN`): NO_OVERLAY and no ALPHA_CUTOUT,
 // alpha-blended without depth writes over the shield or banner base model.
 @fragment fn fs_banner_pattern(in: Out, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {

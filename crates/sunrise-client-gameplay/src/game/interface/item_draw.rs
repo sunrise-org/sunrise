@@ -687,9 +687,10 @@ impl crate::game::ClientGame<'_> {
             rule,
         );
         if let Some(glint) = glint {
-            // The pack's enchantment rules replace vanilla's glint unless one keeps it, so far
-            // only in the GUI, where their own layers draw: held, dropped and framed items keep
-            // vanilla's until theirs do. The pack's `useGlint=false` removes it everywhere.
+            // The pack's enchantment rules replace vanilla's glint unless one keeps it: a GUI
+            // item loses it here and draws their layers; a world item keeps it in its state,
+            // and its draw leaves it out as it draws the layers (`submit_world_quads`). The
+            // pack's `useGlint=false` removes it everywhere.
             let gui = display == DisplayContext::Gui;
             let pack_keeps = renderer
                 .cit
@@ -700,7 +701,7 @@ impl crate::game::ClientGame<'_> {
                     layer.foil = sunrise_assets::item_model::FoilType::None;
                 }
             }
-            if gui && !glint.is_empty() {
+            if !glint.is_empty() {
                 state.cit_glint = Some(glint);
             }
         }
@@ -842,20 +843,15 @@ impl crate::game::ClientGame<'_> {
         out: &mut Vec<Vertex>,
     ) {
         let lights = diffuse_lights(self.nether_lighting());
-        let mut sink = WorldSink {
-            out,
-            light: item_hdr_light(state, light),
-            lights: (state.hdr_light == 0).then_some(lights),
-            glint: self.glint(),
-            tier: state.hdr_tier,
-        };
-        state.submit_joml(
-            &self.client.client_pack.item_renderer,
-            &self.client.gui.atlas.sprites,
-            &self.item_host(),
-            pose,
-            &mut sink,
-        );
+        self.submit_world_quads(state, light, Some(lights), out, |sink| {
+            state.submit_joml(
+                &self.client.client_pack.item_renderer,
+                &self.client.gui.atlas.sprites,
+                &self.item_host(),
+                pose,
+                sink,
+            );
+        });
     }
     /// [`Self::submit_item_world`] shaded by other diffuse lights (a
     /// `Lighting.Entry` other than the level's), in the pose's output space.
@@ -867,20 +863,15 @@ impl crate::game::ClientGame<'_> {
         lights: (glam::Vec3, glam::Vec3),
         out: &mut Vec<Vertex>,
     ) {
-        let mut sink = WorldSink {
-            out,
-            light: item_hdr_light(state, light),
-            lights: (state.hdr_light == 0).then_some(lights),
-            glint: self.glint(),
-            tier: state.hdr_tier,
-        };
-        state.submit(
-            &self.client.client_pack.item_renderer,
-            &self.client.gui.atlas.sprites,
-            &self.item_host(),
-            pose,
-            &mut sink,
-        );
+        self.submit_world_quads(state, light, Some(lights), out, |sink| {
+            state.submit(
+                &self.client.client_pack.item_renderer,
+                &self.client.gui.atlas.sprites,
+                &self.item_host(),
+                pose,
+                sink,
+            );
+        });
     }
     /// [`Self::submit_item_world`] without the level's diffuse shading.
     pub fn submit_item_unlit(
@@ -890,20 +881,48 @@ impl crate::game::ClientGame<'_> {
         light: u32,
         out: &mut Vec<Vertex>,
     ) {
-        let mut sink = WorldSink {
-            out,
-            light: item_hdr_light(state, light),
-            lights: None,
-            glint: self.glint(),
-            tier: state.hdr_tier,
-        };
-        state.submit(
+        self.submit_world_quads(state, light, None, out, |sink| {
+            state.submit(
+                &self.client.client_pack.item_renderer,
+                &self.client.gui.atlas.sprites,
+                &self.item_host(),
+                pose,
+                sink,
+            );
+        });
+    }
+    /// `state`'s quads into `out` as a world draw (a [`WorldSink`] of `light` and `lights`),
+    /// then its OptiFine CIT glint layers over them (`item_render::CitWorld`). `submit` hands
+    /// the quads to the sink it is given, which it may be asked twice.
+    fn submit_world_quads(
+        &self,
+        state: &ItemRenderState,
+        light: u32,
+        lights: Option<(glam::Vec3, glam::Vec3)>,
+        out: &mut Vec<Vertex>,
+        submit: impl Fn(&mut dyn item_render::ItemSink),
+    ) {
+        let cit = item_render::CitWorld::new(
+            state,
             &self.client.client_pack.item_renderer,
-            &self.client.gui.atlas.sprites,
-            &self.item_host(),
-            pose,
-            &mut sink,
+            self.client.glint_frame,
         );
+        // The pack's layers take vanilla's glint's place unless one keeps it.
+        let glint = self
+            .glint()
+            .filter(|_| cit.as_ref().is_none_or(|cit| cit.vanilla));
+        submit(&mut WorldSink {
+            out: &mut *out,
+            light: item_hdr_light(state, light),
+            lights: lights.filter(|_| state.hdr_light == 0),
+            glint,
+            tier: state.hdr_tier,
+        });
+        if let Some(cit) = cit.filter(|cit| !cit.layers.is_empty()) {
+            let mut quads: Vec<item_render::ItemQuad> = Vec::new();
+            submit(&mut quads);
+            cit.push(&quads, out);
+        }
     }
     /// [`Self::submit_item_lit`] of `state` under each of `poses` on the GPU path: the mark
     /// before its draws and their bounds, or `None` (nothing drawn) when the state cannot

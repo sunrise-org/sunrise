@@ -1,10 +1,13 @@
-//! OptiFine CIT enchantment glints on GUI items (`type=enchantment`, see `crate::cit_glint` for
-//! which layers a stack draws): every rule's texture in one texture array, each layer an extra
-//! pass over the item's quads with its rule's blend. A layer's vertices carry its texture slot
-//! (red) and its intensity (alpha) in their colour; its scrolled UV is worked out on the CPU, as
-//! vanilla's glint's is. Without enchantment rules nothing here is made.
+//! OptiFine CIT enchantment glints on items and worn armour (`type=enchantment`, see
+//! `crate::cit_glint` for which layers a stack draws): every rule's texture in one texture
+//! array, each layer an extra pass over the item's quads with its rule's blend. A layer's
+//! vertices carry its texture slot (red) and its intensity (alpha) in their colour; its
+//! scrolled UV is worked out on the CPU, as vanilla's glint's is. The HUD draws them over GUI
+//! items, and the entity pass (`gfx::cit_world`) over items and armour in the world, from the
+//! same array. Without enchantment rules nothing here is made.
 
 use super::HudVertex;
+use crate::cit_glint::{GlintLayer, StackGlint};
 use crate::gfx::hud_coverage::Pipeline;
 use sunrise_assets::resource_source::ResourceSource;
 use sunrise_optifine::cit::{Blend, Factor, Kind, Rule};
@@ -111,6 +114,44 @@ impl GlintTextures {
     pub fn is_empty(&self) -> bool {
         self.slots.is_empty()
     }
+
+    /// The layers `glint` draws `millis` into the game, bottom first, at `alpha` (the glint
+    /// strength option) times their intensity: those whose rule has a slot and whose strength
+    /// isn't 0. `rules` are the rules `glint` indexes (`CitRules::rules`).
+    pub fn layers(
+        &self,
+        glint: &StackGlint,
+        rules: &[Rule],
+        millis: i64,
+        alpha: f32,
+    ) -> Vec<LayerDraw> {
+        let seconds = millis as f64 / 1000.0;
+        let draw = |(i, layer): (usize, &GlintLayer)| {
+            let slot = self.slot_of.get(layer.rule).copied().flatten()?;
+            let constants = self.slots.get(usize::from(slot))?;
+            let intensity = glint.intensity(i, seconds) * alpha;
+            let rule = &rules.get(layer.rule)?.glint;
+            (intensity > 0.0).then(|| LayerDraw {
+                color: vertex_color(slot, intensity),
+                blend: constants.blend,
+                speed: rule.speed,
+                rotation: rule.rotation,
+            })
+        };
+        glint.layers.iter().enumerate().filter_map(draw).collect()
+    }
+}
+
+/// One glint layer as drawn at a moment: what its vertices carry and how its texture moves.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LayerDraw {
+    /// The vertices' colour (`vertex_color`): the layer's slot and strength.
+    pub color: u32,
+    /// An index into `GlintTextures::blends`.
+    pub blend: u8,
+    /// The rule's `speed` and `rotation` (degrees), as `layer_uv` takes them.
+    pub speed: f32,
+    pub rotation: f32,
 }
 
 /// The size every slot takes: the largest width and height of `sizes`, each at most
@@ -233,6 +274,7 @@ pub fn blend_state(blend: Option<Blend>) -> wgpu::BlendState {
 /// The GPU side: the texture array and slot table (bind group 1 of `fs_cit_glint`), and one
 /// pipeline per blend.
 pub(super) struct CitGlintPass {
+    layout: wgpu::BindGroupLayout,
     group: wgpu::BindGroup,
     pipelines: Vec<Pipeline>,
 }
@@ -422,7 +464,18 @@ impl CitGlintPass {
                 Pipeline::new(device, &desc, source, coverage).expect("the CIT glint's coverage")
             })
             .collect();
-        Some(Self { group, pipelines })
+        Some(Self {
+            layout,
+            group,
+            pipelines,
+        })
+    }
+
+    /// The array's bind group layout and group: the entity pass binds them as its group 1
+    /// (`fs_cit_glint` of `entity.wgsl` reads the same bindings), so the world's layers share
+    /// the GUI's textures.
+    pub(super) fn bindings(&self) -> (&wgpu::BindGroupLayout, &wgpu::BindGroup) {
+        (&self.layout, &self.group)
     }
 
     /// Draw `vertices` with blend `blend` (an index into `GlintTextures::blends`).
@@ -570,5 +623,46 @@ mod tests {
             blend_state(parse_blend("replace").unwrap()),
             wgpu::BlendState::REPLACE
         );
+    }
+
+    #[test]
+    fn layers_carry_their_slot_strength_blend_and_motion() {
+        use crate::cit_glint::Global;
+        let rules = [
+            rule("a", "type=enchantment\nspeed=2\nrotation=90"),
+            rule("b", "type=enchantment\nlayer=1\nblend=multiply"),
+            // No texture of its own, so no slot: it draws nothing.
+            rule("c", "type=enchantment\nlayer=2"),
+        ];
+        let white = vec![255; 4];
+        let textures = GlintTextures::new(
+            &rules,
+            vec![(0, (1, 1, white.clone())), (1, (1, 1, white))],
+            MAX_BYTES,
+        );
+        let enchantments = [("minecraft:sharpness", 3)];
+        let glint = StackGlint::new(&rules, &[0, 1, 2], &enchantments, &Global::default());
+        assert_eq!(glint.layers.len(), 3);
+        // Half the glint strength, as the glint strength option scales every layer.
+        let layers = textures.layers(&glint, &rules, 0, 0.5);
+        assert_eq!(
+            layers,
+            [
+                LayerDraw {
+                    color: vertex_color(0, 0.5),
+                    blend: 0,
+                    speed: 2.0,
+                    rotation: 90.0,
+                },
+                LayerDraw {
+                    color: vertex_color(1, 0.5),
+                    blend: 1,
+                    speed: rules[1].glint.speed,
+                    rotation: 0.0,
+                },
+            ]
+        );
+        // A glint strength of 0 leaves nothing to draw.
+        assert!(textures.layers(&glint, &rules, 0, 0.0).is_empty());
     }
 }

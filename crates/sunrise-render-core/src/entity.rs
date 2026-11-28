@@ -51,6 +51,11 @@ pub const DYNAMIC_TEXTURE_CUTOUT_OVERLAY: u32 = 53;
 pub const DYNAMIC_TEXTURE_TRANSLUCENT_OVERLAY: u32 = 54;
 /// Armor foil without its color material: additive, with no depth or outline writes.
 pub const ARMOR_GLINT_ONLY_OVERLAY: u32 = 55;
+/// An OptiFine CIT enchantment glint layer over an item or worn armour (`type=enchantment`):
+/// equal depth, no depth writes, blended as its rule's `blend` says. The colour's red byte is
+/// the layer's texture slot and its alpha the layer's strength; `glint_uv` is the layer's
+/// texture coordinate. Stored with the glint-only quads, which draw after the entity pass.
+pub const CIT_GLINT_OVERLAY: u32 = 58;
 /// The overlays of a name tag's `Font.DisplayMode.NORMAL` copy when a pack's `core/text` draws
 /// it (`RenderTypes.text`, `RenderPipelines.TEXT`): opaque on no background, which
 /// `SubmitNodeCollection.canRenderAsSolid` puts in the solid phase, and translucent (a discrete

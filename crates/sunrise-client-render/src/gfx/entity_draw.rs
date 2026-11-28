@@ -288,7 +288,7 @@ impl Renderer {
         pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
         let hand_kind = |layer: u32| match layer & 0xffff {
             BANNER_PATTERN_OVERLAY => 1u8,
-            GLINT_ONLY_OVERLAY => 2u8,
+            GLINT_ONLY_OVERLAY | CIT_GLINT_OVERLAY => 2u8,
             _ => 0u8,
         };
         let mut at = 0;
@@ -296,12 +296,24 @@ impl Renderer {
             .chunk_by(|a, b| hand_kind(a[0].layer) == hand_kind(b[0].layer))
         {
             let end = at + run.len() as u32;
-            pass.set_pipeline(match hand_kind(run[0][0].layer) {
-                1 => &self.banner_pattern_pipeline,
-                2 => &self.glint_only_pipeline,
-                _ => &self.entity_pipeline,
-            });
-            pass.draw_indexed(at * 6..end * 6, (first * 4) as i32, 0..1);
+            match hand_kind(run[0][0].layer) {
+                2 => cit_world::CitWorldPass::draw_glint_only(
+                    self.cit_world.as_ref(),
+                    pass,
+                    &self.glint_only_pipeline,
+                    run.as_flattened(),
+                    (at, (first * 4) as i32),
+                    false,
+                ),
+                kind => {
+                    pass.set_pipeline(if kind == 1 {
+                        &self.banner_pattern_pipeline
+                    } else {
+                        &self.entity_pipeline
+                    });
+                    pass.draw_indexed(at * 6..end * 6, (first * 4) as i32, 0..1);
+                }
+            }
             at = end;
         }
         if light_marks(self.output.frame.format, self.hdr.is_some()) {
