@@ -30,9 +30,13 @@ const TRANSIENT_FRAMES_TO_KEEP: u32 = 3;
 /// Execution slot in the world frame where a compiled mod offscreen pass runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FrameGraphSlot {
-    /// Before the main world passes open (passes with no `after(stage)` constraint, or
-    /// `before(AfterSky)`).
+    /// Before the main world passes open (passes with no `after(stage)` constraint).
     BeforeWorld,
+    /// After the sky pass and immediately before the named [`RenderLevelStage`]'s listeners
+    /// fire. Compilation assigns this only for `AfterSky`, the first stage: passes constrained
+    /// `before(AfterSky)` — and the passes they depend on — run here instead of falling back
+    /// to [`Self::BeforeWorld`], which the engine executes after the `AfterSky` listeners.
+    BeforeStage(RenderLevelStage),
     /// Immediately after the named [`RenderLevelStage`] boundary.
     AfterStage(RenderLevelStage),
 }
@@ -548,6 +552,44 @@ fn compile_specs(
             }
         }
         return Err(FrameGraphError::Cycle { passes: involved });
+    }
+
+    // Passes that can reach the `AfterSky` anchor (a `before(AfterSky)` edge, or a dependency
+    // of such a pass) form the pre-stage slot: `AfterSky` is the first anchor, so the sort put
+    // them in `BeforeWorld`, which executes after that stage's listeners. The set is
+    // dependency-closed by construction — every edge into a member comes from another member
+    // or from the anchor itself — so moving it wholesale keeps each dependency in a slot no
+    // later than its consumers.
+    let sky_anchor = anchor_node(RenderLevelStage::AfterSky);
+    let mut reaches_sky = vec![false; total_nodes];
+    {
+        let mut rev: Vec<Vec<usize>> = vec![Vec::new(); total_nodes];
+        for (u, outs) in adj.iter().enumerate() {
+            for &v in outs {
+                rev[v].push(u);
+            }
+        }
+        reaches_sky[sky_anchor] = true;
+        let mut stack = vec![sky_anchor];
+        while let Some(v) = stack.pop() {
+            for &u in &rev[v] {
+                if !reaches_sky[u] {
+                    reaches_sky[u] = true;
+                    stack.push(u);
+                }
+            }
+        }
+    }
+    if let Some(before_world) = by_slot.remove(&FrameGraphSlot::BeforeWorld) {
+        let (pre, rest): (Vec<usize>, Vec<usize>) = before_world
+            .into_iter()
+            .partition(|&pos| reaches_sky[pass_node(order[pos])]);
+        if !rest.is_empty() {
+            by_slot.insert(FrameGraphSlot::BeforeWorld, rest);
+        }
+        if !pre.is_empty() {
+            by_slot.insert(FrameGraphSlot::BeforeStage(RenderLevelStage::AfterSky), pre);
+        }
     }
 
     // Assign transient target lifetimes (`FrameGraphBuilder.assignResourceLifetimes`).
@@ -1126,6 +1168,65 @@ mod tests {
         assert_eq!(compiled.transient_lifetimes, vec![Some((0, 1))]);
         assert_eq!(compiled.acquire_before[0], vec![tmp]);
         assert_eq!(compiled.release_after[1], vec![tmp]);
+    }
+
+    #[test]
+    fn before_after_sky_passes_and_their_producers_run_in_the_pre_stage_slot() {
+        let mut graph = RecordedFrameGraph::default();
+        let tmp = graph.add_transient(rgba8_desc([64, 64]));
+
+        // A producer with no stage constraint, feeding the pre-sky pass through a resource edge.
+        let producer = push(
+            &mut graph,
+            FramePassDescriptor::new("sky_producer", FrameTarget::Transient(tmp)),
+        );
+        // The pass that must run after the sky pass but before the `AfterSky` stage listeners.
+        let layer = push(
+            &mut graph,
+            FramePassDescriptor::new("sky_layer", FrameTarget::Mod(rt(1, 0)))
+                .reads(FrameTarget::Transient(tmp))
+                .before_stage(RenderLevelStage::AfterSky),
+        );
+        // An unconstrained pass stays in `BeforeWorld`.
+        let plain = push(
+            &mut graph,
+            FramePassDescriptor::new("plain", FrameTarget::Mod(rt(2, 1))),
+        );
+        // A pass after the `AfterSky` stage keeps the `AfterStage` slot.
+        let after = push(
+            &mut graph,
+            FramePassDescriptor::new("after_sky", FrameTarget::Mod(rt(3, 2)))
+                .after_stage(RenderLevelStage::AfterSky),
+        );
+        // A pass constrained before a later stage is not moved into the pre-sky slot.
+        let before_blocks = push(
+            &mut graph,
+            FramePassDescriptor::new("before_blocks", FrameTarget::Mod(rt(4, 3)))
+                .before_stage(RenderLevelStage::AfterOpaqueBlocks),
+        );
+
+        let compiled = graph.compile(false).expect("acyclic graph");
+        let slot_passes = |slot: FrameGraphSlot| -> Vec<usize> {
+            compiled
+                .by_slot
+                .get(&slot)
+                .map(|positions| positions.iter().map(|&pos| compiled.order[pos]).collect())
+                .unwrap_or_default()
+        };
+        // The producer runs in the pre-stage slot too, ahead of its consumer: the slot is
+        // dependency-closed, so nothing a pre-stage pass reads is left in a later slot.
+        assert_eq!(
+            slot_passes(FrameGraphSlot::BeforeStage(RenderLevelStage::AfterSky)),
+            vec![producer.raw() as usize, layer.raw() as usize]
+        );
+        assert_eq!(
+            slot_passes(FrameGraphSlot::BeforeWorld),
+            vec![plain.raw() as usize, before_blocks.raw() as usize]
+        );
+        assert_eq!(
+            slot_passes(FrameGraphSlot::AfterStage(RenderLevelStage::AfterSky)),
+            vec![after.raw() as usize]
+        );
     }
 
     #[test]
