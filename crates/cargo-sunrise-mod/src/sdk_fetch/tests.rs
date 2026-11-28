@@ -1,27 +1,40 @@
 use super::*;
 use ring::signature::{Ed25519KeyPair, KeyPair};
+use std::cell::OnceCell;
+use std::sync::atomic::Ordering::Relaxed;
 
-const BUILD: &str = "0123456789abcdef0123456789abcdef01234567";
+pub(crate) const BUILD: &str = "0123456789abcdef0123456789abcdef01234567";
+const SURFACE_STUB: &str = r#"{"hash":"ab"}"#;
 
 /// A release folder `sdk-<BUILD>` under a base folder, signed with a fresh key: the base and the
 /// key.
 fn release(nightly: Option<&str>) -> (tempfile::TempDir, PublicKey) {
+    release_with_surface(BUILD, nightly, SURFACE_STUB)
+}
+
+pub(crate) fn release_with_surface(
+    build: &str,
+    nightly: Option<&str>,
+    surface: &str,
+) -> (tempfile::TempDir, PublicKey) {
     let pkcs8 = Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new()).unwrap();
     let pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
     let key: PublicKey = pair.public_key().as_ref().try_into().unwrap();
-    (release_signed_by(nightly, &pair), key)
+    (release_signed_by(build, nightly, surface, &pair), key)
 }
 
 /// [`release`], its `SHA256SUMS` signed by `pair`.
-fn release_signed_by(nightly: Option<&str>, pair: &Ed25519KeyPair) -> tempfile::TempDir {
+fn release_signed_by(
+    commit: &str,
+    nightly: Option<&str>,
+    surface: &str,
+    pair: &Ed25519KeyPair,
+) -> tempfile::TempDir {
     let base = tempfile::tempdir().unwrap();
-    let folder = base.path().join(format!("sdk-{BUILD}"));
+    let tag = format!("sdk-{commit}");
+    let folder = base.path().join(&tag);
     fs::create_dir_all(&folder).unwrap();
-    fs::write(
-        folder.join(SURFACE),
-        format!(r#"{{"schema":{},"hash":"ab"}}"#, mod_surface::SCHEMA),
-    )
-    .unwrap();
+    fs::write(folder.join(SURFACE), surface).unwrap();
     // Any archive the unpack reads stands in for the API source and the build data.
     for archive in [API_SOURCE, build_data::ARCHIVE] {
         fs::write(
@@ -31,19 +44,24 @@ fn release_signed_by(nightly: Option<&str>, pair: &Ed25519KeyPair) -> tempfile::
         .unwrap();
     }
     let build = sdk::Build {
-        commit: BUILD.into(),
+        commit: commit.into(),
         game: sdk::GAME.into(),
         date: "2026-11-13".into(),
         nightly: nightly.map(str::to_owned),
     };
-    let index = Index::of_folder(&folder, build, "1.99.1".into()).unwrap();
+    let mut index = Index::of_folder(&folder, build, "1.99.1".into()).unwrap();
+    index.surface.notes.push(sdk::ChangeNote {
+        ids: vec!["hook:example".into()],
+        why: "Signed note".into(),
+        migrate: None,
+    });
     fs::write(folder.join(sdk::INDEX), index.to_json()).unwrap();
     let digest = |name: &str| format!("{:x}", Sha256::digest(fs::read(folder.join(name)).unwrap()));
     let sums = sunrise_release_sign::sums_file(
         &[sdk::INDEX, SURFACE, API_SOURCE].map(|name| (name.to_owned(), digest(name))),
     );
     fs::write(folder.join(sunrise_release_sign::SUMS), &sums).unwrap();
-    let message = sunrise_release_sign::message(&format!("sdk-{BUILD}"), sums.as_bytes());
+    let message = sunrise_release_sign::message(&tag, sums.as_bytes());
     use base64::Engine;
     let signature = base64::engine::general_purpose::STANDARD.encode(pair.sign(&message).as_ref());
     fs::write(
@@ -54,6 +72,25 @@ fn release_signed_by(nightly: Option<&str>, pair: &Ed25519KeyPair) -> tempfile::
     base
 }
 
+/// A local signed stand-in for scaffold tests that don't exercise release lookup.
+pub(crate) fn offline(project: &Path, build: &str) -> Result<PinnedSdk, String> {
+    let (base, key) = release_with_surface(build, None, SURFACE_STUB);
+    fetch_pinned_from(
+        &Base::Folder(base.path().to_owned()),
+        &[key],
+        project,
+        build,
+    )
+}
+
+pub(crate) fn pinned_fixture(dir: PathBuf, index: Index, surface_bytes: Vec<u8>) -> PinnedSdk {
+    VerifiedSdk {
+        index,
+        surface_bytes,
+    }
+    .pinned(dir)
+}
+
 #[test]
 fn a_signed_release_is_unpacked_once_and_reused() {
     let (base, key) = release(Some("nightly-2026-11-13"));
@@ -61,7 +98,7 @@ fn a_signed_release_is_unpacked_once_and_reused() {
     let dir = project.path().join(DIR);
     let base = Base::Folder(base.path().to_owned());
     let pinned = fetch(&base, &[key], BUILD, &dir, true).unwrap();
-    assert_eq!(pinned.build, BUILD);
+    assert_eq!(pinned.build(), BUILD);
     assert_eq!(pinned.name, "nightly-2026-11-13 (0123456)");
     assert!(dir.join(SURFACE).is_file());
     assert!(dir.join("api/deps/a.rmeta").is_file());
@@ -72,6 +109,105 @@ fn a_signed_release_is_unpacked_once_and_reused() {
         fetch(&gone, &[key], BUILD, &dir, true).unwrap().name,
         pinned.name
     );
+}
+
+#[test]
+fn project_readers_keep_the_fresh_and_warm_verified_metadata() {
+    let surface = format!(r#"{{"schema":{},"hash":"ab"}}"#, mod_surface::SCHEMA);
+    let (base, key) = release_with_surface(BUILD, None, &surface);
+    let project = tempfile::tempdir().unwrap();
+    let dir = project.path().join(DIR);
+    let fresh = fetch(
+        &Base::Folder(base.path().to_owned()),
+        &[key],
+        BUILD,
+        &dir,
+        true,
+    )
+    .unwrap();
+    let gone = Base::Folder(project.path().join("nowhere"));
+    let warm = fetch(&gone, &[key], BUILD, &dir, true).unwrap();
+
+    fs::write(dir.join(SURFACE), surface.replace("ab", "cd")).unwrap();
+    let index_path = dir.join(sdk::INDEX);
+    let index = fs::read_to_string(&index_path).unwrap();
+    fs::write(&index_path, index.replace("Signed note", "Edited note")).unwrap();
+
+    for pinned in [&fresh, &warm] {
+        let chain = crate::sdk_notes::chain(pinned, None, |build| {
+            panic!("unexpected older build: {build}")
+        });
+        assert_eq!(chain.notes.len(), 1);
+        assert_eq!(chain.notes[0].note.why, "Signed note");
+        assert_eq!(pinned.surface.parses.load(Relaxed), 0);
+        for _ in 0..2 {
+            assert_eq!(crate::uses_table::surface_of(pinned).unwrap().hash, "ab");
+            assert_eq!(pinned.surface.parses.load(Relaxed), 1);
+        }
+    }
+}
+
+#[test]
+fn native_new_and_the_index_only_pin_step_do_not_parse_the_surface() {
+    let scratch = tempfile::tempdir().unwrap();
+    let project = scratch.path().join("greeter");
+    let (old_release, old_key) = release(None);
+    let old_base = Base::Folder(old_release.path().to_owned());
+    let new_parses = OnceCell::new();
+    crate::new(
+        &[
+            project.display().to_string(),
+            "--template".into(),
+            "native".into(),
+            "--sunrise".into(),
+            BUILD.into(),
+        ],
+        &|dir, build| {
+            let sdk = fetch_pinned_from(&old_base, &[old_key], dir, build)?;
+            new_parses.set(Arc::clone(&sdk.surface.parses)).unwrap();
+            Ok(sdk)
+        },
+    )
+    .unwrap();
+    assert_eq!(new_parses.into_inner().unwrap().load(Relaxed), 0);
+    assert_eq!(pin(&project).unwrap(), BUILD);
+
+    // Exercise pin's index-only fetch and manifest write, not its separate comparison report.
+    let target = "89abcdef0123456789abcdef0123456789abcdef";
+    let (target_release, target_key) = release_with_surface(target, None, SURFACE_STUB);
+    let target_base = Base::Folder(target_release.path().to_owned());
+    let pin_parses = OnceCell::new();
+    crate::repin(
+        &project,
+        &|dir, build| {
+            let sdk = fetch_build_from(&target_base, &[target_key], dir, build)?;
+            pin_parses.set(Arc::clone(&sdk.surface.parses)).unwrap();
+            Ok(sdk)
+        },
+        target,
+        target,
+    )
+    .unwrap();
+    assert_eq!(pin_parses.into_inner().unwrap().load(Relaxed), 0);
+    assert_eq!(pin(&project).unwrap(), target);
+}
+
+#[test]
+fn an_unreadable_verified_surface_caches_the_parse_error() {
+    let (base, key) = release_with_surface(BUILD, None, r#"{"schema":0,"hash":"ab"}"#);
+    let project = tempfile::tempdir().unwrap();
+    let sdk = fetch_pinned_from(
+        &Base::Folder(base.path().to_owned()),
+        &[key],
+        project.path(),
+        BUILD,
+    )
+    .unwrap();
+    assert_eq!(sdk.surface.parses.load(Relaxed), 0);
+    for _ in 0..2 {
+        assert!(matches!(sdk.surface.get(), Err(SurfaceError::Schema(0))));
+        assert_eq!(sdk.surface.parses.load(Relaxed), 1);
+    }
 }
 
 #[test]
@@ -223,13 +359,14 @@ fn a_stamp_behind_a_link_is_a_miss_and_its_referent_is_left_alone() {
 
 #[test]
 fn a_prepared_sdk_is_read_without_fetching_or_writing() {
-    let (base, key) = release(Some("nightly-2026-11-13"));
+    let surface = format!(r#"{{"schema":{},"hash":"ab"}}"#, mod_surface::SCHEMA);
+    let (base, key) = release_with_surface(BUILD, Some("nightly-2026-11-13"), &surface);
     let project = tempfile::tempdir().unwrap();
     let base = Base::Folder(base.path().to_owned());
     let fetched = fetch(&base, &[key], BUILD, &project.path().join(DIR), true).unwrap();
     let before = listing(project.path());
     let prepared = prepared_sdk_from(&[key], project.path(), BUILD).unwrap();
-    assert_eq!(prepared.build, BUILD);
+    assert_eq!(prepared.build(), BUILD);
     assert_eq!(prepared.name, fetched.name);
     assert_eq!(prepared.dir, project.path().join(DIR));
     assert_eq!(crate::uses_table::surface_of(&prepared).unwrap().hash, "ab");
@@ -559,7 +696,7 @@ fn a_release_tag_signed_only_by_a_local_sdk_key_is_refused() {
     let pkcs8 = Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new()).unwrap();
     let pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
     let local: PublicKey = pair.public_key().as_ref().try_into().unwrap();
-    let root = release_signed_by(None, &pair);
+    let root = release_signed_by(BUILD, None, SURFACE_STUB, &pair);
     let index = index_of(BUILD);
     let (stable, dev) = ("26.3-0.1.0", "dev-2026-11-21-0123456");
     let (v1, v2) = (

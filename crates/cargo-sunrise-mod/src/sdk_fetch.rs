@@ -9,10 +9,14 @@
 //! same way into `.sunrise/cache/<build id>/`, with their build data unpacked there when a command
 //! reads it. `hooks` only reads: [`prepared_sdk`] takes the pinned SDK when `.sunrise/sdk/` already
 //! holds it verified, and otherwise refuses without a request or a write.
+use mod_surface::{ReadError as SurfaceError, Surface};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
+#[cfg(test)]
+use std::sync::{Arc, atomic::AtomicUsize};
 use sunrise_mod_package::{
     Manifest, build_data,
     index::native,
@@ -120,13 +124,83 @@ const BUILD_DATA_LIMIT: u64 = 4 * crate::bounded::MAX_CATALOG;
 /// A fetched, verified SDK.
 #[derive(Debug)]
 pub(crate) struct PinnedSdk {
-    /// The build id: the game's full commit sha.
-    pub(crate) build: String,
     /// The form people read: `nightly-2026-11-13 (afe471c)`, or the short sha.
     pub(crate) name: String,
     pub(crate) dir: PathBuf,
-    /// The build's surface export, `surface.json` in `dir`.
-    pub(crate) surface: PathBuf,
+    pub(crate) index: Index,
+    pub(crate) surface: VerifiedSurface,
+}
+
+impl PinnedSdk {
+    pub(crate) fn build(&self) -> &str {
+        &self.index.build.commit
+    }
+
+    /// Where the surface is kept, for diagnostics only.
+    pub(crate) fn surface_path(&self) -> PathBuf {
+        self.dir.join(SURFACE)
+    }
+}
+
+type ParsedSurface = Result<Surface, SurfaceError>;
+type ParseSurface = Box<dyn FnOnce() -> ParsedSurface + Send + Sync>;
+
+/// The digest-verified surface bytes, parsed only on first demand. The initializer consumes
+/// the bytes and keeps only the parsed surface or its error.
+#[derive(Debug)]
+pub(crate) struct VerifiedSurface {
+    parsed: LazyLock<ParsedSurface, ParseSurface>,
+    #[cfg(test)]
+    parses: Arc<AtomicUsize>,
+}
+
+impl VerifiedSurface {
+    fn new(bytes: Vec<u8>) -> Self {
+        #[cfg(test)]
+        let parses = Arc::new(AtomicUsize::new(0));
+        #[cfg(test)]
+        let count = Arc::clone(&parses);
+        Self {
+            parsed: LazyLock::new(Box::new(move || {
+                #[cfg(test)]
+                count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Surface::read(&bytes)
+            })),
+            #[cfg(test)]
+            parses,
+        }
+    }
+
+    pub(crate) fn get(&self) -> Result<&Surface, &SurfaceError> {
+        LazyLock::force(&self.parsed).as_ref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn parse_count(&self) -> usize {
+        self.parses.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+struct VerifiedSdk {
+    index: Index,
+    surface_bytes: Vec<u8>,
+}
+
+impl VerifiedSdk {
+    /// Retain the verified surface without parsing it.
+    fn into_parts(self) -> (Index, VerifiedSurface) {
+        (self.index, VerifiedSurface::new(self.surface_bytes))
+    }
+
+    fn pinned(self, dir: PathBuf) -> PinnedSdk {
+        let (index, surface) = self.into_parts();
+        PinnedSdk {
+            name: name(&index),
+            dir,
+            index,
+            surface,
+        }
+    }
 }
 
 /// The SDK the project at `project` pins, in its `.sunrise/sdk/`, fetched first when the folder is
@@ -137,8 +211,17 @@ pub(crate) fn ensure_sdk(project: &Path) -> Result<PinnedSdk, String> {
 
 /// `build`'s SDK in the project's `.sunrise/sdk/`, API source included.
 pub(crate) fn fetch_pinned(project: &Path, build: &str) -> Result<PinnedSdk, String> {
+    fetch_pinned_from(&Base::from_env(), &keys(), project, build)
+}
+
+fn fetch_pinned_from(
+    base: &Base,
+    keys: &[PublicKey],
+    project: &Path,
+    build: &str,
+) -> Result<PinnedSdk, String> {
     let dir = project_sdk_dir(project)?;
-    fetch(&Base::from_env(), &keys(), build, &dir, true)
+    fetch(base, keys, build, &dir, true)
 }
 
 /// The project's `.sunrise/sdk/`, once neither it nor `.sunrise` is a link: through one the
@@ -168,7 +251,7 @@ fn prepared_sdk_from(keys: &[PublicKey], project: &Path, build: &str) -> Result<
         ));
     }
     kept(keys, build, &dir)
-        .map(|index| pinned(&index, &dir))
+        .map(|sdk| sdk.pinned(dir.clone()))
         .map_err(|e| {
             format!(
                 "{} does not verify against its signed sums ({e}); {prepare}",
@@ -403,14 +486,14 @@ impl Base {
 
 /// `build`'s verified SDK in `dir`: reused when the stamp matches the build and trusted keys and
 /// the kept index and surface verify against the kept signed sums, otherwise fetched afresh. With `api`, unpack the API source too.
-pub(crate) fn fetch(
+fn fetch(
     base: &Base,
     keys: &[PublicKey],
     build: &str,
     dir: &Path,
     api: bool,
 ) -> Result<PinnedSdk, String> {
-    fetch_index(base, keys, build, dir, api).map(|index| pinned(&index, dir))
+    fetch_verified(base, keys, build, dir, api).map(|sdk| sdk.pinned(dir.to_owned()))
 }
 
 pub(crate) fn fetch_index(
@@ -420,11 +503,31 @@ pub(crate) fn fetch_index(
     dir: &Path,
     api: bool,
 ) -> Result<Index, String> {
+    fetch_verified(base, keys, build, dir, api).map(|sdk| sdk.index)
+}
+
+/// Verified metadata for an in-process native build, without parsing the surface.
+pub(crate) fn fetch_metadata(
+    base: &Base,
+    keys: &[PublicKey],
+    build: &str,
+    dir: &Path,
+) -> Result<(Index, VerifiedSurface), String> {
+    fetch_verified(base, keys, build, dir, false).map(VerifiedSdk::into_parts)
+}
+
+fn fetch_verified(
+    base: &Base,
+    keys: &[PublicKey],
+    build: &str,
+    dir: &Path,
+    api: bool,
+) -> Result<VerifiedSdk, String> {
     let tag = format!("sdk-{build}");
     let stamp = CacheStamp::new(build, keys);
     if stamp.matches(dir) {
         match kept(keys, build, dir) {
-            Ok(index) => return Ok(index),
+            Ok(sdk) => return Ok(sdk),
             Err(e) => println!(
                 "{} does not verify against its signed sums ({e}); fetching it again",
                 dir.display()
@@ -443,24 +546,24 @@ pub(crate) fn fetch_index(
     let signature = base.read(&tag, sunrise_release_sign::SIGNATURE, SMALL)?;
     let bytes = base.read(&tag, sdk::INDEX, SMALL)?;
     let surface = base.read(&tag, SURFACE, SMALL)?;
-    let index = verified(&tag, keys, build, &sums, &signature, &bytes, &surface)?;
+    let sdk = verified(&tag, keys, build, &sums, &signature, &bytes, surface)?;
     let write = |name: &str, bytes: &[u8]| {
         fs::write(dir.join(name), bytes).map_err(|e| format!("{}: {e}", dir.join(name).display()))
     };
-    write(SURFACE, &surface)?;
+    write(SURFACE, &sdk.surface_bytes)?;
     if api {
-        unpack(base, &index, API_SOURCE, dir, "api", API_LIMIT)?;
+        unpack(base, &sdk.index, API_SOURCE, dir, "api", API_LIMIT)?;
     }
     write(sunrise_release_sign::SUMS, &sums)?;
     write(sunrise_release_sign::SIGNATURE, &signature)?;
     write(sdk::INDEX, &bytes)?;
     stamp.write(dir)?;
-    Ok(index)
+    Ok(sdk)
 }
 
 /// The SDK kept in `dir`, verified again against its signed sums. The stamp only says which build
 /// and keys the folder was made for, and the folder may come from the checkout.
-fn kept(keys: &[PublicKey], build: &str, dir: &Path) -> Result<Index, String> {
+fn kept(keys: &[PublicKey], build: &str, dir: &Path) -> Result<VerifiedSdk, String> {
     let read = |name: &str| {
         crate::bounded::read_bytes(&dir.join(name), SMALL, crate::bounded::Symlinks::Refuse)
             .map_err(|e| e.to_string())
@@ -472,11 +575,12 @@ fn kept(keys: &[PublicKey], build: &str, dir: &Path) -> Result<Index, String> {
         &read(sunrise_release_sign::SUMS)?,
         &read(sunrise_release_sign::SIGNATURE)?,
         &read(sdk::INDEX)?,
-        &read(SURFACE)?,
+        read(SURFACE)?,
     )
 }
 
-/// The SDK index `bytes`, once the signed sums list it and it lists `surface`.
+/// The SDK index `bytes` and the original surface bytes: the signed sums bind the index,
+/// and the index binds the surface to the build.
 fn verified(
     tag: &str,
     keys: &[PublicKey],
@@ -484,13 +588,16 @@ fn verified(
     sums: &[u8],
     signature: &[u8],
     bytes: &[u8],
-    surface: &[u8],
-) -> Result<Index, String> {
+    surface_bytes: Vec<u8>,
+) -> Result<VerifiedSdk, String> {
     let index = verified_index(tag, keys, build, sums, signature, bytes)?;
     index
-        .verify(SURFACE, surface)
+        .verify(SURFACE, surface_bytes.as_slice())
         .map_err(|e| format!("{tag}: {e}"))?;
-    Ok(index)
+    Ok(VerifiedSdk {
+        index,
+        surface_bytes,
+    })
 }
 
 /// The SDK index `bytes`, once the signed sums list it.
@@ -615,15 +722,6 @@ fn unpack(
     fs::remove_file(&archive).map_err(|e| format!("{}: {e}", archive.display()))
 }
 
-fn pinned(index: &Index, dir: &Path) -> PinnedSdk {
-    PinnedSdk {
-        name: name(index),
-        build: index.build.commit.clone(),
-        dir: dir.to_owned(),
-        surface: dir.join(SURFACE),
-    }
-}
-
 /// The build `index` describes, as people read it: its Nightly and short commit, or the commit.
 pub(crate) fn name(index: &Index) -> String {
     let short = &index.build.commit[..7];
@@ -694,6 +792,22 @@ fn fetch_build_from(
     project: &Path,
     text: &str,
 ) -> Result<PinnedSdk, String> {
+    let (sdk, dir) = fetch_build_verified(base, keys, project, text)?;
+    Ok(sdk.pinned(dir))
+}
+
+/// Legacy hook-version recovery reads a narrow shape of the signed original, not a `Surface`.
+pub(crate) fn fetch_made_for_surface(project: &Path, build: &str) -> Result<Vec<u8>, String> {
+    fetch_build_verified(&Base::from_env(), &keys(), project, build)
+        .map(|(sdk, _)| sdk.surface_bytes)
+}
+
+fn fetch_build_verified(
+    base: &Base,
+    keys: &[PublicKey],
+    project: &Path,
+    text: &str,
+) -> Result<(VerifiedSdk, PathBuf), String> {
     // A linked `.sunrise` or `.sunrise/cache` would send the cache's writes outside the project.
     for folder in [project.join(".sunrise"), project.join(CACHE)] {
         crate::internals::check_output_dir(&folder)?;
@@ -702,7 +816,9 @@ fn fetch_build_from(
     let dir = project.join(CACHE).join(&build);
     // A linked build folder would be read as a warm hit and replaced outside the project.
     crate::internals::check_output_dir(&dir)?;
-    fetch(base, keys, &build, &dir, false).map_err(|e| named(text, &build, e))
+    let sdk =
+        fetch_verified(base, keys, &build, &dir, false).map_err(|e| named(text, &build, e))?;
+    Ok((sdk, dir))
 }
 
 /// The folder holding `build`'s build data, from its signed SDK's `build-data.tar.xz`, unpacked
@@ -780,4 +896,4 @@ pub(crate) fn release_data(
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

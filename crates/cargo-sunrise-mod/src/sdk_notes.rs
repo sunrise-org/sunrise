@@ -56,13 +56,6 @@ impl Chain {
     }
 }
 
-/// `sdk`'s verified `sdk.json`.
-fn index_of(sdk: &PinnedSdk) -> Result<Index, String> {
-    let path = sdk.dir.join(sdk::INDEX);
-    let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    Index::read(&bytes, &sdk.build).map_err(|e| format!("{}: {e}", path.display()))
-}
-
 /// The notes of `newer` and of every build before it, following `surface.previous`: up to the
 /// build `older` names (the walk stops when the chain reaches it, and its own notes are not
 /// included; `older` naming `newer` gives no notes), or with no `older` to the chain's end. A
@@ -71,42 +64,47 @@ pub(crate) fn chain(
     newer: &PinnedSdk,
     older: Option<&str>,
     mut fetch: impl FnMut(&str) -> Result<Index, String>,
-) -> Result<Chain, String> {
+) -> Chain {
     let mut notes = Vec::new();
     let mut stopped = None;
-    if older == Some(newer.build.as_str()) {
-        return Ok(Chain { notes, stopped });
+    if older == Some(newer.build()) {
+        return Chain { notes, stopped };
     }
     let mut name = newer.name.clone();
-    let mut index = index_of(newer)?;
+    let mut surface = &newer.index.surface;
+    let mut fetched: sdk::Surface;
     // Each build names an older one; one named twice would send the walk round for ever.
-    let mut seen = BTreeSet::from([newer.build.clone()]);
+    let mut seen = BTreeSet::from([newer.build().to_owned()]);
     loop {
-        notes.extend(index.surface.notes.drain(..).map(|note| Shipped {
+        notes.extend(surface.notes.iter().cloned().map(|note| Shipped {
             build: name.clone(),
             note,
         }));
-        let Some(previous) = index.surface.previous.take() else {
+        let Some(previous) = surface.previous.as_deref() else {
             break;
         };
-        if older == Some(previous.as_str()) {
+        if older == Some(previous) {
             break;
         }
-        if !seen.insert(previous.clone()) {
-            let short = previous.get(..7).unwrap_or(&previous);
+        if !seen.insert(previous.to_owned()) {
+            let short = previous.get(..7).unwrap_or(previous);
             stopped = Some(format!("build {short} is named twice on the chain"));
             break;
         }
-        match fetch(&previous) {
-            Ok(next) => (name, index) = (crate::sdk_fetch::name(&next), next),
+        match fetch(previous) {
+            Ok(next) => {
+                name = crate::sdk_fetch::name(&next);
+                fetched = next.surface;
+                surface = &fetched;
+            }
             Err(why) => {
-                let short = previous.get(..7).unwrap_or(&previous);
+                let short = previous.get(..7).unwrap_or(previous);
                 stopped = Some(format!("build {short}: {why}"));
                 break;
             }
         }
     }
-    Ok(Chain { notes, stopped })
+    Chain { notes, stopped }
 }
 
 /// A note that explains a failed build, with the ids of it the mod's source names.

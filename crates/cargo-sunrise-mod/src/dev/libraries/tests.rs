@@ -90,6 +90,79 @@ fn selected(chosen: &BTreeMap<String, Source<'_>>) -> Vec<String> {
 }
 
 #[test]
+fn a_library_fit_uses_the_verified_sdk_surface_after_a_cache_edit() {
+    use crate::dev::native_sdk_from;
+    use crate::sdk_fetch::{
+        Base, METADATA_DIR, SURFACE,
+        tests::{BUILD, release_with_surface},
+    };
+    use mod_surface::uses::{Entry, PLAIN_SCHEMA, USES_FILE, UsesTable};
+    use std::fs;
+    use sunrise_native_build::rust::Unpacked;
+
+    let surface = serde_json::json!({
+        "schema": mod_surface::SCHEMA, "hash": "surface",
+        "functions": [{"id": "fn:example", "hash": "unchanged", "signature": "fn example()"}],
+    })
+    .to_string();
+    let (releases, key) = release_with_surface(BUILD, None, &surface);
+    let scratch = tempfile::tempdir().unwrap();
+    let cache = scratch.path().join("cache");
+    let sdk = native_sdk_from(
+        &cache,
+        Base::Folder(releases.path().to_owned()),
+        &[key],
+        "x86_64-unknown-linux-gnu",
+        BUILD,
+        |_, target, cargo_home| {
+            Ok(Unpacked {
+                dir: scratch.path().to_owned(),
+                target: target.into(),
+                cargo_home,
+                cargo_config: Vec::new(),
+                c_bin: None,
+            })
+        },
+    )
+    .unwrap();
+    assert_eq!(sdk.surface.parse_count(), 0);
+
+    let root = scratch.path().join("library");
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/lib.rs"), "").unwrap();
+    let pin = "a".repeat(40);
+    fs::write(
+        root.join(sunrise_mod_package::manifest::MANIFEST),
+        format!("id='library'\nname='Library'\nversion='1.0.0'\n[native]\ngame='26.3'\nsunrise='{pin}'\n"),
+    ).unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname='library'\nversion='1.0.0'\n[dependencies]\nsunrise-mod-api={path='.sunrise/sdk/api/crates/sunrise-mod-api'}\n",
+    ).unwrap();
+    let manifest = crate::read_manifest(&root).unwrap();
+    let cached = sdk.dir.join(METADATA_DIR).join(SURFACE);
+    fs::write(&cached, surface.replace("unchanged", "different")).unwrap();
+    let error = check_fit(&root, &sdk, &root, &manifest, &mut None, None).unwrap_err();
+    assert!(error.contains("it has no uses list"), "{error}");
+    assert_eq!(sdk.surface.parse_count(), 0);
+
+    fs::write(
+        root.join(USES_FILE),
+        UsesTable {
+            schema: PLAIN_SCHEMA,
+            made_for: pin,
+            entries: vec![Entry::plain("fn:example".into(), "unchanged".into())],
+        }
+        .to_json(),
+    )
+    .unwrap();
+    for _ in 0..2 {
+        check_fit(&root, &sdk, &root, &manifest, &mut None, None).unwrap();
+        assert_eq!(sdk.surface.parse_count(), 1);
+    }
+}
+
+#[test]
 fn a_local_library_wins_and_its_version_cannot_be_replaced() {
     let addon = manifest("addon", "1.0.0", "library='^1'");
     for (version, fits) in [("1.1.0", true), ("2.0.0", false)] {

@@ -2,7 +2,7 @@
 //! per-user cache, use the Rust the SDK names, and compile with the native builder
 //! (docs/modding/src/reference/sdk/08-native-build.md). `run` stages the result beside the SDK's
 //! game executable and starts it.
-use crate::sdk_fetch::{self, Base, CacheStamp};
+use crate::sdk_fetch::{self, Base, CacheStamp, VerifiedSurface};
 use std::collections::BTreeMap;
 use std::fs;
 use sunrise_mod_package::Package;
@@ -192,15 +192,11 @@ pub(crate) struct NativeSdk {
     pub rust: Unpacked,
     base: Base,
     dir: PathBuf,
-    metadata: PathBuf,
+    surface: VerifiedSurface,
     stamp: CacheStamp,
 }
 
 impl NativeSdk {
-    pub(super) fn surface(&self) -> PathBuf {
-        self.metadata.join(sdk_fetch::SURFACE)
-    }
-
     fn slices(&self, side: sdk::Side, route: Route) -> Result<prebuilt::Package, String> {
         sdk_fetch::fetch_slices(
             &self.base,
@@ -254,11 +250,10 @@ fn native_sdk_from(
 ) -> Result<NativeSdk, String> {
     let stamp = CacheStamp::new(build, keys);
     let dir = sdk_fetch::cache_root(cache, build, &stamp);
-    let (index, metadata) = {
+    let metadata = dir.join(sdk_fetch::METADATA_DIR);
+    let (index, surface) = {
         let _lock = sdk_fetch::cache_lock(&dir, &["metadata", stamp.as_str()])?;
-        let metadata = dir.join(sdk_fetch::METADATA_DIR);
-        let index = sdk_fetch::fetch_index(&base, keys, build, &metadata, false)?;
-        (index, metadata)
+        sdk_fetch::fetch_metadata(&base, keys, build, &metadata)?
     };
     let rust = rust(&index.toolchain.rust, target, cache.join("cargo-home"))?;
     Ok(NativeSdk {
@@ -266,7 +261,7 @@ fn native_sdk_from(
         rust,
         base,
         dir,
-        metadata,
+        surface,
         stamp,
     })
 }

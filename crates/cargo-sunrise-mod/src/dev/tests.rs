@@ -534,7 +534,15 @@ fn two_callers_initialize_an_empty_sdk_cache_concurrently() {
                         )
                         .unwrap();
                         assert_eq!(sdk.index.build.commit, BUILD);
-                        assert_eq!(fs::read(sdk.surface()).unwrap(), SURFACE_BYTES);
+                        assert_eq!(
+                            fs::read(
+                                sdk.dir
+                                    .join(sdk_fetch::METADATA_DIR)
+                                    .join(sdk_fetch::SURFACE)
+                            )
+                            .unwrap(),
+                            SURFACE_BYTES
+                        );
                         sdk
                     })
                 })
@@ -595,7 +603,11 @@ fn two_callers_initialize_an_empty_sdk_cache_concurrently() {
         assert_eq!(lock_count, 2);
 
         // Refreshing metadata must not remove unpacked slices in use.
-        fs::write(sdk.surface(), b"{}").unwrap();
+        let surface = sdk
+            .dir
+            .join(sdk_fetch::METADATA_DIR)
+            .join(sdk_fetch::SURFACE);
+        fs::write(&surface, b"{}").unwrap();
         let refreshed = native_sdk_from(
             &cache,
             Base::Folder(base_dir.clone()),
@@ -605,7 +617,8 @@ fn two_callers_initialize_an_empty_sdk_cache_concurrently() {
             stub_rust,
         )
         .unwrap();
-        assert_eq!(fs::read(refreshed.surface()).unwrap(), SURFACE_BYTES);
+        assert_eq!(refreshed.dir, sdk.dir);
+        assert_eq!(fs::read(surface).unwrap(), SURFACE_BYTES);
         assert_eq!(
             fs::read(slices.runtime.join("sunrise-prebuilt.json")).unwrap(),
             RUNTIME_BYTES

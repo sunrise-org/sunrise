@@ -98,10 +98,7 @@ fn main() -> ExitCode {
     }
     let command = args.first().map(String::as_str);
     let result = match command {
-        Some("new") => new(&args[1..], &sdk_fetch::fetch_pinned).and_then(|code| match code {
-            Some(dir) => fetched(&dir),
-            None => Ok(()),
-        }),
+        Some("new") => new(&args[1..], &sdk_fetch::fetch_pinned),
         Some("build") => build_command(entry, &args[1..]).map(drop),
         Some("release") => author_release::run(entry, Path::new("."), &args[1..]),
         Some("collection") => collection::run(Path::new("."), &args[1..]),
@@ -151,8 +148,8 @@ fn main() -> ExitCode {
             if lock.as_ref().is_some_and(|lock| lock.is_symlink()) {
                 return Err("Cargo.lock is a link; pin follows it with the project's own file".into());
             }
-            sdk_cmds::pin_report(entry, project, &sunrise)
-                .and_then(|()| repin(project, &sdk_fetch::fetch_build, requested, &sunrise))?;
+            sdk_cmds::pin_report(entry, project, &sunrise)?;
+            repin(project, &sdk_fetch::fetch_build, requested, &sunrise)?;
             if lock.is_some() {
                 sdk_fetch::fetch_pinned(project, &sunrise)
                     .and_then(|_| dev::native_sdk(&dev::cache_dir()?, &sunrise))
@@ -295,17 +292,20 @@ fn read_manifest(dir: &Path) -> Result<Manifest, String> {
 
 /// The SDK the project at `dir` pins, fetched into its `.sunrise/sdk/` when missing or stale.
 fn fetched(dir: &Path) -> Result<(), String> {
-    let sdk = sdk_fetch::ensure_sdk(dir)?;
-    println!(
-        "SDK {} (build {}) in {}",
-        sdk.name,
-        sdk.build,
-        sdk.dir.display()
-    );
+    print_sdk(&sdk_fetch::ensure_sdk(dir)?);
     Ok(())
 }
 
-/// Fetches a build's verified SDK for a project: the SDK the build's `sdk.json` describes.
+fn print_sdk(sdk: &sdk_fetch::PinnedSdk) {
+    println!(
+        "SDK {} (build {}) in {}",
+        sdk.name,
+        sdk.build(),
+        sdk.dir.display()
+    );
+}
+
+/// Fetches a build's verified SDK for a project.
 type FetchSdk<'a> = &'a dyn Fn(&Path, &str) -> Result<sdk_fetch::PinnedSdk, String>;
 
 const PAGE_TEMPLATE: [(&str, &str); 2] = [
@@ -316,9 +316,8 @@ const PAGE_TEMPLATE: [(&str, &str); 2] = [
     ("page/.gitkeep", ""),
 ];
 
-/// Makes the mod `args` asks for; a code mod's folder is returned, with its SDK fetched into it
-/// by `fetch`.
-fn new(args: &[String], fetch: FetchSdk) -> Result<Option<PathBuf>, String> {
+/// Makes the mod `args` asks for, fetching its SDK with `fetch` if it has native code.
+fn new(args: &[String], fetch: FetchSdk) -> Result<(), String> {
     let usage = || help::of("new").expect("new has help");
     let unexpected = |arg: &str| {
         let reason = match arg {
@@ -388,10 +387,7 @@ fn new(args: &[String], fetch: FetchSdk) -> Result<Option<PathBuf>, String> {
             return Err("--sunrise needs --template native".into());
         }
         None | Some("content") => {}
-        Some("native") => {
-            new_native(dir, &id, sunrise, fetch, fill)?;
-            return Ok(Some(dir.to_owned()));
-        }
+        Some("native") => return new_native(dir, &id, sunrise, fetch, fill),
         Some(_) => return Err("--template is content or native".into()),
     }
     let manifest_text = fill(
@@ -454,7 +450,7 @@ fn new(args: &[String], fetch: FetchSdk) -> Result<Option<PathBuf>, String> {
          (docs/modding/src/start/first-content-mod.md)",
         dir.display()
     );
-    Ok(None)
+    Ok(())
 }
 
 /// Resolve the build name (a sha or release tag) that a native mod will pin.
@@ -562,7 +558,7 @@ fn new_native(
         _ => format!("{}: {e}", dir.display()),
     })?;
     // The SDK is fetched now, so a failed pin leaves no folder; the mixins revision is its own.
-    fetch(dir, sunrise)
+    let sdk = fetch(dir, sunrise)
         .inspect_err(|_| {
             let _ = std::fs::remove_dir_all(dir);
         })
@@ -594,6 +590,7 @@ fn new_native(
         dir.display(),
         dir.display(),
     );
+    print_sdk(&sdk);
     Ok(())
 }
 
@@ -610,7 +607,7 @@ fn build(
     let uses = if let Some(native) = &package.manifest.native {
         let sdk = sdk_fetch::fetch_pinned(root, &native.sunrise)?;
         let surface = uses_table::surface_of(&sdk)?;
-        let scanned = uses_table::scan(entry, root, &package.manifest, &surface)?;
+        let scanned = uses_table::scan(entry, root, &package.manifest, surface)?;
         match scanned {
             uses_table::Scanned::Uses(uses) => Some(
                 uses_table::table(&uses, &package.manifest, &sdk)?
@@ -958,18 +955,9 @@ mod build_script;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sdk_fetch::tests::offline;
 
     const OLD_BUILD: &str = "0123456789abcdef0123456789abcdef01234567";
-
-    /// A build's SDK as its `sdk.json` names it, without a download.
-    pub(super) fn offline(project: &Path, build: &str) -> Result<sdk_fetch::PinnedSdk, String> {
-        Ok(sdk_fetch::PinnedSdk {
-            build: build.to_owned(),
-            name: build.to_owned(),
-            dir: project.join(sdk_fetch::DIR),
-            surface: project.join(sdk_fetch::DIR).join("surface.json"),
-        })
-    }
 
     /// An empty list of what a mod uses, made for `made_for`.
     fn uses_list(made_for: &str) -> Vec<u8> {
@@ -1134,9 +1122,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("greeter");
         std::os::unix::fs::symlink(dir.path().join("nowhere"), &path).unwrap();
-        let fetch = |_: &Path, _: &str| -> Result<sdk_fetch::PinnedSdk, String> {
-            panic!("a refused path fetches nothing")
-        };
+        let fetch = |_: &Path, _: &str| panic!("a refused path fetches nothing");
         let error = new(&template_args(&path, "native"), &fetch).unwrap_err();
         assert!(error.contains("already exists"), "{error}");
         assert_eq!(
@@ -1151,7 +1137,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("greeter");
         // A fetch that got as far as its folder, as a real one does, then failed.
-        let fetch = |project: &Path, _: &str| -> Result<sdk_fetch::PinnedSdk, String> {
+        let fetch = |project: &Path, _: &str| {
             std::fs::create_dir_all(project.join(sdk_fetch::DIR)).unwrap();
             Err("no signed SDK".into())
         };
@@ -1425,7 +1411,7 @@ mod tests {
             "--sunrise".into(),
             commit.into(),
         ];
-        assert_eq!(new(&args, &offline).unwrap(), Some(path.clone()));
+        new(&args, &offline).unwrap();
         assert!(path.join("README.md").is_file());
         assert!(path.join(".github/workflows/sunrise-release.yml").is_file());
         assert_eq!(
