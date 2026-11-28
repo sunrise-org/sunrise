@@ -168,6 +168,11 @@ impl crate::game::ClientGame<'_> {
                 focused,
             );
         }
+        self.record_received_chat(text);
+    }
+    /// A line shown joins the connection's received-message list and count (the control
+    /// socket's `chat` and events).
+    pub(in crate::game) fn record_received_chat(&mut self, text: String) {
         if let Some(r) = self.client.remote.as_mut() {
             r.chat.push((text, Instant::now()));
             r.chat_received += 1;

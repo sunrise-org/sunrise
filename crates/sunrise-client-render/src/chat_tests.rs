@@ -1311,3 +1311,321 @@ fn the_chat_history_cap_is_vanillas_100_until_a_mod_sets_another() {
     chat.set_history_limit(usize::MAX);
     assert_eq!(chat.history_limit(), MAX_CHAT_HISTORY_LIMIT);
 }
+
+/// A mod's keyed line (#6038): added once, a second call replaces its text in place, so the
+/// status line is not repeated; it keeps its place among the messages while others come after.
+#[test]
+fn a_keyed_chat_line_is_replaced_in_place_and_keeps_its_position() {
+    let font = font();
+    let mut chat = Chat::default();
+    let says = |chat: &mut Chat, owner: Option<&str>, text: &str| {
+        if let Some(owner) = owner {
+            chat.set_next_key(owner, "status");
+        }
+        chat.add_message(
+            &font,
+            Text::literal(text),
+            None,
+            ChatSource::Client,
+            0,
+            false,
+        );
+        chat.clear_next_key();
+    };
+    says(&mut chat, None, "before");
+    says(&mut chat, Some("bloodmagic"), "altar: 10");
+    says(&mut chat, None, "after");
+    assert_eq!(chat.recent_lines(5), ["after", "altar: 10", "before"]);
+    assert!(chat.replace_keyed_with(
+        &font,
+        "bloodmagic",
+        "status",
+        Text::literal("altar: 25"),
+        40,
+        false
+    ));
+    assert_eq!(chat.recent_lines(5), ["after", "altar: 25", "before"]);
+    assert_eq!(chat.messages.len(), 3);
+    let shown: Vec<_> = chat.lines.iter().map(|l| l.content.plain()).collect();
+    assert_eq!(shown, ["after", "altar: 25", "before"]);
+    assert_eq!(
+        chat.messages[1].added, 40,
+        "a replaced line counts as new for the fade"
+    );
+    // No line under another key: nothing changes, the caller adds it.
+    assert!(!chat.replace_keyed_with(&font, "bloodmagic", "other", Text::literal("x"), 41, false));
+    assert_eq!(chat.messages.len(), 3);
+}
+
+/// `ChatComponent.deleteMessage` for a mod's own line: the line leaves the messages and the
+/// wrapped lines, the others stay, and a later keyed add starts a new line.
+#[test]
+fn a_keyed_chat_line_can_be_removed() {
+    let font = font();
+    let mut chat = Chat::default();
+    for (owner, text) in [(None, "a"), (Some("bloodmagic"), "status"), (None, "b")] {
+        if let Some(owner) = owner {
+            chat.set_next_key(owner, "status");
+        }
+        chat.add_message(
+            &font,
+            Text::literal(text),
+            None,
+            ChatSource::Client,
+            0,
+            false,
+        );
+        chat.clear_next_key();
+    }
+    assert_eq!(chat.remove_keyed_with(&font, "bloodmagic", "status"), 1);
+    assert_eq!(chat.recent_lines(5), ["b", "a"]);
+    let shown: Vec<_> = chat.lines.iter().map(|l| l.content.plain()).collect();
+    assert_eq!(shown, ["b", "a"]);
+    assert_eq!(chat.remove_keyed_with(&font, "bloodmagic", "status"), 0);
+    assert!(!chat.replace_keyed_with(&font, "bloodmagic", "status", Text::literal("x"), 1, false));
+}
+
+/// A mod may only replace or remove its own lines: the same key from another mod finds nothing,
+/// and unkeyed lines are never found.
+#[test]
+fn another_mods_chat_line_with_the_same_key_is_left_alone() {
+    let font = font();
+    let mut chat = Chat::default();
+    chat.set_next_key("bloodmagic", "status");
+    chat.add_message(
+        &font,
+        Text::literal("mine"),
+        None,
+        ChatSource::Client,
+        0,
+        false,
+    );
+    chat.add_message(
+        &font,
+        Text::literal("plain"),
+        None,
+        ChatSource::Client,
+        0,
+        false,
+    );
+    assert!(chat.next_key.is_none(), "the first message took the mark");
+    assert!(!chat.replace_keyed_with(
+        &font,
+        "othermod",
+        "status",
+        Text::literal("theirs"),
+        1,
+        false
+    ));
+    assert_eq!(chat.remove_keyed_with(&font, "othermod", "status"), 0);
+    assert_eq!(chat.recent_lines(5), ["plain", "mine"]);
+}
+
+/// A keyed line is not merged into an equal line by compact chat, nor is an equal line merged
+/// into it, so replacing it never changes another message's count.
+#[test]
+fn compact_chat_does_not_merge_a_keyed_line() {
+    let font = font();
+    let mut chat = Chat::default();
+    chat.qol.compact = true;
+    chat.add_message(
+        &font,
+        Text::literal("same"),
+        None,
+        ChatSource::Client,
+        0,
+        false,
+    );
+    chat.set_next_key("bloodmagic", "status");
+    chat.add_message(
+        &font,
+        Text::literal("same"),
+        None,
+        ChatSource::Client,
+        0,
+        false,
+    );
+    chat.add_message(
+        &font,
+        Text::literal("same"),
+        None,
+        ChatSource::Client,
+        0,
+        false,
+    );
+    assert_eq!(chat.messages.len(), 3);
+}
+
+/// A keyed replacement that wraps to more or to fewer lines (#6038): a reader scrolled up keeps the
+/// line at the bottom of their view, a reader at the bottom stays there, a focused chat notes a new
+/// message (`addMessageToDisplayQueue`), and the scroll never passes the lines there are.
+#[test]
+fn a_keyed_replacement_that_wraps_to_more_or_fewer_lines_keeps_the_readers_place() {
+    let font = font();
+    let mut chat = Chat::default();
+    let add = |chat: &mut Chat, text: &str| {
+        chat.add_message(
+            &font,
+            Text::literal(text),
+            None,
+            ChatSource::Client,
+            0,
+            true,
+        );
+    };
+    for i in 0..40 {
+        add(&mut chat, &format!("old {i}"));
+    }
+    chat.set_next_key("bloodmagic", "status");
+    add(&mut chat, "short");
+    chat.clear_next_key();
+    for i in 0..5 {
+        add(&mut chat, &format!("new {i}"));
+    }
+    let long = "word ".repeat(120);
+    let wrapped = |chat: &Chat| chat.messages[5].wrapped;
+    assert_eq!(wrapped(&chat), 1);
+    // A reader at the bottom stays at the bottom.
+    assert!(chat.replace_keyed_with(&font, "bloodmagic", "status", Text::literal(&long), 1, true));
+    let more = wrapped(&chat);
+    assert!(more > 1, "the long text wraps to several lines");
+    assert_eq!(chat.scroll, 0);
+    assert!(!chat.new_since_scroll);
+    assert!(chat.replace_keyed_with(
+        &font,
+        "bloodmagic",
+        "status",
+        Text::literal("short"),
+        2,
+        true
+    ));
+    assert_eq!(wrapped(&chat), 1);
+    // A reader above the line, ten lines up: the same line stays at the bottom of the view.
+    chat.scroll_by(10, true);
+    assert_eq!(chat.scroll, 10);
+    let seen = chat.lines[chat.scroll].content.plain();
+    assert!(chat.replace_keyed_with(&font, "bloodmagic", "status", Text::literal(&long), 3, true));
+    assert_eq!(wrapped(&chat), more);
+    assert_eq!(chat.scroll, 10 + more - 1);
+    assert_eq!(chat.lines[chat.scroll].content.plain(), seen);
+    assert!(
+        chat.new_since_scroll,
+        "a replacement counts as a new message"
+    );
+    chat.new_since_scroll = false;
+    assert!(chat.replace_keyed_with(
+        &font,
+        "bloodmagic",
+        "status",
+        Text::literal("short"),
+        4,
+        true
+    ));
+    assert_eq!(wrapped(&chat), 1);
+    assert_eq!(chat.scroll, 10);
+    assert_eq!(chat.lines[chat.scroll].content.plain(), seen);
+    // An unfocused chat notes no new message.
+    chat.new_since_scroll = false;
+    assert!(chat.replace_keyed_with(
+        &font,
+        "bloodmagic",
+        "status",
+        Text::literal(&long),
+        5,
+        false
+    ));
+    assert!(!chat.new_since_scroll);
+    // A reader above the line still sees it: the view stays inside the line's lines.
+    chat.scroll = 5 + 1;
+    assert!(chat.replace_keyed_with(
+        &font,
+        "bloodmagic",
+        "status",
+        Text::literal("short"),
+        6,
+        true
+    ));
+    assert!(chat.scroll <= 5 + 1);
+    // A reader at the far end of the history: a shorter text cannot leave the scroll past the lines.
+    assert!(chat.replace_keyed_with(&font, "bloodmagic", "status", Text::literal(&long), 7, true));
+    chat.scroll_by(1000, true);
+    assert!(chat.replace_keyed_with(
+        &font,
+        "bloodmagic",
+        "status",
+        Text::literal("short"),
+        8,
+        true
+    ));
+    assert!(chat.scroll <= chat.lines.len().saturating_sub(chat.lines_per_page(true)));
+}
+
+/// A keyed replacement is logged and counted as received like a message added, takes the new time
+/// with PvP & HUD's timestamps on, and follows the chat search (hidden while it does not match).
+#[test]
+fn a_keyed_replacement_follows_the_timestamps_and_the_search() {
+    let font = font();
+    let mut chat = Chat {
+        clock: Some((9, 5)),
+        ..Chat::default()
+    };
+    chat.qol.timestamps = true;
+    let shown =
+        |chat: &Chat| -> Vec<String> { chat.lines.iter().map(|l| l.content.plain()).collect() };
+    chat.set_next_key("bloodmagic", "status");
+    chat.add_message(
+        &font,
+        Text::literal("altar 10"),
+        None,
+        ChatSource::Client,
+        0,
+        false,
+    );
+    chat.clear_next_key();
+    chat.add_message(
+        &font,
+        Text::literal("other"),
+        None,
+        ChatSource::Client,
+        0,
+        false,
+    );
+    assert_eq!(shown(&chat), ["[09:05] other", "[09:05] altar 10"]);
+    assert_eq!(chat.received, 2);
+    chat.clock = Some((9, 6));
+    assert!(chat.replace_keyed_with(
+        &font,
+        "bloodmagic",
+        "status",
+        Text::literal("altar 25"),
+        1,
+        false
+    ));
+    assert_eq!(shown(&chat), ["[09:05] other", "[09:06] altar 25"]);
+    assert_eq!(chat.received, 3, "a replacement counts as received");
+    // With the search on, a text that does not match leaves no line and a later one that does
+    // brings it back.
+    chat.set_search_with(&font, Some("altar"));
+    assert_eq!(shown(&chat), ["[09:06] altar 25"]);
+    assert!(chat.replace_keyed_with(
+        &font,
+        "bloodmagic",
+        "status",
+        Text::literal("gone"),
+        2,
+        false
+    ));
+    assert!(shown(&chat).is_empty());
+    assert_eq!(chat.messages.len(), 2, "the message is kept while hidden");
+    chat.clock = Some((9, 7));
+    assert!(chat.replace_keyed_with(
+        &font,
+        "bloodmagic",
+        "status",
+        Text::literal("altar 3"),
+        3,
+        false
+    ));
+    assert_eq!(shown(&chat), ["[09:07] altar 3"]);
+    assert_eq!(chat.received, 5);
+}
