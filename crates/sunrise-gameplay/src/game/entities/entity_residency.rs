@@ -37,33 +37,31 @@ macro_rules! assign_resident_ids {
 }
 pub(crate) use assign_resident_ids;
 
-// Projectiles, knots and general rows have distinct Game/Parked field paths;
-// keep binding and resolution on this one family list.
 macro_rules! resident_owners {
-    ($then:ident, $this:ident, $($projectiles:ident).+, $($knots:ident).+, $($general:ident).+, $($others:tt).+) => {
+    ($then:ident, $this:ident, $($others:tt).+) => {
         $then! {
-            ($this, $($projectiles).+)
-            Mob => Mob: mobs,
+            ($this)
+            Mob => Mob: entities.mobs,
             Item => Item: entities.dropped,
-            Orb => Orb: orbs,
-            Stand => Stand: armor_stands,
-            Frame => Frame: item_frames,
-            Painting => Painting: paintings,
-            Boat => Boat: boats,
-            Cart => Cart: carts,
+            Orb => Orb: entities.orbs,
+            Stand => Stand: entities.armor_stands,
+            Frame => Frame: entities.item_frames,
+            Painting => Painting: entities.paintings,
+            Boat => Boat: entities.boats,
+            Cart => Cart: entities.carts,
             Other => Other: $($others).+,
-            Fangs => Fangs: fangs.list,
-            Crystal => Crystal: crystals,
-            Tnt => Tnt: tnts,
-            Cushion => Cushion: cushions,
-            Knot => Knot: $($knots).+,
-            Falling => Falling: falling,
-            Rocket => Rocket: rockets,
-            Trident => Trident: tridents,
-            Spawner => Spawner: ominous_spawners,
-            Cloud => Cloud: breath_clouds,
-            Bolt => Bolt: bolts,
-            General => General: $($general).+,
+            Fangs => Fangs: entities.fangs.list,
+            Crystal => Crystal: entities.crystals,
+            Tnt => Tnt: entities.tnts,
+            Cushion => Cushion: entities.cushions,
+            Knot => Knot: entities.knots,
+            Falling => Falling: entities.falling,
+            Rocket => Rocket: entities.rockets,
+            Trident => Trident: entities.tridents,
+            Spawner => Spawner: entities.ominous_spawners,
+            Cloud => Cloud: entities.breath_clouds,
+            Bolt => Bolt: entities.bolts,
+            General => General: entities.general.rows,
         }
     };
 }
@@ -105,14 +103,14 @@ macro_rules! resident_lifetime_slot {
 pub(crate) use resident_lifetime_slot;
 
 macro_rules! define_resident_access {
-    (($this:ident, $($projectiles:ident).+) $($kind:ident => $target:ident: $($field:tt).+,)*) => {
+    (($this:ident) $($kind:ident => $target:ident: $($field:tt).+,)*) => {
         pub(in crate::game::server_side) fn bind_resident_owners(&mut $this, journal: &Journal, dimension: DimensionKey, track_saved_uuids: bool) {
             if track_saved_uuids {
                 $this.persist.uuids.bind(journal, dimension);
             }
             $(sunrise_gameplay_common::game::resident_state::bind_resident_list!($kind, $this$(.$field)+, journal, Owner { dimension, kind: Kind::$kind });)*
-            $this$(.$projectiles)+.bind_residency(journal, Owner { dimension, kind: Kind::Projectile }, |entity| (entity.id, entity.join_seq()));
-            $this.dragon.bind_residency_specialized(journal, Owner { dimension, kind: Kind::Dragon }, |entity| (entity.id, entity.join_seq()), sunrise_sim::join_seq::residency::Source::Ordinary, Some((Kind::DragonPart, 8, |dragon, offset| dragon.parts.get(usize::from(offset)).map(|part| part.3))), None);
+            $this.entities.projectiles.bind_residency(journal, Owner { dimension, kind: Kind::Projectile }, |entity| (entity.id, entity.join_seq()));
+            $this.entities.dragon.bind_residency_specialized(journal, Owner { dimension, kind: Kind::Dragon }, |entity| (entity.id, entity.join_seq()), sunrise_sim::join_seq::residency::Source::Ordinary, Some((Kind::DragonPart, 8, |dragon, offset| dragon.parts.get(usize::from(offset)).map(|part| part.3))), None);
         }
         pub(in crate::game::server_side) fn with_resident_owner_slot<R>(
             &mut $this,
@@ -122,19 +120,19 @@ macro_rules! define_resident_access {
             use $crate::game::entity_residency::SlotAccess;
             match at.owner.kind {
                 $(Kind::$kind => $crate::game::entity_residency::resident_lifetime_slot!($kind, $this$(.$field)+, at.join, visit),)*
-                Kind::Projectile => $crate::game::entity_residency::resident_lifetime_slot!(Projectile, $this$(.$projectiles)+, at.join, visit),
+                Kind::Projectile => $crate::game::entity_residency::resident_lifetime_slot!(Projectile, $this.entities.projectiles, at.join, visit),
                 Kind::Dragon => {
-                    $this.dragon.locate(at.join).map_or(SlotAccess::Missing, |_| {
+                    $this.entities.dragon.locate(at.join).map_or(SlotAccess::Missing, |_| {
                         use sunrise_mod_runtime::attachments::HasAttachmentLifetime;
-                        SlotAccess::Done(visit($this.dragon.as_mut().unwrap().attachment_lifetime()))
+                        SlotAccess::Done(visit($this.entities.dragon.as_mut().unwrap().attachment_lifetime()))
                     })
                 },
                 Kind::DragonPart => {
                     use sunrise_sim::join_seq::residency::Source;
                     use sunrise_mod_runtime::attachments::HasAttachmentLifetime;
                     let Source::DragonPart(offset) = at.source else { return SlotAccess::Missing; };
-                    if $this.dragon.locate(at.join).is_none() { return SlotAccess::Missing; }
-                    let Some(part) = $this.dragon.as_mut().and_then(|dragon| dragon.parts.get_mut(usize::from(offset))) else { return SlotAccess::Missing; };
+                    if $this.entities.dragon.locate(at.join).is_none() { return SlotAccess::Missing; }
+                    let Some(part) = $this.entities.dragon.as_mut().and_then(|dragon| dragon.parts.get_mut(usize::from(offset))) else { return SlotAccess::Missing; };
                     SlotAccess::Done(visit(part.attachment_lifetime()))
                 },
                 Kind::Player | Kind::Hook => SlotAccess::UnsupportedKind(at.owner.kind),
@@ -150,19 +148,19 @@ macro_rules! define_resident_access {
                     Some(SourceEntity { id, value: (Target::$target(id), visible) })
                 })*
                 Kind::Projectile => {
-                    let index = $this$(.$projectiles)+.locate(at.join)?;
-                    let id = $this$(.$projectiles)+[index].id;
+                    let index = $this.entities.projectiles.locate(at.join)?;
+                    let id = $this.entities.projectiles[index].id;
                     Some(SourceEntity { id, value: (Target::Projectile(id), true) })
                 }
                 Kind::Dragon => {
-                    $this.dragon.locate(at.join)?;
-                    let id = $this.dragon.as_ref()?.id;
+                    $this.entities.dragon.locate(at.join)?;
+                    let id = $this.entities.dragon.as_ref()?.id;
                     Some(SourceEntity { id, value: (Target::Dragon(id), true) })
                 }
                 Kind::DragonPart => {
                     let sunrise_sim::join_seq::residency::Source::DragonPart(offset) = at.source else { return None; };
-                    $this.dragon.locate(at.join)?;
-                    let dragon = $this.dragon.as_ref()?;
+                    $this.entities.dragon.locate(at.join)?;
+                    let dragon = $this.entities.dragon.as_ref()?;
                     if dragon.id == 0 { return None; }
                     dragon.parts.get(usize::from(offset))?;
                     let id = sunrise_gameplay_common::game::dragon_common::dragon_part_id(dragon.id, usize::from(offset));
@@ -176,7 +174,7 @@ macro_rules! define_resident_access {
         pub(in crate::game::server_side) fn locate_resident_owner(&$this, at: Location) -> Option<SourceEntity<(Target, bool)>> {
             let source = $this.locate_resident_attachment_owner(at).map(|mut source| {
                 if let Target::DragonPart(_) = source.value.0 {
-                    source.value.1 &= $this.dragon.as_ref().is_some_and(|dragon| !$this.persist.removals.contains(&Target::Dragon(dragon.id)));
+                    source.value.1 &= $this.entities.dragon.as_ref().is_some_and(|dragon| !$this.persist.removals.contains(&Target::Dragon(dragon.id)));
                 }
                 source
             });
@@ -193,12 +191,5 @@ macro_rules! define_resident_access {
 pub(crate) use define_resident_access;
 
 impl crate::game::ServerGame<'_> {
-    resident_owners!(
-        define_resident_access,
-        self,
-        creatures.projectiles,
-        resident_entities.knots,
-        resident_entities.general.rows,
-        server.others.0
-    );
+    resident_owners!(define_resident_access, self, server.others.0);
 }

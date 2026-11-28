@@ -1658,7 +1658,6 @@ pub struct CommonGame<'a> {
     /// The native damage hooks every level of this game lends to its hits.
     pub damage_hooks: sunrise_sim::health::DamageHooks,
     pub entities: entity_store::EntityStore,
-    pub mobs: sunrise_sim::join_seq::JoinList<Mob>,
     /// `mobs` by network id, for the packets that name one (`game/mobs/mob_index.rs`).
     pub mob_index: mob_index::MobIndex,
     pub creatures: creatures::Creatures,
@@ -1690,7 +1689,6 @@ pub struct CommonGame<'a> {
     pub experience: Experience,
     /// `Player.DATA_SCORE_ID`, independent of `totalExperience`.
     pub player_score: i32,
-    pub orbs: sunrise_sim::join_seq::JoinList<ExperienceOrb>,
     /// The arm swing (`LivingEntity.SwingState`) and how many swings started.
     pub swing: sunrise_sim::first_person_sim::SwingState,
     pub swings_started: u32,
@@ -1710,20 +1708,8 @@ pub struct CommonGame<'a> {
     pub end: end_state::EndState,
     pub block_ticks: Ticks,
     pub level_events: Vec<LevelEvent>,
-    pub falling: sunrise_sim::join_seq::JoinList<FallingBlock, false>,
-    pub paintings: sunrise_sim::join_seq::JoinList<sunrise_sim::entities::Painting>,
     pub painting_variants: sunrise_gameplay_common::painting_variants::PaintingVariants,
-    pub item_frames: sunrise_sim::join_seq::JoinList<sunrise_sim::entities::ItemFrame>,
-    pub armor_stands: sunrise_sim::join_seq::JoinList<sunrise_sim::entities::ArmorStand>,
-    /// `Cushion` decoration entities (game/entities/cushions.rs).
-    pub cushions: sunrise_sim::join_seq::JoinList<sunrise_sim::entities::Cushion>,
-    pub boats: sunrise_sim::join_seq::JoinList<boats_common::Boat, false>,
-    pub carts: sunrise_sim::join_seq::JoinList<minecarts::Minecart, false>,
-    pub bolts: sunrise_sim::join_seq::ResidentList<lightning_common::Bolt>,
     pub maps: maps::Maps,
-    pub dragon: dragon_parts_table::DragonSlot,
-    pub crystals: sunrise_sim::join_seq::JoinList<dragon_common::Crystal>,
-    pub breath_clouds: sunrise_sim::join_seq::ResidentList<dragon_common::Breath>,
     /// The boat the player rides.
     pub riding: Option<u32>,
     /// The mount the last `position_rider` put the player on, to tell the tick
@@ -1734,12 +1720,6 @@ pub struct CommonGame<'a> {
     pub pending: spill_common::Pending,
     /// The player's fishing hook.
     pub hook: sunrise_sim::join_seq::ResidentSlot<fishing_common::Hook>,
-    pub tridents: sunrise_sim::join_seq::JoinList<sunrise_sim::thrown_trident::ThrownTrident>,
-    pub rockets: sunrise_sim::join_seq::JoinList<fireworks::Rocket>,
-    /// Ominous trial spawners' item spawners.
-    pub ominous_spawners:
-        sunrise_sim::join_seq::ResidentList<ominous_item_spawner_common::OminousItemSpawner>,
-    pub tnts: sunrise_sim::join_seq::JoinList<tnt_common::PrimedTnt>,
     /// The open `host.transaction`s, innermost last (`transactions.rs`).
     pub transactions: transactions::OpenTransactions,
     /// Block-entity positions retained between ticks for client effects.
@@ -1791,7 +1771,6 @@ pub struct CommonGame<'a> {
     pub score: scoreboard_common::ScoreState,
     pub border: sunrise_level::worldborder::WorldBorder,
     pub adv: advancements_common::AdvState,
-    pub fangs: fangs_common::FangState,
 }
 /// The open world's dimensions past vanilla's three. One per process, as a window
 /// and its server thread name the same dimensions.
@@ -2390,26 +2369,26 @@ impl crate::game::CommonGame<'_> {
 
     /// Clear all entity collections shared by server and client games.
     pub fn clear_shared_entities(&mut self) {
-        self.mobs.clear();
+        self.entities.mobs.clear();
         self.entities.dropped.clear();
-        self.orbs.clear();
-        self.creatures.projectiles.clear();
-        self.falling.clear();
-        self.tnts.clear();
-        self.boats.clear();
-        self.carts.clear();
-        self.armor_stands.clear();
-        self.cushions.clear();
-        self.item_frames.clear();
-        self.paintings.clear();
-        self.dragon.discard();
-        self.crystals.clear();
-        self.breath_clouds.clear();
-        self.tridents.clear();
-        self.rockets.clear();
-        self.bolts.clear();
-        self.ominous_spawners.clear();
-        self.fangs.list.clear();
+        self.entities.orbs.clear();
+        self.entities.projectiles.clear();
+        self.entities.falling.clear();
+        self.entities.tnts.clear();
+        self.entities.boats.clear();
+        self.entities.carts.clear();
+        self.entities.armor_stands.clear();
+        self.entities.cushions.clear();
+        self.entities.item_frames.clear();
+        self.entities.paintings.clear();
+        self.entities.dragon.discard();
+        self.entities.crystals.clear();
+        self.entities.breath_clouds.clear();
+        self.entities.tridents.clear();
+        self.entities.rockets.clear();
+        self.entities.bolts.clear();
+        self.entities.ominous_spawners.clear();
+        self.entities.fangs.list.clear();
         self.potions.clear_thrown();
         self.end.clear_remote_eyes();
         self.riding = None;
@@ -2839,7 +2818,7 @@ pub trait GameGameExt1<'__sg>: crate::game::SideGame<'__sg> {
         let Some(index) = self.mob_interaction_target(target) else {
             return false;
         };
-        let mob = &self.mobs[index];
+        let mob = &self.entities.mobs[index];
         if mob.removed || !mob.alive() {
             return false;
         }
@@ -2984,7 +2963,7 @@ pub trait GameGameExt1<'__sg>: crate::game::SideGame<'__sg> {
         let (eye, dir) = self.aim()?;
         let mut nearest = f64::INFINITY;
         let mut best: Option<(usize, f64, [f64; 3])> = None;
-        for (i, m) in self.mobs.iter().enumerate() {
+        for (i, m) in self.entities.mobs.iter().enumerate() {
             if m.removed || Some(m.id) == source {
                 continue;
             }
@@ -3399,11 +3378,7 @@ impl<const NO_SLOT: bool> ConstructInit<NO_SLOT> {
             tick: wp.tick,
             native_settings: mod_sources.settings.clone(),
             damage_hooks: native_hooks::DAMAGE_HOOKS,
-            entities: {
-                let dropped = Default::default();
-                entity_store::EntityStore { dropped }
-            },
-            mobs: Default::default(),
+            entities: Default::default(),
             mob_index: Default::default(),
             creatures: Default::default(),
             using: None,
@@ -3417,7 +3392,6 @@ impl<const NO_SLOT: bool> ConstructInit<NO_SLOT> {
             autosaving: false,
             experience: Experience::default(),
             player_score: 0,
-            orbs: Default::default(),
             swing: Default::default(),
             swings_started: 0,
             clicks: Default::default(),
@@ -3431,27 +3405,12 @@ impl<const NO_SLOT: bool> ConstructInit<NO_SLOT> {
             end: Default::default(),
             block_ticks: Ticks::new(0),
             level_events: Vec::new(),
-            falling: Default::default(),
-            paintings: Default::default(),
             painting_variants: wp.painting_variants,
-            item_frames: Default::default(),
-            armor_stands: Default::default(),
-            cushions: Default::default(),
-            boats: Default::default(),
-            carts: Default::default(),
-            bolts: Default::default(),
             maps: maps::Maps::default(),
-            dragon: Default::default(),
-            crystals: Default::default(),
-            breath_clouds: Default::default(),
             riding: None,
             posed_rider: None,
             pending: Default::default(),
             hook: Default::default(),
-            tridents: Default::default(),
-            rockets: Default::default(),
-            ominous_spawners: Default::default(),
-            tnts: Default::default(),
             transactions: Default::default(),
             spawner_tick_positions: Vec::new(),
             trial_spawner_tick_positions: Vec::new(),
@@ -3486,7 +3445,6 @@ impl<const NO_SLOT: bool> ConstructInit<NO_SLOT> {
             score: Default::default(),
             border: Default::default(),
             adv: Default::default(),
-            fangs: Default::default(),
         }
     }
 }

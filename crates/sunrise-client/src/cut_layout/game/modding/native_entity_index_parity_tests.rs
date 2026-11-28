@@ -10,14 +10,14 @@ use sunrise_sim::join_seq::residency::table::EntityLookup;
 
 fn live_mob_ids(game: &sunrise_gameplay::game::ServerGame<'_>, expected: usize) -> HashSet<u32> {
     let mut ids = Vec::new();
-    ids.extend(game.mobs.iter().map(|mob| mob.id));
+    ids.extend(game.entities.mobs.iter().map(|mob| mob.id));
     for dimension in [
         "minecraft:overworld",
         "minecraft:the_nether",
         "minecraft:the_end",
     ] {
         if let Some(parked) = game.server.levels.0.parked_of(dimension) {
-            ids.extend(parked.mobs.iter().map(|mob| mob.id));
+            ids.extend(parked.entities.mobs.iter().map(|mob| mob.id));
         }
     }
     assert_eq!(ids.len(), expected, "no live body lost during travel");
@@ -100,7 +100,7 @@ fn cushion_get_entity_matches_vanilla_membership_oracle() {
         game.summon_with_nbt("minecraft:cushion", [0.5, 70.0, 0.5], "{}")
             .unwrap();
         game.lan_assign_ids();
-        let id = game.cushions[0].id;
+        let id = game.entities.cushions[0].id;
         assert!(
             matches!(game.level_entity(id as i32), Some(Target::Cushion(found)) if found == id)
         );
@@ -109,10 +109,10 @@ fn cushion_get_entity_matches_vanilla_membership_oracle() {
         game.enter_level(Dim::Nether).unwrap();
         assert!(game.level_entity(id as i32).is_none());
         game.enter_level(Dim::Overworld).unwrap();
-        let cushion = game.cushions.remove(0);
+        let cushion = game.entities.cushions.remove(0);
         assert!(game.level_entity(id as i32).is_none());
         game.enter_level(Dim::Nether).unwrap();
-        game.cushions.push(cushion);
+        game.entities.cushions.push(cushion);
         assert!(
             matches!(game.level_entity(id as i32), Some(Target::Cushion(found)) if found == id)
         );

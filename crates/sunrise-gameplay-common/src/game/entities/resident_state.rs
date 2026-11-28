@@ -1,14 +1,9 @@
 //! Game-owned residency state; no second membership directory.
 use super::*;
-use sunrise_gameplay_common::leash_knot::Knot;
 
 pub struct ResidentEntities {
     pub table: Box<RefCell<sunrise_sim::join_seq::residency::table::EntityTable>>,
     pub local_player: sunrise_sim::join_seq::residency::member::Member,
-    pub knots: sunrise_sim::join_seq::JoinList<Knot>,
-    /// The game's general entity rows (#792), beside the knots this store
-    /// already keeps for the resident table's lookups.
-    pub general: super::general::GeneralStore,
 }
 
 pub trait ResidentStateGameExt1<'__sg>: crate::game::SideGame<'__sg> {
@@ -27,8 +22,6 @@ impl Default for ResidentEntities {
                 sunrise_sim::join_seq::residency::table::EntityTable::new(Default::default()),
             )),
             local_player: Default::default(),
-            knots: Default::default(),
-            general: Default::default(),
         }
     }
 }

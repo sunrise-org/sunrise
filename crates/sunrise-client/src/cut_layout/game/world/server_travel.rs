@@ -239,7 +239,7 @@ pub(crate) mod tests {
                 fixture_resident_column(&mut game.world, (0, 0));
                 let base = game.server.next_entity;
                 game.server.next_entity += 2;
-                game.carts.push(minecarts::Minecart::new(
+                game.entities.carts.push(minecarts::Minecart::new(
                     base + 1,
                     minecarts::CartKind::Rideable,
                     Vec3::ZERO,
@@ -261,7 +261,7 @@ pub(crate) mod tests {
                 game.server.portals.carried_cooldown.insert(base + 1, 7);
                 let source = game.dim;
                 game.enter_level(Dim::Nether).unwrap();
-                game.carts.push(minecarts::Minecart::new(
+                game.entities.carts.push(minecarts::Minecart::new(
                     base + 2,
                     minecarts::CartKind::Rideable,
                     Vec3::ZERO,
@@ -471,8 +471,8 @@ pub(crate) mod tests {
                 assert!(game.entity(pig).is_some());
                 assert!(game.entity(chicken).is_some());
                 assert!(game.entity(root).is_none());
-                assert!(game.boats.iter().all(|b| b.id != root));
-                assert!(game.carts.iter().all(|c| c.id != root));
+                assert!(game.entities.boats.iter().all(|b| b.id != root));
+                assert!(game.entities.carts.iter().all(|c| c.id != root));
                 assert!(game.boat_object(root).is_some() || game.cart_object(root).is_some());
                 assert_eq!(game.mob_object(pig).unwrap().extra.mount, Some(root));
                 assert_eq!(game.mob_object(chicken).unwrap().extra.mount, Some(pig));
@@ -483,8 +483,8 @@ pub(crate) mod tests {
                     assert!(!game.persist.off_level.contains_key(&id));
                     assert!(game.mob_object(id).is_none());
                 }
-                assert!(game.boats.iter().all(|b| b.id != root));
-                assert!(game.carts.iter().all(|c| c.id != root));
+                assert!(game.entities.boats.iter().all(|b| b.id != root));
+                assert!(game.entities.carts.iter().all(|c| c.id != root));
             });
         }
     }
@@ -595,9 +595,9 @@ pub(crate) mod transfer_lifetime_tests {
                         _ => panic!("unexpected vehicle target"),
                     };
                     let old_join = match kind {
-                        "minecraft:minecart" => game.carts[0].join_seq(),
-                        "minecraft:oak_boat" => game.boats[0].join_seq(),
-                        _ => game.mobs[0].join_seq(),
+                        "minecraft:minecart" => game.entities.carts[0].join_seq(),
+                        "minecraft:oak_boat" => game.entities.boats[0].join_seq(),
+                        _ => game.entities.mobs[0].join_seq(),
                     };
                     assert!(old_join.is_joined());
                     let uuid = game.uuid_for(id);
@@ -616,7 +616,7 @@ pub(crate) mod transfer_lifetime_tests {
                     };
                     macro_rules! slot {
                         ($list:ident) => {
-                            game.$list.update(0, |entity| {
+                            game.entities.$list.update(0, |entity| {
                                 if let Some(old) = &old {
                                     *entity.attachment_lifetime() =
                                         AttachmentLifetime::new(old.clone());
@@ -647,14 +647,15 @@ pub(crate) mod transfer_lifetime_tests {
                             let parked = game.server.levels.0.parked_mut(source).unwrap();
                             assert!(
                                 !parked
+                                    .entities
                                     .$list
                                     .iter()
                                     .any(|e| e.id == id || e.join_seq() == old_join)
                             );
-                            let arrived = game.$list.iter().find(|e| e.id == id).unwrap();
+                            let arrived = game.entities.$list.iter().find(|e| e.id == id).unwrap();
                             assert!(arrived.join_seq().is_joined());
                             assert_ne!(arrived.join_seq(), old_join);
-                            assert!(!game.$list.iter().any(|e| e.join_seq() == old_join));
+                            assert!(!game.entities.$list.iter().any(|e| e.join_seq() == old_join));
                         }};
                     }
                     match kind {
@@ -670,12 +671,17 @@ pub(crate) mod transfer_lifetime_tests {
                     if let Some(old) = old {
                         let current = match kind {
                             "minecraft:minecart" => game
+                                .entities
                                 .carts
                                 .update(0, |e| e.attachment_lifetime().registration().unwrap()),
                             "minecraft:oak_boat" => game
+                                .entities
                                 .boats
                                 .update(0, |e| e.attachment_lifetime().registration().unwrap()),
-                            _ => game.mobs[0].attachment_lifetime.registration().unwrap(),
+                            _ => game.entities.mobs[0]
+                                .attachment_lifetime
+                                .registration()
+                                .unwrap(),
                         };
                         assert!(!old.same_registration(&current));
                         assert_eq!(

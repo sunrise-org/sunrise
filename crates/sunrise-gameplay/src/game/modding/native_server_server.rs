@@ -1528,7 +1528,7 @@ impl crate::game::ServerGame<'_> {
         }
         let id = entity.id();
         let target = super::commands::Target::Orb(id);
-        if let Some(orb) = self.common.orbs.iter().find(|o| o.id == id) {
+        if let Some(orb) = self.common.entities.orbs.iter().find(|o| o.id == id) {
             return if self.resident_source_target_visible(self.common.dim.key(), target) {
                 Ok(orb)
             } else {
@@ -1536,7 +1536,7 @@ impl crate::game::ServerGame<'_> {
             };
         }
         for (dim, parked) in &self.server.levels.0.parked {
-            if let Some(orb) = parked.orbs.iter().find(|o| o.id == id) {
+            if let Some(orb) = parked.entities.orbs.iter().find(|o| o.id == id) {
                 return if self.resident_source_target_visible(dim.key(), target) {
                     Ok(orb)
                 } else {
@@ -1562,12 +1562,13 @@ impl crate::game::ServerGame<'_> {
         }
         let id = entity.id();
         let target = super::commands::Target::Orb(id);
-        if self.common.orbs.iter().any(|o| o.id == id) {
+        if self.common.entities.orbs.iter().any(|o| o.id == id) {
             if !self.resident_source_target_visible(self.common.dim.key(), target) {
                 return Err(ExperienceOrbWriteError::Stale);
             }
             return self
                 .common
+                .entities
                 .orbs
                 .iter_mut()
                 .find(|o| o.id == id)
@@ -1579,7 +1580,14 @@ impl crate::game::ServerGame<'_> {
             .0
             .parked
             .iter()
-            .find_map(|(&dim, parked)| parked.orbs.iter().any(|o| o.id == id).then_some(dim))
+            .find_map(|(&dim, parked)| {
+                parked
+                    .entities
+                    .orbs
+                    .iter()
+                    .any(|o| o.id == id)
+                    .then_some(dim)
+            })
         else {
             return Err(ExperienceOrbWriteError::Stale);
         };
@@ -1591,7 +1599,7 @@ impl crate::game::ServerGame<'_> {
             .0
             .parked
             .get_mut(&dim)
-            .and_then(|parked| parked.orbs.iter_mut().find(|o| o.id == id))
+            .and_then(|parked| parked.entities.orbs.iter_mut().find(|o| o.id == id))
             .ok_or(ExperienceOrbWriteError::Stale)
     }
 
@@ -1621,7 +1629,7 @@ impl crate::game::ServerGame<'_> {
         let epoch = level.epoch();
         let dimension = level.dimension();
         let orbs = if dimension == self.common.dim.key() {
-            &self.common.orbs
+            &self.common.entities.orbs
         } else {
             &self
                 .server
@@ -1629,6 +1637,7 @@ impl crate::game::ServerGame<'_> {
                 .0
                 .parked_of(level.dimension_id())
                 .ok_or(LevelReadError::Stale)?
+                .entities
                 .orbs
         };
         for o in orbs.iter() {
@@ -1973,7 +1982,7 @@ impl crate::game::ServerGame<'_> {
     ) -> Option<&[sunrise_sim::mobs::Mob]> {
         let dimension = level.dimension();
         if dimension == self.common.dim.key() {
-            Some(&self.common.mobs)
+            Some(&self.common.entities.mobs)
         } else {
             self.server
                 .levels

@@ -73,6 +73,7 @@ impl crate::game::ClientGame<'_> {
             });
             let cart_boxes = self
                 .common
+                .entities
                 .carts
                 .iter()
                 .map(|c| {
@@ -85,12 +86,12 @@ impl crate::game::ClientGame<'_> {
                 .collect();
             let arrow_boxes = self
                 .common
-                .creatures
+                .entities
                 .projectiles
                 .iter()
                 .filter(|p| p.arrow.is_some())
                 .map(|p| p.position)
-                .chain(self.common.tridents.iter().map(|t| t.position))
+                .chain(self.common.entities.tridents.iter().map(|t| t.position))
                 .map(|at| {
                     let b = sunrise_sim::entities::arrows::arrow_bounds(at);
                     (b.min_position().components(), b.max_position().components())
@@ -111,6 +112,7 @@ impl crate::game::ClientGame<'_> {
                 .collect();
             let trigger_extras: Vec<Aabb> = self
                 .common
+                .entities
                 .bolts
                 .iter()
                 .map(|b| {
@@ -204,11 +206,11 @@ impl crate::game::ClientGame<'_> {
             border: self.common.border.geometry(),
             redstone_experiments,
             cart_boxes,
-            item_frames: &self.common.item_frames,
-            carts: &mut self.common.carts,
+            item_frames: &self.common.entities.item_frames,
+            carts: &mut self.common.entities.carts,
             arrow_boxes,
             other_entities,
-            crystals: &self.common.crystals,
+            crystals: &self.common.entities.crystals,
             trigger_hooks,
             trigger_extras,
             world: &mut self.common.world,
@@ -429,7 +431,7 @@ impl crate::game::ClientGame<'_> {
         let journal = table.producer();
         sunrise_gameplay_common::game::resident_state::bind_resident_list!(
             Mob,
-            self.mobs,
+            self.entities.mobs,
             &journal,
             Owner {
                 dimension,
@@ -438,7 +440,7 @@ impl crate::game::ClientGame<'_> {
         );
         sunrise_gameplay_common::game::resident_state::bind_resident_list!(
             Item,
-            self.dropped,
+            self.entities.dropped,
             &journal,
             Owner {
                 dimension,
@@ -447,7 +449,7 @@ impl crate::game::ClientGame<'_> {
         );
         sunrise_gameplay_common::game::resident_state::bind_resident_list!(
             Orb,
-            self.orbs,
+            self.entities.orbs,
             &journal,
             Owner {
                 dimension,
@@ -456,7 +458,7 @@ impl crate::game::ClientGame<'_> {
         );
         sunrise_gameplay_common::game::resident_state::bind_resident_list!(
             Stand,
-            self.armor_stands,
+            self.entities.armor_stands,
             &journal,
             Owner {
                 dimension,
@@ -465,7 +467,7 @@ impl crate::game::ClientGame<'_> {
         );
         sunrise_gameplay_common::game::resident_state::bind_resident_list!(
             Frame,
-            self.item_frames,
+            self.entities.item_frames,
             &journal,
             Owner {
                 dimension,
@@ -474,7 +476,7 @@ impl crate::game::ClientGame<'_> {
         );
         sunrise_gameplay_common::game::resident_state::bind_resident_list!(
             Painting,
-            self.paintings,
+            self.entities.paintings,
             &journal,
             Owner {
                 dimension,
@@ -483,7 +485,7 @@ impl crate::game::ClientGame<'_> {
         );
         sunrise_gameplay_common::game::resident_state::bind_resident_list!(
             Boat,
-            self.boats,
+            self.entities.boats,
             &journal,
             Owner {
                 dimension,
@@ -492,7 +494,7 @@ impl crate::game::ClientGame<'_> {
         );
         sunrise_gameplay_common::game::resident_state::bind_resident_list!(
             Cart,
-            self.carts,
+            self.entities.carts,
             &journal,
             Owner {
                 dimension,
@@ -501,7 +503,7 @@ impl crate::game::ClientGame<'_> {
         );
         sunrise_gameplay_common::game::resident_state::bind_resident_list!(
             Fangs,
-            self.fangs.list,
+            self.entities.fangs.list,
             &journal,
             Owner {
                 dimension,
@@ -510,7 +512,7 @@ impl crate::game::ClientGame<'_> {
         );
         sunrise_gameplay_common::game::resident_state::bind_resident_list!(
             Crystal,
-            self.crystals,
+            self.entities.crystals,
             &journal,
             Owner {
                 dimension,
@@ -519,7 +521,7 @@ impl crate::game::ClientGame<'_> {
         );
         sunrise_gameplay_common::game::resident_state::bind_resident_list!(
             Tnt,
-            self.tnts,
+            self.entities.tnts,
             &journal,
             Owner {
                 dimension,
@@ -528,7 +530,7 @@ impl crate::game::ClientGame<'_> {
         );
         sunrise_gameplay_common::game::resident_state::bind_resident_list!(
             Cushion,
-            self.cushions,
+            self.entities.cushions,
             &journal,
             Owner {
                 dimension,
@@ -537,7 +539,7 @@ impl crate::game::ClientGame<'_> {
         );
         sunrise_gameplay_common::game::resident_state::bind_resident_list!(
             Knot,
-            self.resident_entities.knots,
+            self.entities.knots,
             &journal,
             Owner {
                 dimension,
@@ -546,7 +548,7 @@ impl crate::game::ClientGame<'_> {
         );
         sunrise_gameplay_common::game::resident_state::bind_resident_list!(
             Falling,
-            self.falling,
+            self.entities.falling,
             &journal,
             Owner {
                 dimension,
@@ -555,7 +557,7 @@ impl crate::game::ClientGame<'_> {
         );
         sunrise_gameplay_common::game::resident_state::bind_resident_list!(
             Rocket,
-            self.rockets,
+            self.entities.rockets,
             &journal,
             Owner {
                 dimension,
@@ -564,7 +566,7 @@ impl crate::game::ClientGame<'_> {
         );
         sunrise_gameplay_common::game::resident_state::bind_resident_list!(
             Trident,
-            self.tridents,
+            self.entities.tridents,
             &journal,
             Owner {
                 dimension,
@@ -573,7 +575,7 @@ impl crate::game::ClientGame<'_> {
         );
         sunrise_gameplay_common::game::resident_state::bind_resident_list!(
             Spawner,
-            self.ominous_spawners,
+            self.entities.ominous_spawners,
             &journal,
             Owner {
                 dimension,
@@ -582,7 +584,7 @@ impl crate::game::ClientGame<'_> {
         );
         sunrise_gameplay_common::game::resident_state::bind_resident_list!(
             Cloud,
-            self.breath_clouds,
+            self.entities.breath_clouds,
             &journal,
             Owner {
                 dimension,
@@ -591,7 +593,7 @@ impl crate::game::ClientGame<'_> {
         );
         sunrise_gameplay_common::game::resident_state::bind_resident_list!(
             Bolt,
-            self.bolts,
+            self.entities.bolts,
             &journal,
             Owner {
                 dimension,
@@ -600,14 +602,14 @@ impl crate::game::ClientGame<'_> {
         );
         sunrise_gameplay_common::game::resident_state::bind_resident_list!(
             General,
-            self.resident_entities.general.rows,
+            self.entities.general.rows,
             &journal,
             Owner {
                 dimension,
                 kind: Kind::General
             }
         );
-        self.common.creatures.projectiles.bind_residency(
+        self.common.entities.projectiles.bind_residency(
             &journal,
             Owner {
                 dimension,
@@ -615,7 +617,7 @@ impl crate::game::ClientGame<'_> {
             },
             |entity| (entity.id, entity.join_seq()),
         );
-        self.common.dragon.bind_residency_specialized(
+        self.common.entities.dragon.bind_residency_specialized(
             &journal,
             Owner {
                 dimension,

@@ -11,20 +11,13 @@
 
 use super::entity_residency::{define_resident_access, resident_owners};
 use super::{
-    Dim, ExperienceOrb, FallingBlock, Mob,
-    boats_common::Boat,
+    Dim, Mob,
     creaking::CreakingLevelState,
-    dragon_common,
-    dragon_parts_table::DragonSlot,
     entity_memory::{EntityMemory, OffLevel},
-    fireworks,
-    lightning_common::Bolt,
     minecarts,
     nether_portal::PortalLevelState,
-    ominous_item_spawner_common::OminousItemSpawner,
     raids::RaidLevelState,
     sculk_server::{SculkLevelState, SculkState},
-    tnt_common::PrimedTnt,
 };
 use mod_api::DimensionKey;
 use std::{
@@ -41,7 +34,7 @@ use sunrise_gameplay_common::game::entity::EntityLists;
 use sunrise_gameplay_common::game::entity_store::EntityStore;
 use sunrise_gameplay_common::game::residency_tick::ResidencyTickGameExt as _;
 use sunrise_gameplay_common::game::transactions::entities::EntityRemovalGameExt as _;
-use sunrise_gameplay_common::{hoppers::HopperState, leash_knot::Knot};
+use sunrise_gameplay_common::hoppers::HopperState;
 use sunrise_level::spans::time as span;
 use sunrise_level::world::World;
 use sunrise_level::{block_entity_ticks::BlockEntityLevelTicks, chunk_streamer::ChunkStreamer};
@@ -52,7 +45,6 @@ use sunrise_sim::join_seq::{
         table::{EntityLookup, Location, SourceEntity},
     },
 };
-use sunrise_sim::thrown_trident::ThrownTrident;
 use sunrise_sim::{
     random_tick_sections::RandomTickSections,
     save::SaveDir,
@@ -121,39 +113,39 @@ impl EntityCountView<'_> {
 
 // Both Game and Parked own these typed families. Keep their instrumentation in one list.
 macro_rules! entity_count_view {
-    ($level:expr, $projectiles:expr, $general:expr, $knots:expr, $others:expr) => {
+    ($store:expr, $others:expr) => {
         crate::game::levels::EntityCountView {
             fixed: [
-                ("minecraft:item", $level.entities.dropped.len()),
-                ("minecraft:experience_orb", $level.orbs.len()),
-                ("minecraft:minecart", $level.carts.len()),
-                ("minecraft:boat", $level.boats.len()),
-                ("minecraft:falling_block", $level.falling.len()),
-                ("minecraft:painting", $level.paintings.len()),
-                ("minecraft:item_frame", $level.item_frames.len()),
-                ("minecraft:armor_stand", $level.armor_stands.len()),
-                ("minecraft:trident", $level.tridents.len()),
-                ("minecraft:firework_rocket", $level.rockets.len()),
-                ("minecraft:tnt", $level.tnts.len()),
-                ("minecraft:end_crystal", $level.crystals.len()),
-                ("minecraft:leash_knot", $knots.len()),
+                ("minecraft:item", $store.dropped.len()),
+                ("minecraft:experience_orb", $store.orbs.len()),
+                ("minecraft:minecart", $store.carts.len()),
+                ("minecraft:boat", $store.boats.len()),
+                ("minecraft:falling_block", $store.falling.len()),
+                ("minecraft:painting", $store.paintings.len()),
+                ("minecraft:item_frame", $store.item_frames.len()),
+                ("minecraft:armor_stand", $store.armor_stands.len()),
+                ("minecraft:trident", $store.tridents.len()),
+                ("minecraft:firework_rocket", $store.rockets.len()),
+                ("minecraft:tnt", $store.tnts.len()),
+                ("minecraft:end_crystal", $store.crystals.len()),
+                ("minecraft:leash_knot", $store.knots.len()),
                 (
                     "minecraft:ominous_item_spawner",
-                    $level.ominous_spawners.len(),
+                    $store.ominous_spawners.len(),
                 ),
-                ("minecraft:cushion", $level.cushions.len()),
-                ("minecraft:area_effect_cloud", $level.breath_clouds.len()),
-                ("minecraft:lightning_bolt", $level.bolts.len()),
-                ("minecraft:evoker_fangs", $level.fangs.perf_count()),
+                ("minecraft:cushion", $store.cushions.len()),
+                ("minecraft:area_effect_cloud", $store.breath_clouds.len()),
+                ("minecraft:lightning_bolt", $store.bolts.len()),
+                ("minecraft:evoker_fangs", $store.fangs.perf_count()),
                 // Multipart hitboxes are not independently admitted world entities.
                 (
                     "minecraft:ender_dragon",
-                    usize::from($level.dragon.as_ref().is_some()),
+                    usize::from($store.dragon.as_ref().is_some()),
                 ),
             ],
-            mobs: &$level.mobs,
-            projectiles: $projectiles,
-            general: $general,
+            mobs: &$store.mobs,
+            projectiles: &$store.projectiles,
+            general: &$store.general.rows,
             others: $others,
         }
     };
@@ -192,38 +184,17 @@ pub struct Parked {
     pub streaming: ChunkStreamer,
     end: EndLevelState,
     pub save: Arc<SaveDir>,
+    // Release streaming and the save reference before retiring entity bodies.
+    pub entities: EntityStore,
     block_ticks: Ticks,
     tick_chunks: TickChunkMembership,
     chunk_ticking: ChunkTickingLevelState,
     level_events: Vec<LevelEvent>,
     /// Entity portal processes and cooldowns belong to this level's entities.
     pub portal_states: PortalLevelState,
-    falling: sunrise_sim::join_seq::JoinList<FallingBlock, false>,
-    paintings: sunrise_sim::join_seq::JoinList<sunrise_sim::entities::Painting>,
-    item_frames: sunrise_sim::join_seq::JoinList<sunrise_sim::entities::ItemFrame>,
-    armor_stands: sunrise_sim::join_seq::JoinList<sunrise_sim::entities::ArmorStand>,
-    cushions: sunrise_sim::join_seq::JoinList<sunrise_sim::entities::Cushion>,
     others: sunrise_sim::join_seq::ResidentList<OtherEntity>,
-    fangs: sunrise_gameplay_common::game::fangs_common::FangState,
-    pub boats: sunrise_sim::join_seq::JoinList<Boat, false>,
-    pub carts: sunrise_sim::join_seq::JoinList<minecarts::Minecart, false>,
-    bolts: sunrise_sim::join_seq::ResidentList<Bolt>,
-    crystals: sunrise_sim::join_seq::JoinList<dragon_common::Crystal>,
-    dragon: DragonSlot,
-    breath_clouds: sunrise_sim::join_seq::ResidentList<dragon_common::Breath>,
-    tridents: sunrise_sim::join_seq::JoinList<ThrownTrident>,
-    rockets: sunrise_sim::join_seq::JoinList<fireworks::Rocket>,
-    ominous_spawners: sunrise_sim::join_seq::ResidentList<OminousItemSpawner>,
-    tnts: sunrise_sim::join_seq::JoinList<PrimedTnt>,
-    general: super::general::GeneralStore,
     hoppers: HashMap<(i32, i32, i32), HopperState>,
-    pub mobs: sunrise_sim::join_seq::JoinList<Mob>,
     knot_state: KnotLevelState,
-    knots: sunrise_sim::join_seq::JoinList<Knot>,
-    projectiles: sunrise_sim::join_seq::JoinList<sunrise_sim::projectiles::Projectile, false>,
-    // Keep item retirement between projectiles and orbs when a parked level drops.
-    entities: EntityStore,
-    pub(in crate::game::server_side) orbs: sunrise_sim::join_seq::JoinList<ExperienceOrb>,
     persist: EntityMemory,
     lectern_pulses: Vec<((i32, i32, i32), i32)>,
     lid_openers: HashMap<(i32, i32, i32), i32>,
@@ -257,7 +228,7 @@ impl Parked {
         join: sunrise_sim::join_seq::JoinSeq,
     ) -> Option<(&Mob, Option<mod_api::EntityTags<'_>>)> {
         let mob = if join.is_joined() {
-            &self.mobs[self.mobs.locate(join)?]
+            &self.entities.mobs[self.entities.mobs.locate(join)?]
         } else {
             self.persist.off_level.get(&id)?.as_mob()?
         };
@@ -278,10 +249,12 @@ impl Parked {
         mut obstructs: impl FnMut(sunrise_core::geometry::Aabb) -> bool,
     ) -> bool {
         if self
+            .entities
             .mobs
             .iter()
             .any(|m| !m.removed && obstructs(m.bounds()))
             || self
+                .entities
                 .dragon
                 .as_ref()
                 .is_some_and(|dragon| obstructs(dragon.body_bounds()))
@@ -289,35 +262,28 @@ impl Parked {
             return true;
         }
         let entities = EntityLists {
-            mobs: &self.mobs,
+            mobs: &self.entities.mobs,
             dropped: &self.entities.dropped,
-            boats: &self.boats,
-            carts: &self.carts,
-            armor_stands: &self.armor_stands,
-            tnts: &self.tnts,
-            falling: &self.falling,
-            orbs: &self.orbs,
-            projectiles: &self.projectiles,
-            rockets: &self.rockets,
-            tridents: &self.tridents,
-            general: &self.general.rows,
+            boats: &self.entities.boats,
+            carts: &self.entities.carts,
+            armor_stands: &self.entities.armor_stands,
+            tnts: &self.entities.tnts,
+            falling: &self.entities.falling,
+            orbs: &self.entities.orbs,
+            projectiles: &self.entities.projectiles,
+            rockets: &self.entities.rockets,
+            tridents: &self.entities.tridents,
+            general: &self.entities.general.rows,
         };
         entities
             .non_mob_building_blocker_boxes(
-                self.carts.iter().map(minecarts::Minecart::bounds),
-                &self.crystals,
+                self.entities.carts.iter().map(minecarts::Minecart::bounds),
+                &self.entities.crystals,
             )
             .any(obstructs)
     }
 
-    resident_owners!(
-        define_resident_access,
-        self,
-        projectiles,
-        knots,
-        general.rows,
-        others
-    );
+    resident_owners!(define_resident_access, self, others);
 }
 
 impl crate::game::ServerGame<'_> {
@@ -399,13 +365,12 @@ impl crate::game::ServerGame<'_> {
             return false;
         };
         match value {
-            Target::Mob(_) => {
-                (parked.mobs.locate(location.join)).is_some_and(|i| parked.mobs[i].alive())
-            }
-            Target::Stand(_) => (parked.armor_stands.locate(location.join))
-                .is_some_and(|i| parked.armor_stands[i].health > 0.0),
+            Target::Mob(_) => (parked.entities.mobs.locate(location.join))
+                .is_some_and(|i| parked.entities.mobs[i].alive()),
+            Target::Stand(_) => (parked.entities.armor_stands.locate(location.join))
+                .is_some_and(|i| parked.entities.armor_stands[i].health > 0.0),
             Target::Dragon(id) => {
-                (parked.dragon.as_ref()).is_some_and(|d| d.id == id && d.health > 0.0)
+                (parked.entities.dragon.as_ref()).is_some_and(|d| d.id == id && d.health > 0.0)
             }
             _ => false,
         }
@@ -937,6 +902,7 @@ impl Levels {
     ) -> bool {
         self.parked.get(&dim).is_some_and(|parked| {
             parked
+                .entities
                 .general
                 .rows
                 .iter()
@@ -948,26 +914,26 @@ impl Levels {
     pub(in crate::game::server_side) fn parked_entity_count(&self, dim: Dim) -> Option<usize> {
         let l = self.parked.get(&dim)?;
         Some(
-            l.mobs.iter().filter(|m| !m.removed).count()
+            l.entities.mobs.iter().filter(|m| !m.removed).count()
                 + l.entities.dropped.len()
-                + l.orbs.len()
-                + l.projectiles.len()
-                + l.carts.len()
-                + l.boats.len()
-                + l.falling.len()
-                + l.paintings.len()
-                + l.item_frames.len()
-                + l.armor_stands.len()
-                + l.cushions.len()
-                + l.tridents.len()
-                + l.rockets.len()
-                + l.tnts.len(),
+                + l.entities.orbs.len()
+                + l.entities.projectiles.len()
+                + l.entities.carts.len()
+                + l.entities.boats.len()
+                + l.entities.falling.len()
+                + l.entities.paintings.len()
+                + l.entities.item_frames.len()
+                + l.entities.armor_stands.len()
+                + l.entities.cushions.len()
+                + l.entities.tridents.len()
+                + l.entities.rockets.len()
+                + l.entities.tnts.len(),
         )
     }
 
     /// The mobs of a parked level.
     pub(in crate::game::server_side) fn parked_mobs(&self, dim: Dim) -> Option<&[Mob]> {
-        self.parked.get(&dim).map(|level| &*level.mobs)
+        self.parked.get(&dim).map(|level| &*level.entities.mobs)
     }
 
     pub(in crate::game::server_side) fn parked_perf_views(
@@ -977,13 +943,7 @@ impl Levels {
             (
                 dim,
                 &level.world,
-                entity_count_view!(
-                    level,
-                    &level.projectiles,
-                    &level.general.rows,
-                    &level.knots,
-                    &level.others
-                ),
+                entity_count_view!(level.entities, &level.others),
             )
         })
     }
@@ -997,10 +957,10 @@ impl Levels {
         self.parked.get(&dim).map(|l| {
             [
                 l.entities.dropped.len(),
-                l.orbs.len(),
-                l.projectiles.len(),
-                l.carts.len(),
-                l.boats.len(),
+                l.entities.orbs.len(),
+                l.entities.projectiles.len(),
+                l.entities.carts.len(),
+                l.entities.boats.len(),
             ]
         })
     }
@@ -1027,40 +987,16 @@ fn box_parked(
         streaming,
         end: EndLevelState::new(locator),
         save,
+        entities: Default::default(),
         block_ticks: Ticks::new(seed as i32),
         tick_chunks: Default::default(),
         chunk_ticking: Default::default(),
         level_events: Vec::new(),
         portal_states: Default::default(),
-        falling: Default::default(),
-        paintings: Default::default(),
-        item_frames: Default::default(),
-        armor_stands: Default::default(),
-        cushions: Default::default(),
         others: Default::default(),
-        fangs: Default::default(),
-        boats: Default::default(),
-        carts: Default::default(),
-        bolts: Default::default(),
-        crystals: Default::default(),
-        dragon: Default::default(),
-        breath_clouds: Default::default(),
-        tridents: Default::default(),
-        rockets: Default::default(),
-        ominous_spawners: Default::default(),
-        tnts: Default::default(),
-        general: Default::default(),
         hoppers: HashMap::new(),
         chunk_spawn_enemies: true,
-        mobs: Default::default(),
         knot_state: Default::default(),
-        knots: Default::default(),
-        projectiles: Default::default(),
-        entities: {
-            let dropped = Default::default();
-            EntityStore { dropped }
-        },
-        orbs: Default::default(),
         persist: Default::default(),
         lectern_pulses: Vec::new(),
         lid_openers: HashMap::new(),
@@ -1347,30 +1283,9 @@ impl crate::game::ServerGame<'_> {
         swap(&mut self.common.level_events, &mut p.level_events);
         self.server.portals.swap_level(&mut p.portal_states);
         swap(&mut self.common.entities, &mut p.entities);
-        swap(&mut self.common.falling, &mut p.falling);
-        swap(&mut self.common.paintings, &mut p.paintings);
-        swap(&mut self.common.item_frames, &mut p.item_frames);
-        swap(&mut self.common.armor_stands, &mut p.armor_stands);
-        swap(&mut self.common.cushions, &mut p.cushions);
         swap(&mut self.server.others.0, &mut p.others);
-        swap(&mut self.common.fangs, &mut p.fangs);
-        swap(&mut self.common.boats, &mut p.boats);
-        swap(&mut self.common.carts, &mut p.carts);
-        swap(&mut self.common.bolts, &mut p.bolts);
-        swap(&mut self.common.crystals, &mut p.crystals);
-        swap(&mut self.common.dragon, &mut p.dragon);
-        swap(&mut self.common.breath_clouds, &mut p.breath_clouds);
-        swap(&mut self.common.tridents, &mut p.tridents);
-        swap(&mut self.common.rockets, &mut p.rockets);
-        swap(&mut self.common.ominous_spawners, &mut p.ominous_spawners);
-        swap(&mut self.common.tnts, &mut p.tnts);
         swap(&mut self.server.hoppers, &mut p.hoppers);
-        swap(&mut self.common.mobs, &mut p.mobs);
         swap(&mut self.server.knot_state, &mut p.knot_state);
-        swap(&mut self.common.resident_entities.knots, &mut p.knots);
-        swap(&mut self.common.resident_entities.general, &mut p.general);
-        swap(&mut self.common.creatures.projectiles, &mut p.projectiles);
-        swap(&mut self.common.orbs, &mut p.orbs);
         swap(&mut self.common.persist, &mut p.persist);
         swap(&mut self.server.lectern_pulses, &mut p.lectern_pulses);
         swap(&mut self.server.lid_openers, &mut p.lid_openers);
@@ -1455,8 +1370,9 @@ impl crate::game::ServerGame<'_> {
         mut id: u32,
     ) -> Option<u32> {
         let p = self.server.levels.0.parked.get(&from)?;
-        for _ in 0..=p.mobs.len() + p.persist.off_level.len() + 1 {
+        for _ in 0..=p.entities.mobs.len() + p.persist.off_level.len() + 1 {
             let mob = p
+                .entities
                 .mobs
                 .iter()
                 .find(|m| m.id == id)
@@ -1467,8 +1383,8 @@ impl crate::game::ServerGame<'_> {
                 continue;
             }
             let present = mob.is_some()
-                || p.boats.iter().any(|b| b.id == id)
-                || p.carts.iter().any(|c| c.id == id);
+                || p.entities.boats.iter().any(|b| b.id == id)
+                || p.entities.carts.iter().any(|c| c.id == id);
             let removed = p
                 .persist
                 .removals
@@ -1496,6 +1412,7 @@ impl crate::game::ServerGame<'_> {
             return Vec::new();
         };
         let mut edges: Vec<_> = p
+            .entities
             .mobs
             .iter()
             .chain(p.persist.off_level.values().filter_map(OffLevel::as_mob))
@@ -1531,8 +1448,8 @@ impl crate::game::ServerGame<'_> {
             if let Some(state) = p.portal_states.entities.remove(&id) {
                 self.server.portals.level.entities.insert(id, state);
             }
-            let mob = if let Some(index) = p.mobs.iter().position(|m| m.id == id) {
-                Some(p.mobs.remove_for_transfer(index))
+            let mob = if let Some(index) = p.entities.mobs.iter().position(|m| m.id == id) {
+                Some(p.entities.mobs.remove_for_transfer(index))
             } else {
                 // Boats and carts are only roots, which the caller takes.
                 match p.persist.off_level.remove(&id) {
@@ -1574,9 +1491,9 @@ impl crate::game::ServerGame<'_> {
             return;
         }
         match object {
-            OffLevel::Mob(mob) => self.common.mobs.push(mob),
-            OffLevel::Boat(boat) => self.common.boats.push(boat),
-            OffLevel::Cart(cart) => self.common.carts.push(cart),
+            OffLevel::Mob(mob) => self.common.entities.mobs.push(mob),
+            OffLevel::Boat(boat) => self.common.entities.boats.push(boat),
+            OffLevel::Cart(cart) => self.common.entities.carts.push(cart),
         }
     }
 
