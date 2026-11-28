@@ -1,6 +1,7 @@
 //! Client-side entity state reads and client fire-immunity writes.
 use super::commands_common::Target;
 use mod_api::{EntityRef, EntityTypeKey, MobCategory};
+use sunrise_gameplay_common::game::entity_ids::wire_entity_id;
 use sunrise_gameplay_common::game::entity_sizes_common::synced_pose;
 use sunrise_gameplay_common::game::game_mode_common::GameModeCommonGameExt1 as _;
 use sunrise_gameplay_common::game::general::general_type_catalog;
@@ -222,7 +223,7 @@ impl crate::game::ClientGame<'_> {
         self.client
             .remote
             .as_ref()?
-            .tracked_fire_immunity(i32::try_from(entity.id()).ok()?)
+            .tracked_fire_immunity(wire_entity_id(entity.id()))
     }
 
     pub(in crate::game) fn client_entity_is_shift_key_down(
@@ -304,11 +305,7 @@ impl crate::game::ClientGame<'_> {
                 .client
                 .remote
                 .as_ref()
-                .and_then(|r| {
-                    i32::try_from(entity.id())
-                        .ok()
-                        .and_then(|id| r.tracked_fire_immunity(id))
-                })
+                .and_then(|r| r.tracked_fire_immunity(wire_entity_id(entity.id())))
                 .is_some();
         if !tracked_player {
             return false;

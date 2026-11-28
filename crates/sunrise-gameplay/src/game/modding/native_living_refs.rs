@@ -697,7 +697,9 @@ impl ServerGame<'_> {
         if let Some(credit) = credit {
             let conn = self.resolve_player_credit(credit)?;
             let id = self.player_entity_id_by_connection(conn)?;
-            return self.entity(u32::try_from(id).ok()?);
+            return self.entity(sunrise_gameplay_common::game::entity_ids::entity_id_bits(
+                id,
+            ));
         }
         self.living_last_attacker(living)
     }
