@@ -151,6 +151,12 @@ class LaunchTests(unittest.TestCase):
         self.assertEqual([entry.args[0][-1] for entry in server.run.call_args_list],
                          ['scene-warm minecraft:overworld', 'scene-warm minecraft:the_nether'])
 
+    def test_optional_airborne_fixture_allows_scripted_stand_positions(self):
+        normal = state_digest_players.server_properties(25565)
+        airborne = state_digest_players.server_properties(25565, allow_flight=True)
+        self.assertNotIn('allow-flight', normal)
+        self.assertEqual(airborne, dict(normal, **{'allow-flight': 'true'}))
+
     def test_compare_option_can_follow_ignore_option(self):
         argv = ['state_digest_players.py', '--ignore-group', 'players', '--compare', 'a', 'b']
         with patch.object(sys, 'argv', argv), patch.object(state_digest_players, 'compare', return_value=0) as compare:

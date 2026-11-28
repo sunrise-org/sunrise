@@ -227,7 +227,8 @@ runs, the comparators print player component differences at the first tick where
   that bot on the next tick once its configuration has finished. After twelve frozen warmup ticks, it checks
   the placement age, `minecraft:play_time` and `effects_tick` for Alice and Bob, pins the randoms again and opens the
   measured window. The final game time verifies how many measured ticks ran.
-  `--nether` sends Bob to the Nether. `--compare A B` compares levels and fails on a mismatch in the
+  `--nether` sends Bob to the Nether. The dedicated `--nether` and `--coverage` fixtures allow
+  flight so scripted stand positions can survive a missing floor. `--compare A B` compares levels and fails on a mismatch in the
   per-tick `players` group or final `players.txt`. The `--integrated` run still uses wall-clock timing and
   lacks `digest-sync`. It uses `sunrise-ctl` beside the game binary by default or a copy selected with `--ctl PATH`.
 - `--coverage` on either scene tool adds commands for code the default scene never runs (foxes, dolphins and allays that pick up items, a fox that spits out what it held, mobs that pick up loot, tridents, a furnace, a brewing stand, a village with five claimed beds for the cat, a saved wandering-trader delay that runs out inside the window, the siege spawner, and the gamerules and night time they need) and makes `--ticks` default to 2500. With `state_digest_players.py` Alice stands in the village and gets a Loyalty trident back, and her pickup is placed beside her. The tool writes `OUT/coverage.txt` with the spots reached, the saved trader delay and chance, and Alice's pickup stats. A missed spot fails the run. Both comparators check that file when present. The dedicated player coverage scene uses the same tick gate as the default scene.

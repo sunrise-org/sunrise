@@ -192,8 +192,11 @@ def compare(a, b, ignore_groups=()):
     return status | int(not same and not ignored)
 
 
-def server_properties(port):
-    return dict(base.PROPERTIES, **{'server-port': str(port), 'white-list': 'false', 'enforce-whitelist': 'false'})
+def server_properties(port, *, allow_flight=False):
+    props = dict(base.PROPERTIES, **{'server-port': str(port), 'white-list': 'false', 'enforce-whitelist': 'false'})
+    if allow_flight:
+        props['allow-flight'] = 'true'
+    return props
 
 
 def before_join(server, nether):
@@ -218,7 +221,8 @@ def run_dedicated(args, home, timings):
         shutil.rmtree(run_dir)
     run_dir.mkdir(parents=True)
     port = free_port()
-    (run_dir / 'server.properties').write_text(''.join(f'{k}={v}\n' for k, v in server_properties(port).items()))
+    properties = server_properties(port, allow_flight=args.coverage or args.nether)
+    (run_dir / 'server.properties').write_text(''.join(f'{k}={v}\n' for k, v in properties.items()))
     (run_dir / 'eula.txt').write_text('eula=true\n')
     shutil.copytree(args.template / 'world', run_dir / 'world')
     (run_dir / 'world' / 'session.lock').unlink(missing_ok=True)
