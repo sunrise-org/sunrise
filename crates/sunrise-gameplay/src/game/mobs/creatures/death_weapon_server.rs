@@ -278,11 +278,7 @@ impl crate::game::ServerGame<'_> {
             };
             loot_damage(d, source)
         });
-        let vehicle = m
-            .extra
-            .mount
-            .and_then(|id| self.common.mobs.iter().find(|o| o.id == id))
-            .map(|o| LootEntity::new(&o.kind.id));
+        let vehicle = m.extra.mount.and_then(|id| self.vehicle_loot_entity(id));
         let kind = sunrise_gameplay_common::game::native_hooks::mob_kind(m);
         let death_variants = matches!(m.species(), Species::Chicken | Species::Frog)
             .then(|| self.world_variants().clone());

@@ -9285,6 +9285,10 @@ pub mod pending_birth_matrix_tests;
 #[path = "death_loot_context_tests_server.rs"]
 pub(in crate::game) mod death_loot_context_tests;
 
+#[cfg(test)]
+#[path = "vehicle_loot_tests.rs"]
+pub(in crate::game) mod vehicle_loot_tests;
+
 #[cfg(any(test, feature = "test-support"))]
 #[path = "projectile_targets_tests_server.rs"]
 pub mod projectile_targets_tests;
